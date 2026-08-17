@@ -1,0 +1,34 @@
+appId: com.alaunchi.launcher
+productName: ALaunchi
+copyright: Copyright © 2026 ALaunchi
+
+directories:
+  buildResources: public
+  output: release
+
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+
+extraMetadata:
+  main: electron/main.js
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: public/logo.png
+  artifactName: ALaunchi-Setup-${version}.exe
+
+nsis:
+  oneClick: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ALaunchi
+
+publish:
+  provider: github
+  owner: TU_USUARIO_GITHUB
+  repo: alaunchi-app
