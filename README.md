@@ -108,24 +108,37 @@ Ajustes → Admin → "Token GitHub".
 ## Login con Microsoft (obligatorio para poder jugar)
 
 El launcher usa el flujo *device code* de Microsoft/Xbox Live/Minecraft. Para que funcione hace
-falta registrar una app en Azure (gratis):
+falta registrar una app en Azure (gratis) **y que Microsoft la apruebe** — este segundo paso es
+obligatorio para *cualquier* app nueva desde 2023, no es un fallo de configuración.
+
+### 1. Registrar la app
 
 1. Ve a [entra.microsoft.com](https://entra.microsoft.com) → **App registrations** → **New
    registration**.
-2. Nombre: el que quieras (ej. "ALaunchi"). **"Supported account types"**: elige la opción
+2. Nombre: el que quieras (ej. "ALaunchi"). **"Supported account types"**: elige
    **"Accounts in any organizational directory (Any Microsoft Entra ID tenant - Multitenant) and
-   personal Microsoft accounts (e.g. Skype, Xbox)"**. Esto es obligatorio — si eliges solo
-   "cuentas personales" (personal accounts only), Xbox Live/Minecraft rechaza el login con
-   `HTTP 403 Invalid app registration`, aunque el resto del flujo (Microsoft, Xbox, XSTS) funcione
-   bien.
-3. En **Authentication**, activa **"Allow public client flows"** → Yes, y guarda.
-4. Copia el **Application (client) ID**.
-5. Pégalo en la app, en Ajustes → "Azure Client ID".
+   personal Microsoft accounts (e.g. Skype, Xbox)"**.
+3. En **Authentication**, activa **"Allow public client flows"** → Yes, y guarda. Confirma que
+   existe una plataforma "Mobile and desktop applications" con el redirect URI
+   `https://login.microsoftonline.com/common/oauth2/nativeclient` (se añade solo al elegir esa
+   plataforma).
+4. Copia el **Application (client) ID** (pantalla "Overview") y pégalo en la app, en Ajustes →
+   "Azure Client ID".
 
-Si ya registraste la app con el tipo de cuenta equivocado, no hace falta crear una nueva: entra en
-**Authentication** de tu app existente y cambia "Supported account types" a la opción de arriba.
+### 2. Pedir la aprobación (whitelist) — obligatorio
 
-Sin este paso, el botón de login no funcionará.
+Microsoft ya no activa automáticamente el login de Xbox/Minecraft para apps nuevas. El primer
+intento de login **fallará a propósito** con `HTTP 403 Invalid app registration, see
+https://aka.ms/AppRegInfo` — es esperado, deja constancia de que la app tuvo actividad.
+
+1. Intenta iniciar sesión una vez en ALaunchi (para que quede ese registro de actividad).
+2. Ve a **https://aka.ms/mce-reviewappid** y rellena el formulario de Microsoft con tu
+   **Client ID** y tu **Tenant ID** (ambos están en la pantalla "Overview" de tu app en Azure).
+3. Espera la revisión de Microsoft. Una vez aprobada, puede tardar hasta 24h en propagarse.
+4. Vuelve a intentar el login — ya debería funcionar.
+
+Sin este paso, el botón de login no funcionará por mucho que la configuración de Azure esté
+perfecta.
 
 ## Panel de administración
 
