@@ -85,7 +85,7 @@ function hashFile(filePath) {
 // Per-hash in-flight dedup so concurrent workers wanting the same hash share one download.
 const inFlightObjects = new Map();
 
-async function ensureObject(hash, downloadUrl) {
+async function ensureObject(hash, downloadUrl, headers) {
   const cachePath = objectCachePath(hash);
   if (fsSync.existsSync(cachePath)) {
     const actual = await hashFile(cachePath);
@@ -102,7 +102,7 @@ async function ensureObject(hash, downloadUrl) {
     const tmpName = `${hash.slice(0, 16)}.tmp.${process.pid}.${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`;
     const tmpPath = path.join(os.tmpdir(), tmpName);
     try {
-      await downloadFile(downloadUrl, tmpPath, null);
+      await downloadFile(downloadUrl, tmpPath, null, headers);
       const actual = await hashFile(tmpPath);
       if (actual !== hash) {
         throw new Error(`Hash mismatch para ${hash.slice(0, 12)} (got ${actual.slice(0, 12)})`);
@@ -248,16 +248,26 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-function downloadFile(url, destPath, onProgress) {
+function downloadFile(url, destPath, onProgress, headers) {
   return new Promise((resolve, reject) => {
     const file = fsSync.createWriteStream(destPath);
     const protocol = url.startsWith("https") ? https : http;
 
-    const request = protocol.get(url, (res) => {
+    const handleResponse = (res) => {
       if (res.statusCode === 301 || res.statusCode === 302) {
         file.close(() => {
           fsSync.unlink(destPath, () => {});
+          // Don't forward custom headers (esp. Authorization) to the redirect target —
+          // presigned storage URLs reject requests carrying an unexpected Authorization header.
           downloadFile(res.headers.location, destPath, onProgress).then(resolve).catch(reject);
+        });
+        return;
+      }
+      if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+        res.resume();
+        file.close(() => {
+          fsSync.unlink(destPath, () => {});
+          reject(new Error(`HTTP ${res.statusCode} descargando ${url.split("?")[0]}`));
         });
         return;
       }
@@ -275,7 +285,11 @@ function downloadFile(url, destPath, onProgress) {
           reject(err);
         });
       });
-    });
+    };
+
+    const request = headers
+      ? protocol.get(url, { headers }, handleResponse)
+      : protocol.get(url, handleResponse);
     request.on("error", (err) => {
       file.close(() => {
         fsSync.unlink(destPath, () => {});
@@ -285,13 +299,16 @@ function downloadFile(url, destPath, onProgress) {
   });
 }
 
-function fetchJson(url) {
+function fetchJson(url, headers) {
   return new Promise((resolve, reject) => {
     const protocol = url.startsWith("https") ? https : http;
-    protocol.get(url, { headers: { "User-Agent": "ALaunchi/1.0" } }, (res) => {
+    protocol.get(url, { headers: { "User-Agent": "ALaunchi/1.0", ...headers } }, (res) => {
       let data = "";
       res.on("data", (chunk) => (data += chunk));
       res.on("end", () => {
+        if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+          return reject(new Error(`HTTP ${res.statusCode} en ${url}: ${data.slice(0, 300)}`));
+        }
         try { resolve(JSON.parse(data)); }
         catch (e) { reject(new Error("Invalid JSON from " + url)); }
       });
@@ -573,11 +590,33 @@ function validateManifest(manifest) {
   }
 }
 
-ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manifest, baseUrl }) => {
+ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manifest, baseUrl, token }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   validateManifest(manifest);
   if (typeof baseUrl !== "string" || !baseUrl.startsWith("https://")) {
     throw new Error("Falta URL base de objetos (https)");
+  }
+
+  // For private repos, the plain releases/download URL (baseUrl + hash) 404s without an
+  // authenticated browser session. If we have a token, resolve the release's asset IDs up
+  // front so downloadWorker can fetch each object through the authenticated API endpoint
+  // instead (GET /releases/assets/{id} with Accept: application/octet-stream).
+  let assetByHash = null;
+  const repoMatch = baseUrl.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/releases\/download\/([^/]+)\/$/);
+  if (token && repoMatch) {
+    const [, owner, repo, tag] = repoMatch;
+    try {
+      const release = await fetchJson(
+        `https://api.github.com/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tag)}`,
+        { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
+      );
+      assetByHash = new Map();
+      for (const a of release.assets || []) {
+        assetByHash.set(a.name, `https://api.github.com/repos/${owner}/${repo}/releases/assets/${a.id}`);
+      }
+    } catch (e) {
+      console.error("[install-snapshot] No se pudo listar assets con token:", e.message);
+    }
   }
 
   const instanceDir = path.join(INSTANCES_DIR, modpackId);
@@ -660,7 +699,16 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
       const i = hashIdx++;
       if (i >= uniqueHashes.length) return;
       const hash = uniqueHashes[i];
-      await ensureObject(hash, baseUrl + hash);
+      const assetUrl = assetByHash?.get(hash);
+      if (assetUrl) {
+        await ensureObject(hash, assetUrl, {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/octet-stream",
+          "User-Agent": "ALaunchi/1.0",
+        });
+      } else {
+        await ensureObject(hash, baseUrl + hash);
+      }
       virtualDone += filesByHash.get(hash);
       sendVirtual();
     }

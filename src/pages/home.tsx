@@ -97,7 +97,7 @@ function ModpackCard({ pack, index }: ModpackCardProps) {
       name: pack.name,
       minecraftVersion: pack.minecraftVersion,
       loaderType: pack.loaderType,
-    });
+    }, token || undefined);
     updateModpackStatus(pack.id, {
       installed: true,
       installedVersion: manifest.version,
