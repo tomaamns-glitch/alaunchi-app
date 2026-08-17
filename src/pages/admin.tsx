@@ -30,6 +30,7 @@ import {
 } from "@/services/github";
 import { getGithubRepo } from "@/lib/app-config";
 import { useIsAdmin } from "@/hooks/use-is-admin";
+import { formatBytes } from "@/lib/format";
 
 const LOADERS = ["forge", "fabric", "neoforge", "vanilla"] as const;
 
@@ -46,13 +47,6 @@ const emptyForm = (): NewModpackData => ({
 function stripFolderPrefix(relPath: string): string {
   const idx = relPath.indexOf("/");
   return idx === -1 ? relPath : relPath.slice(idx + 1);
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 export default function Admin() {

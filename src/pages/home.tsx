@@ -13,6 +13,7 @@ import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { getGithubRepo } from "@/lib/app-config";
 import { useIsAdmin } from "@/hooks/use-is-admin";
+import { ModpackDetailDialog } from "@/components/modpack-detail-dialog";
 
 const api = (window as any).electronAPI;
 
@@ -189,6 +190,7 @@ function ModpackCard({ pack, index }: ModpackCardProps) {
   };
 
   const isActing = status !== "idle";
+  const [detailOpen, setDetailOpen] = useState(false);
 
   return (
     <motion.div
@@ -196,7 +198,8 @@ function ModpackCard({ pack, index }: ModpackCardProps) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: index * 0.1 }}
       data-testid={`card-modpack-${pack.id}`}
-      className="group relative flex flex-col bg-card rounded-xl overflow-hidden border border-white/5 shadow-lg hover:border-accent/30 transition-all duration-300 hover:-translate-y-1"
+      onClick={() => setDetailOpen(true)}
+      className="group relative flex flex-col bg-card rounded-xl overflow-hidden border border-white/5 shadow-lg hover:border-accent/30 transition-all duration-300 hover:-translate-y-1 cursor-pointer"
     >
       {pack.updateAvailable && status === "idle" && (
         <div className="absolute top-3 right-3 z-10 bg-accent text-accent-foreground text-[10px] font-bold px-2 py-1 rounded-full animate-pulse shadow-lg">
@@ -251,7 +254,10 @@ function ModpackCard({ pack, index }: ModpackCardProps) {
                   ? "bg-accent hover:bg-accent/90 text-accent-foreground shadow-[0_0_15px_rgba(245,166,35,0.25)]"
                   : "bg-white/10 hover:bg-white/20 text-white"
               }`}
-              onClick={pack.installed ? handlePlay : handleInstall}
+              onClick={(e) => {
+                e.stopPropagation();
+                pack.installed ? handlePlay() : handleInstall();
+              }}
               disabled={isActing}
             >
               {!pack.installed && <Download className="mr-2 h-4 w-4" />}
@@ -262,6 +268,8 @@ function ModpackCard({ pack, index }: ModpackCardProps) {
           )}
         </div>
       </div>
+
+      <ModpackDetailDialog pack={pack} open={detailOpen} onOpenChange={setDetailOpen} />
     </motion.div>
   );
 }
