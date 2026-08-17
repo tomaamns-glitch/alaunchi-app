@@ -8,6 +8,7 @@ import Login from "@/pages/login";
 import Home from "@/pages/home";
 import Admin from "@/pages/admin";
 import Settings from "@/pages/settings";
+import ModpackDetail from "@/pages/modpack-detail";
 
 const queryClient = new QueryClient();
 
@@ -18,6 +19,7 @@ function Router() {
       <Route path="/login" component={Login} />
       <Route path="/admin" component={Admin} />
       <Route path="/settings" component={Settings} />
+      <Route path="/modpack/:id" component={ModpackDetail} />
       <Route component={NotFound} />
     </Switch>
   );
