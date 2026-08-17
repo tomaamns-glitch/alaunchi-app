@@ -32,7 +32,7 @@ function App() {
       <TooltipProvider>
         <div className="h-screen flex flex-col overflow-hidden">
           <Titlebar />
-          <div className="flex-1 min-h-0 overflow-y-auto">
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
             <WouterRouter hook={useHashLocation}>
               <Router />
             </WouterRouter>
