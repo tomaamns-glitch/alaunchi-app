@@ -58,7 +58,7 @@ export default function ModpackDetail() {
 
   if (!pack) {
     return (
-      <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center gap-4">
+      <div className="min-h-full bg-background text-foreground flex flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Modpack no encontrado.</p>
         <Button variant="outline" onClick={() => setLocation("/")}>
           <ArrowLeft className="mr-2 h-4 w-4" /> Volver
@@ -72,7 +72,7 @@ export default function ModpackDetail() {
   );
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col">
+    <div className="min-h-full bg-background text-foreground flex flex-col">
       <header className="h-16 border-b border-white/5 bg-card/50 backdrop-blur flex items-center px-6 sticky top-0 z-50 gap-4">
         <Button variant="ghost" size="icon" onClick={() => setLocation("/")} className="text-gray-400 hover:text-white">
           <ArrowLeft className="h-5 w-5" />

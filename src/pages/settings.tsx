@@ -68,7 +68,7 @@ export default function Settings() {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col">
+    <div className="min-h-full bg-background text-foreground flex flex-col">
       <header className="h-16 border-b border-white/5 bg-card/50 flex items-center px-6 sticky top-0 z-50 gap-4">
         <Button variant="ghost" size="icon" onClick={() => setLocation("/")} className="text-gray-400 hover:text-white">
           <ArrowLeft className="h-5 w-5" />

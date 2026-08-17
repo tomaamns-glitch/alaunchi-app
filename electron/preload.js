@@ -5,6 +5,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   minimize: () => ipcRenderer.send("window-minimize"),
   maximize: () => ipcRenderer.send("window-maximize"),
   close: () => ipcRenderer.send("window-close"),
+  isMaximized: () => ipcRenderer.invoke("window:is-maximized"),
+  onMaximizedChange: (callback) => {
+    const handler = (_, maximized) => callback(maximized);
+    ipcRenderer.on("window-maximized-change", handler);
+    return () => ipcRenderer.removeListener("window-maximized-change", handler);
+  },
 
   // Minecraft operations
   getInstalledModpacks: () => ipcRenderer.invoke("mc:get-installed-modpacks"),

@@ -227,6 +227,13 @@ function createWindow() {
     else win.maximize();
   });
   ipcMain.on("window-close", () => win.close());
+  ipcMain.handle("window:is-maximized", () => win.isMaximized());
+
+  const sendMaximizedState = () => {
+    if (!win.isDestroyed()) win.webContents.send("window-maximized-change", win.isMaximized());
+  };
+  win.on("maximize", sendMaximizedState);
+  win.on("unmaximize", sendMaximizedState);
 
   return win;
 }
