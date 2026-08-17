@@ -18,7 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, Trash, Folder, Lock, Loader2, FileText, CheckCircle2, UploadCloud } from "lucide-react";
+import { ArrowLeft, Plus, Trash, Loader2, FileText, CheckCircle2, UploadCloud, Folder } from "lucide-react";
 import {
   createModpack,
   deleteModpack,
@@ -28,6 +28,8 @@ import {
   type WalkedFile,
   type PublishProgress,
 } from "@/services/github";
+import { getGithubRepo } from "@/lib/app-config";
+import { useIsAdmin } from "@/hooks/use-is-admin";
 
 const LOADERS = ["forge", "fabric", "neoforge", "vanilla"] as const;
 
@@ -55,11 +57,9 @@ function formatBytes(bytes: number): string {
 
 export default function Admin() {
   const { isAuthenticated } = useAuth();
+  const isAdmin = useIsAdmin();
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks } = useModpacks();
-
-  const [authenticated, setAuthenticated] = useState(false);
-  const [password, setPassword] = useState("");
 
   const [selectedModpack, setSelectedModpack] = useState("");
   const [newVersion, setNewVersion] = useState("");
@@ -77,11 +77,12 @@ export default function Admin() {
 
   useEffect(() => {
     if (!isAuthenticated) setLocation("/login");
-  }, [isAuthenticated, setLocation]);
+    else if (!isAdmin) setLocation("/");
+  }, [isAuthenticated, isAdmin, setLocation]);
 
   useEffect(() => {
-    if (authenticated && modpacks.length === 0) loadModpacks();
-  }, [authenticated]);
+    if (isAdmin && modpacks.length === 0) loadModpacks();
+  }, [isAdmin]);
 
   useEffect(() => {
     if (!selectedModpack) return;
@@ -101,13 +102,6 @@ export default function Admin() {
     () => walkedFiles.reduce((s, w) => s + w.file.size, 0),
     [walkedFiles]
   );
-
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    const stored = localStorage.getItem("adminPassword") ?? "admin123";
-    if (password === stored) setAuthenticated(true);
-    else toast.error("Contraseña incorrecta");
-  };
 
   const onFolderSelected = (fileList: FileList) => {
     const walked: WalkedFile[] = [];
@@ -145,7 +139,7 @@ export default function Admin() {
       return;
     }
     const token = localStorage.getItem("githubToken") ?? "";
-    const repoUrl = localStorage.getItem("githubRepo") ?? "";
+    const repoUrl = getGithubRepo();
     if (!token) {
       toast.error("Necesitas un token de GitHub en Ajustes antes de publicar.");
       return;
@@ -185,7 +179,7 @@ export default function Admin() {
     e.preventDefault();
     if (!newForm.id || !newForm.name) { toast.error("ID y nombre son obligatorios"); return; }
     const token = localStorage.getItem("githubToken") ?? "";
-    const repoUrl = localStorage.getItem("githubRepo") ?? "";
+    const repoUrl = getGithubRepo();
     setCreating(true);
     try {
       await createModpack(token, repoUrl, newForm);
@@ -203,7 +197,7 @@ export default function Admin() {
   const handleDeleteModpack = async () => {
     if (!packToDelete) return;
     const token = localStorage.getItem("githubToken") ?? "";
-    const repoUrl = localStorage.getItem("githubRepo") ?? "";
+    const repoUrl = getGithubRepo();
     setDeleting(true);
     try {
       await deleteModpack(token, repoUrl, packToDelete.id);
@@ -218,47 +212,7 @@ export default function Admin() {
     }
   };
 
-  if (!authenticated) {
-    return (
-      <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
-        <Button variant="ghost" onClick={() => setLocation("/")} className="absolute top-4 left-4 text-gray-400 hover:text-white">
-          <ArrowLeft className="mr-2 h-4 w-4" /> Volver
-        </Button>
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="max-w-md w-full bg-card border border-white/5 p-8 rounded-xl shadow-2xl"
-        >
-          <div className="flex flex-col items-center mb-6">
-            <div className="h-12 w-12 bg-accent/10 rounded-full flex items-center justify-center mb-4">
-              <Lock className="h-6 w-6 text-accent" />
-            </div>
-            <h2 className="text-2xl font-bold text-white">Acceso Admin</h2>
-            <p className="text-muted-foreground text-sm text-center mt-1">
-              Introduce la contraseña de administrador para continuar.
-            </p>
-          </div>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="password">Contraseña</Label>
-              <Input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="bg-background/50 border-white/10 text-white"
-                placeholder="admin123"
-                autoFocus
-              />
-            </div>
-            <Button type="submit" className="w-full bg-accent hover:bg-accent/90 text-accent-foreground font-bold">
-              Entrar
-            </Button>
-          </form>
-        </motion.div>
-      </div>
-    );
-  }
+  if (!isAdmin) return null;
 
   const stageLabel: Record<PublishProgress["stage"], string> = {
     hashing: "Calculando hashes (SHA-256)",

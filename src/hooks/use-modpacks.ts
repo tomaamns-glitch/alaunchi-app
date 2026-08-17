@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { Modpack, fetchModpacks } from "../services/github";
+import { getGithubRepo } from "../lib/app-config";
 
 const eAPI = (window as any).electronAPI;
 const isElectron = !!eAPI;
@@ -61,7 +62,7 @@ export const useModpacks = create<ModpackState>((set, get) => ({
 
   loadModpacks: async () => {
     set({ loading: true, error: null });
-    const repoUrl = localStorage.getItem("githubRepo") ?? "";
+    const repoUrl = getGithubRepo();
     const token = localStorage.getItem("githubToken") ?? "";
 
     try {

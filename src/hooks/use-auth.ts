@@ -8,6 +8,7 @@ interface AuthState {
   username: string | null;
   uuid: string | null;
   mcToken: string | null;
+  email: string | null;
   isRefreshing: boolean;
   setAuth: (data: AuthData) => Promise<void>;
   logout: () => Promise<void>;
@@ -56,6 +57,7 @@ function applyToState(data: AuthData) {
     username: data.username,
     uuid: data.uuid,
     mcToken: data.mcToken,
+    email: data.email ?? null,
     isRefreshing: false,
   };
 }
@@ -65,6 +67,7 @@ export const useAuth = create<AuthState>((set) => ({
   username: null,
   uuid: null,
   mcToken: null,
+  email: null,
   isRefreshing: false,
 
   loadPersistedAuth: async () => {
@@ -82,7 +85,7 @@ export const useAuth = create<AuthState>((set) => ({
     if (!refreshTokenStillValid) {
       // Token expired and no way to refresh — force re-login.
       await writeAuthData({ ...data, mcToken: "", mcTokenExpiresAt: 0 });
-      set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, isRefreshing: false });
+      set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, email: null, isRefreshing: false });
       return;
     }
 
@@ -96,7 +99,7 @@ export const useAuth = create<AuthState>((set) => ({
       // Token expired and refresh failed — invalidate the session so the user
       // is forced to log in again instead of launching with a stale token.
       await writeAuthData({ ...data, mcToken: "", mcTokenExpiresAt: 0 });
-      set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, isRefreshing: false });
+      set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, email: null, isRefreshing: false });
     }
   },
 
@@ -113,7 +116,7 @@ export const useAuth = create<AuthState>((set) => ({
     } else {
       localStorage.removeItem("alaunchi_auth");
     }
-    set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, isRefreshing: false });
+    set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, email: null, isRefreshing: false });
   },
 
   getValidTokenForLaunch: async () => {

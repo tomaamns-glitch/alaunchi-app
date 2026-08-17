@@ -2,6 +2,8 @@ export interface AuthData {
   mcToken: string;
   username: string;
   uuid: string;
+  /** Microsoft account email, decoded from the OIDC id_token (openid+email scope). */
+  email?: string;
   /** XUID from XSTS DisplayClaims (xui[0].xid). Required by MC 1.20+ for
    *  session validation on online servers (--xuid arg). */
   xuid: string;
@@ -27,6 +29,19 @@ export type AuthStep =
   | { stage: "error"; message: string };
 
 type ProgressCallback = (step: AuthStep) => void;
+
+/** Decodes the (unsigned-here, already TLS-verified-by-Microsoft) id_token JWT to read the account email. */
+function decodeIdTokenEmail(idToken?: string): string | undefined {
+  if (!idToken) return undefined;
+  try {
+    const payloadB64 = idToken.split(".")[1];
+    const json = atob(payloadB64.replace(/-/g, "+").replace(/_/g, "/"));
+    const payload = JSON.parse(json);
+    return payload.email || payload.preferred_username || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 async function msTokenToMinecraft(msAccessToken: string): Promise<{
   mcToken: string;
@@ -83,6 +98,7 @@ export async function loginWithMicrosoft(onProgress: ProgressCallback): Promise<
 
   const authData: AuthData = {
     ...mc,
+    email: decodeIdTokenEmail(tokenRes.id_token),
     mcTokenExpiresAt: Date.now() + 86_400_000,
     mcTokenObtainedAt: Date.now(),
     msRefreshToken: tokenRes.refresh_token,
@@ -107,6 +123,7 @@ export async function silentRefresh(current: AuthData): Promise<AuthData | null>
 
     return {
       ...mc,
+      email: decodeIdTokenEmail(tokenRes.id_token) ?? current.email,
       mcTokenExpiresAt: Date.now() + 86_400_000,
       mcTokenObtainedAt: Date.now(),
       msRefreshToken: tokenRes.refresh_token ?? current.msRefreshToken,
@@ -135,7 +152,7 @@ async function pollForToken(
   intervalSecs: number,
   expiresSecs: number,
   clientId: string
-): Promise<{ access_token: string; refresh_token: string }> {
+): Promise<{ access_token: string; refresh_token: string; id_token?: string }> {
   const deadline = Date.now() + expiresSecs * 1000;
   const intervalMs = (intervalSecs + 1) * 1000;
 
