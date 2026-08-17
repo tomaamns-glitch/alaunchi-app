@@ -20,10 +20,11 @@ export async function installSnapshot(
   modpackId: string,
   manifest: SnapshotManifest,
   baseUrl: string,
-  modpack?: Record<string, any>
+  modpack?: Record<string, any>,
+  token?: string
 ): Promise<{ totalFiles: number }> {
   if (isElectron) {
-    return eAPI.installSnapshot({ modpackId, manifest, baseUrl, modpack });
+    return eAPI.installSnapshot({ modpackId, manifest, baseUrl, modpack, token });
   }
   await delay(500);
   return { totalFiles: manifest.files.length };
