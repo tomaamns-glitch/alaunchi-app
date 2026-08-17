@@ -13,7 +13,6 @@ import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { getGithubRepo } from "@/lib/app-config";
 import { useIsAdmin } from "@/hooks/use-is-admin";
-import { ModpackDetailDialog } from "@/components/modpack-detail-dialog";
 
 const api = (window as any).electronAPI;
 
@@ -190,7 +189,7 @@ function ModpackCard({ pack, index }: ModpackCardProps) {
   };
 
   const isActing = status !== "idle";
-  const [detailOpen, setDetailOpen] = useState(false);
+  const [, setLocation] = useLocation();
 
   return (
     <motion.div
@@ -198,7 +197,7 @@ function ModpackCard({ pack, index }: ModpackCardProps) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: index * 0.1 }}
       data-testid={`card-modpack-${pack.id}`}
-      onClick={() => setDetailOpen(true)}
+      onClick={() => setLocation(`/modpack/${pack.id}`)}
       className="group relative flex flex-col bg-card rounded-xl overflow-hidden border border-white/5 shadow-lg hover:border-accent/30 transition-all duration-300 hover:-translate-y-1 cursor-pointer"
     >
       {pack.updateAvailable && status === "idle" && (
@@ -268,8 +267,6 @@ function ModpackCard({ pack, index }: ModpackCardProps) {
           )}
         </div>
       </div>
-
-      <ModpackDetailDialog pack={pack} open={detailOpen} onOpenChange={setDetailOpen} />
     </motion.div>
   );
 }
