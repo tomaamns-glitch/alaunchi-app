@@ -9,6 +9,7 @@ import Home from "@/pages/home";
 import Admin from "@/pages/admin";
 import Settings from "@/pages/settings";
 import ModpackDetail from "@/pages/modpack-detail";
+import { Titlebar } from "@/components/titlebar";
 
 const queryClient = new QueryClient();
 
@@ -29,9 +30,14 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <WouterRouter hook={useHashLocation}>
-          <Router />
-        </WouterRouter>
+        <div className="h-screen flex flex-col overflow-hidden">
+          <Titlebar />
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <WouterRouter hook={useHashLocation}>
+              <Router />
+            </WouterRouter>
+          </div>
+        </div>
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
