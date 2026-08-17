@@ -80,19 +80,22 @@ export default function Login() {
     if (step.stage === "error") setErrorMsg(step.message);
   }, []);
 
+  const handleDevBypass = async () => {
+    await setAuth({
+      mcToken: "mock_token",
+      username: "Steve",
+      uuid: "00000000-0000-0000-0000-000000000000",
+      xuid: "",
+      mcTokenExpiresAt: Date.now() + 86_400_000,
+      mcTokenObtainedAt: Date.now(),
+      msRefreshToken: "",
+      msRefreshTokenExpiresAt: 0,
+    });
+  };
+
   const handleMicrosoftLogin = async () => {
     if (!isElectron) {
-      const mockData = {
-        mcToken: "mock_token",
-        username: "Steve",
-        uuid: "00000000-0000-0000-0000-000000000000",
-        xuid: "",
-        mcTokenExpiresAt: Date.now() + 86_400_000,
-        mcTokenObtainedAt: Date.now(),
-        msRefreshToken: "",
-        msRefreshTokenExpiresAt: 0,
-      };
-      await setAuth(mockData);
+      await handleDevBypass();
       return;
     }
 
@@ -166,6 +169,17 @@ export default function Login() {
               <p className="text-xs text-muted-foreground text-center">
                 Necesitas una cuenta de Minecraft comprada para usar ALaunchi.
               </p>
+              {import.meta.env.DEV && isElectron && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  data-testid="button-dev-bypass"
+                  className="w-full text-xs text-muted-foreground hover:text-white border border-dashed border-white/10"
+                  onClick={handleDevBypass}
+                >
+                  Saltar login (solo dev)
+                </Button>
+              )}
             </motion.div>
           )}
 
