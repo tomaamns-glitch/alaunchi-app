@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs/promises");
@@ -23,7 +23,21 @@ const LAUNCHER_CONFIG = {
 };
 // ────────────────────────────────────────────────────────────────────────────
 
-const APP_DATA_DIR = path.join(os.homedir(), ".alaunchi");
+// Root data folder is normally ~/.alaunchi, but can be overridden by the user
+// (Ajustes → Ubicación de datos). The override pointer lives in Electron's stable
+// per-app userData dir so it can be read before APP_DATA_DIR itself is known.
+const LOCATION_FILE = path.join(app.getPath("userData"), "location.json");
+
+function getOverriddenDataDir() {
+  try {
+    const raw = fsSync.readFileSync(LOCATION_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed?.dataDir && typeof parsed.dataDir === "string") return parsed.dataDir;
+  } catch {}
+  return null;
+}
+
+const APP_DATA_DIR = getOverriddenDataDir() || path.join(os.homedir(), ".alaunchi");
 const INSTANCES_DIR = path.join(APP_DATA_DIR, "instances");
 const CACHE_DIR = path.join(APP_DATA_DIR, "cache");
 const JAVA_DIR = path.join(APP_DATA_DIR, "java");
@@ -1568,7 +1582,7 @@ ipcMain.handle("ms:device-code-auth", async (_, args) => {
   const clientId = args?.clientId || LAUNCHER_CONFIG.azureClientId;
   if (!clientId) return Promise.reject(new Error("Azure Client ID no configurado. Ve a Ajustes e introduce tu Client ID de Azure."));
   return new Promise((resolve, reject) => {
-    const postData = `client_id=${clientId}&scope=XboxLive.signin%20offline_access`;
+    const postData = `client_id=${clientId}&scope=XboxLive.signin%20offline_access%20openid%20email`;
     const req = https.request({
       hostname: "login.microsoftonline.com",
       path: "/consumers/oauth2/v2.0/devicecode",
@@ -1618,7 +1632,7 @@ ipcMain.handle("ms:poll-token", async (_, { deviceCode, clientId }) => {
 ipcMain.handle("ms:refresh-token", async (_, { refreshToken, clientId }) => {
   const cid = clientId || LAUNCHER_CONFIG.azureClientId;
   return new Promise((resolve, reject) => {
-    const postData = `grant_type=refresh_token&client_id=${cid}&refresh_token=${encodeURIComponent(refreshToken)}&scope=XboxLive.signin%20offline_access`;
+    const postData = `grant_type=refresh_token&client_id=${cid}&refresh_token=${encodeURIComponent(refreshToken)}&scope=XboxLive.signin%20offline_access%20openid%20email`;
     const req = https.request({
       hostname: "login.microsoftonline.com",
       path: "/consumers/oauth2/v2.0/token",
@@ -1824,6 +1838,26 @@ ipcMain.handle("fs:write-auth", async (_, auth) => {
 
 ipcMain.handle("fs:clear-auth", async () => {
   try { await fs.unlink(path.join(APP_DATA_DIR, "auth.json")); } catch {}
+  return { success: true };
+});
+
+ipcMain.handle("fs:get-data-dir", async () => {
+  return { dataDir: APP_DATA_DIR, isCustom: !!getOverriddenDataDir() };
+});
+
+ipcMain.handle("fs:choose-data-dir", async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openDirectory", "createDirectory"],
+    title: "Elige la carpeta donde ALaunchi guardará sus datos",
+  });
+  if (result.canceled || result.filePaths.length === 0) return { canceled: true };
+  const chosen = result.filePaths[0];
+  await fs.writeFile(LOCATION_FILE, JSON.stringify({ dataDir: chosen }, null, 2));
+  return { canceled: false, path: chosen, restartRequired: true };
+});
+
+ipcMain.handle("fs:open-data-dir", async () => {
+  await shell.openPath(APP_DATA_DIR);
   return { success: true };
 });
 

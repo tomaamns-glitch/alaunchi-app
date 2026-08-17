@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   readAuth: () => ipcRenderer.invoke("fs:read-auth"),
   writeAuth: (auth) => ipcRenderer.invoke("fs:write-auth", auth),
   clearAuth: () => ipcRenderer.invoke("fs:clear-auth"),
+  getDataDir: () => ipcRenderer.invoke("fs:get-data-dir"),
+  chooseDataDir: () => ipcRenderer.invoke("fs:choose-data-dir"),
+  openDataDir: () => ipcRenderer.invoke("fs:open-data-dir"),
 
   // GitHub
   fetchModpacks: (args) => ipcRenderer.invoke("github:fetch-modpacks", args),

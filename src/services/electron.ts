@@ -52,3 +52,17 @@ export async function readSettings(): Promise<Record<string, any>> {
 export async function writeSettings(settings: Record<string, any>): Promise<void> {
   if (isElectron) await eAPI.writeSettings(settings);
 }
+
+export async function getDataDir(): Promise<{ dataDir: string; isCustom: boolean } | null> {
+  if (!isElectron) return null;
+  return eAPI.getDataDir();
+}
+
+export async function chooseDataDir(): Promise<{ canceled: boolean; path?: string; restartRequired?: boolean }> {
+  if (!isElectron) return { canceled: true };
+  return eAPI.chooseDataDir();
+}
+
+export async function openDataDir(): Promise<void> {
+  if (isElectron) await eAPI.openDataDir();
+}

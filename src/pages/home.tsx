@@ -11,6 +11,8 @@ import { toast } from "sonner";
 import { Modpack, fetchSnapshot, snapshotBaseUrl } from "@/services/github";
 import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { getGithubRepo } from "@/lib/app-config";
+import { useIsAdmin } from "@/hooks/use-is-admin";
 
 const api = (window as any).electronAPI;
 
@@ -86,7 +88,7 @@ function ModpackCard({ pack, index }: ModpackCardProps) {
     setStatus(mode);
     setProgress(0);
     setStageLabel("Obteniendo manifiesto...");
-    const repoUrl = localStorage.getItem("githubRepo") ?? "";
+    const repoUrl = getGithubRepo();
     const token = localStorage.getItem("githubToken") ?? "";
     const manifest = await fetchSnapshot(repoUrl, pack.id, token || undefined);
     if (!manifest) throw new Error("No hay manifiesto publicado para este modpack todavía.");
@@ -273,6 +275,7 @@ export default function Home() {
   const { isAuthenticated, username, uuid, mcToken, logout, loadPersistedAuth } = useAuth();
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks, loading } = useModpacks();
+  const isAdmin = useIsAdmin();
 
   const [javaStatus, setJavaStatus] = useState<JavaStatus>("checking");
   const [javaInstalling, setJavaInstalling] = useState(false);
@@ -418,15 +421,17 @@ export default function Home() {
             </span>
           </div>
 
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setLocation("/admin")}
-            data-testid="button-admin"
-            className="text-xs text-gray-400 hover:text-white font-mono border border-white/10 hover:bg-white/5 px-3"
-          >
-            ADMIN
-          </Button>
+          {isAdmin && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setLocation("/admin")}
+              data-testid="button-admin"
+              className="text-xs text-gray-400 hover:text-white font-mono border border-white/10 hover:bg-white/5 px-3"
+            >
+              ADMIN
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"
@@ -541,10 +546,16 @@ export default function Home() {
         ) : modpacks.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-muted-foreground gap-3">
             <p className="text-lg font-medium">No hay modpacks disponibles</p>
-            <p className="text-sm">Configura tu repositorio de GitHub en Ajustes</p>
-            <Button variant="outline" size="sm" onClick={() => setLocation("/settings")}>
-              Ir a Ajustes
-            </Button>
+            {isAdmin ? (
+              <>
+                <p className="text-sm">Configura el repositorio de GitHub en Ajustes</p>
+                <Button variant="outline" size="sm" onClick={() => setLocation("/settings")}>
+                  Ir a Ajustes
+                </Button>
+              </>
+            ) : (
+              <p className="text-sm">Vuelve a intentarlo más tarde</p>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
