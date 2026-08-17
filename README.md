@@ -112,11 +112,18 @@ falta registrar una app en Azure (gratis):
 
 1. Ve a [entra.microsoft.com](https://entra.microsoft.com) → **App registrations** → **New
    registration**.
-2. Nombre: el que quieras (ej. "ALaunchi"). "Supported account types": cuentas personales de
-   Microsoft.
+2. Nombre: el que quieras (ej. "ALaunchi"). **"Supported account types"**: elige la opción
+   **"Accounts in any organizational directory (Any Microsoft Entra ID tenant - Multitenant) and
+   personal Microsoft accounts (e.g. Skype, Xbox)"**. Esto es obligatorio — si eliges solo
+   "cuentas personales" (personal accounts only), Xbox Live/Minecraft rechaza el login con
+   `HTTP 403 Invalid app registration`, aunque el resto del flujo (Microsoft, Xbox, XSTS) funcione
+   bien.
 3. En **Authentication**, activa **"Allow public client flows"** → Yes, y guarda.
 4. Copia el **Application (client) ID**.
 5. Pégalo en la app, en Ajustes → "Azure Client ID".
+
+Si ya registraste la app con el tipo de cuenta equivocado, no hace falta crear una nueva: entra en
+**Authentication** de tu app existente y cambia "Supported account types" a la opción de arriba.
 
 Sin este paso, el botón de login no funcionará.
 
