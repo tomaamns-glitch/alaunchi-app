@@ -154,58 +154,60 @@ export default function ModpackDetail() {
                 </TabsList>
                 {categories.map((c) => (
                   <TabsContent key={c} value={c} className="mt-4">
-                    <button
-                      onClick={() => setSortAsc((v) => !v)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:text-white transition-colors"
-                    >
-                      Nombre
-                      <ArrowUpDown className="h-3 w-3" />
-                    </button>
-                    <div className="flex flex-col gap-1.5">
-                      {content![c]
-                        .slice()
-                        .sort((a, b) => {
-                          const cmp = (modrinthMatches.get(a.path)?.title ?? guessTitle(fileName(a.path))).localeCompare(
-                            modrinthMatches.get(b.path)?.title ?? guessTitle(fileName(b.path))
-                          );
-                          return sortAsc ? cmp : -cmp;
-                        })
-                        .map((f) => {
-                          const match = modrinthMatches.get(f.path);
-                          const CategoryIcon = CATEGORY_META[c].icon;
-                          return (
-                            <div
-                              key={f.path}
-                              className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 border border-white/5 rounded-md w-full"
-                            >
-                              {match ? (
-                                <>
-                                  {match.iconUrl ? (
-                                    <img src={match.iconUrl} alt="" className="h-7 w-7 rounded shrink-0 object-cover bg-black/30" />
-                                  ) : (
-                                    <div className="h-7 w-7 rounded shrink-0 bg-black/30 flex items-center justify-center">
-                                      <CategoryIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                    <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-2xl p-3">
+                      <button
+                        onClick={() => setSortAsc((v) => !v)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:text-white transition-colors"
+                      >
+                        Nombre
+                        <ArrowUpDown className="h-3 w-3" />
+                      </button>
+                      <div className="flex flex-col gap-1.5">
+                        {content![c]
+                          .slice()
+                          .sort((a, b) => {
+                            const cmp = (modrinthMatches.get(a.path)?.title ?? guessTitle(fileName(a.path))).localeCompare(
+                              modrinthMatches.get(b.path)?.title ?? guessTitle(fileName(b.path))
+                            );
+                            return sortAsc ? cmp : -cmp;
+                          })
+                          .map((f) => {
+                            const match = modrinthMatches.get(f.path);
+                            const CategoryIcon = CATEGORY_META[c].icon;
+                            return (
+                              <div
+                                key={f.path}
+                                className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full"
+                              >
+                                {match ? (
+                                  <>
+                                    {match.iconUrl ? (
+                                      <img src={match.iconUrl} alt="" className="h-11 w-11 rounded shrink-0 object-cover bg-black/30" />
+                                    ) : (
+                                      <div className="h-11 w-11 rounded shrink-0 bg-black/30 flex items-center justify-center">
+                                        <CategoryIcon className="h-5 w-5 text-muted-foreground" />
+                                      </div>
+                                    )}
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-gray-100 font-medium text-sm truncate">{match.title}</p>
+                                      <p className="text-muted-foreground text-[11px] font-mono truncate">{fileName(f.path)}</p>
                                     </div>
-                                  )}
-                                  <div className="min-w-0 flex-1">
-                                    <p className="text-gray-100 font-medium truncate">{match.title}</p>
-                                    <p className="text-muted-foreground text-[11px] font-mono truncate">{fileName(f.path)}</p>
-                                  </div>
-                                </>
-                              ) : (
-                                <>
-                                  <div className="h-7 w-7 rounded shrink-0 bg-black/30 flex items-center justify-center">
-                                    <span className="text-[9px] font-bold text-muted-foreground">Ms</span>
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <p className="text-gray-100 font-medium truncate">{guessTitle(fileName(f.path))}</p>
-                                    <p className="text-muted-foreground text-[11px] font-mono truncate">{fileName(f.path)}</p>
-                                  </div>
-                                </>
-                              )}
-                            </div>
-                          );
-                        })}
+                                  </>
+                                ) : (
+                                  <>
+                                    <div className="h-11 w-11 rounded shrink-0 bg-black/30 flex items-center justify-center">
+                                      <span className="text-xs font-bold text-muted-foreground">Ms</span>
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-gray-100 font-medium text-sm truncate">{guessTitle(fileName(f.path))}</p>
+                                      <p className="text-muted-foreground text-[11px] font-mono truncate">{fileName(f.path)}</p>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })}
+                      </div>
                     </div>
                   </TabsContent>
                 ))}
