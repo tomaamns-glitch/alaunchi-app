@@ -124,7 +124,7 @@ export default function ModpackDetail() {
         <div className="px-8 pt-4 pb-8 space-y-4">
           <p className="text-base text-gray-300 max-w-3xl">{pack.description}</p>
 
-          <div className="pt-4">
+          <div className="mt-4 bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-2xl p-4">
             {loading ? (
               <div className="flex items-center justify-center py-16 text-muted-foreground">
                 <Loader2 className="h-5 w-5 animate-spin mr-2" /> Cargando contenido...
