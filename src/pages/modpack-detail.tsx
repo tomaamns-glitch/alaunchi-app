@@ -180,8 +180,10 @@ export default function ModpackDetail() {
                                       <CategoryIcon className="h-3.5 w-3.5 text-muted-foreground" />
                                     </div>
                                   )}
-                                  <p className="text-gray-100 font-medium truncate flex-1">{match.title}</p>
-                                  <p className="text-muted-foreground text-[11px] shrink-0">v{match.versionNumber}</p>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-gray-100 font-medium truncate">{match.title}</p>
+                                    <p className="text-muted-foreground text-[11px] font-mono truncate">{fileName(f.path)}</p>
+                                  </div>
                                 </>
                               ) : (
                                 <>
