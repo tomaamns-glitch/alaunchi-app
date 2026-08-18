@@ -202,7 +202,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
       ) : (
         <Button
           data-testid={pack.installed ? `button-play-${pack.id}` : `button-install-${pack.id}`}
-          className={`w-full font-bold h-10 tracking-wide transition-all ${
+          className={`w-full font-bold h-14 text-base tracking-wide transition-all ${
             pack.installed
               ? "bg-accent hover:bg-accent/90 text-accent-foreground shadow-[0_0_15px_rgba(245,166,35,0.25)]"
               : "bg-white/10 hover:bg-white/20 text-white"
@@ -538,7 +538,7 @@ export default function Home() {
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                         transition={{ duration: 0.5 }}
-                        className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-1.5 z-10"
+                        className="absolute bottom-16 left-1/2 -translate-x-1/2 flex gap-1.5 z-10"
                       >
                         {modpacks.map((m, i) => (
                           <button
