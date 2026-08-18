@@ -187,53 +187,35 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   const isActing = status !== "idle";
 
   return (
-    <div className="flex items-center justify-between gap-4 w-full min-w-0">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <h2 className="text-base font-bold text-white truncate">{pack.name}</h2>
-          {pack.updateAvailable && status === "idle" && (
-            <span className="bg-accent text-accent-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0">
-              UPDATE
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <span className="uppercase">{pack.loaderType}</span>
-          <span>·</span>
-          <span>MC {pack.minecraftVersion}</span>
-        </div>
-      </div>
-
-      <div className="shrink-0 w-64">
-        {status !== "idle" ? (
-          <div className="space-y-1">
-            <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-              <div className="flex items-center gap-1.5 min-w-0">
-                <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-                <span className="truncate">{stageLabel}</span>
-              </div>
-              <span className="shrink-0 tabular-nums">{Math.round(progress)}%</span>
+    <div className="w-64">
+      {status !== "idle" ? (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+              <span className="truncate">{stageLabel}</span>
             </div>
-            <Progress value={progress} className="h-1.5" />
+            <span className="shrink-0 tabular-nums">{Math.round(progress)}%</span>
           </div>
-        ) : (
-          <Button
-            data-testid={pack.installed ? `button-play-${pack.id}` : `button-install-${pack.id}`}
-            className={`w-full font-bold h-10 tracking-wide transition-all ${
-              pack.installed
-                ? "bg-accent hover:bg-accent/90 text-accent-foreground shadow-[0_0_15px_rgba(245,166,35,0.25)]"
-                : "bg-white/10 hover:bg-white/20 text-white"
-            }`}
-            onClick={pack.installed ? handlePlay : handleInstall}
-            disabled={isActing}
-          >
-            {!pack.installed && <Download className="mr-2 h-4 w-4" />}
-            {pack.installed && pack.updateAvailable && <RefreshCw className="mr-2 h-4 w-4" />}
-            {pack.installed && !pack.updateAvailable && <Play className="mr-2 h-4 w-4 fill-current" />}
-            {pack.installed ? (pack.updateAvailable ? "ACTUALIZAR Y JUGAR" : "JUGAR") : "INSTALAR"}
-          </Button>
-        )}
-      </div>
+          <Progress value={progress} className="h-1.5" />
+        </div>
+      ) : (
+        <Button
+          data-testid={pack.installed ? `button-play-${pack.id}` : `button-install-${pack.id}`}
+          className={`w-full font-bold h-10 tracking-wide transition-all ${
+            pack.installed
+              ? "bg-accent hover:bg-accent/90 text-accent-foreground shadow-[0_0_15px_rgba(245,166,35,0.25)]"
+              : "bg-white/10 hover:bg-white/20 text-white"
+          }`}
+          onClick={pack.installed ? handlePlay : handleInstall}
+          disabled={isActing}
+        >
+          {!pack.installed && <Download className="mr-2 h-4 w-4" />}
+          {pack.installed && pack.updateAvailable && <RefreshCw className="mr-2 h-4 w-4" />}
+          {pack.installed && !pack.updateAvailable && <Play className="mr-2 h-4 w-4 fill-current" />}
+          {pack.installed ? (pack.updateAvailable ? "ACTUALIZAR Y JUGAR" : "JUGAR") : "INSTALAR"}
+        </Button>
+      )}
     </div>
   );
 }
@@ -374,7 +356,20 @@ export default function Home() {
 
   return (
     <div className="min-h-full bg-background text-foreground flex flex-col">
-      <header className="h-16 border-b border-white/5 bg-card/50 backdrop-blur flex items-center justify-end px-6 sticky top-0 z-50 shrink-0">
+      <header className="h-16 border-b border-white/5 bg-card/50 backdrop-blur flex items-center justify-between px-6 sticky top-0 z-50 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          {currentPack && (
+            <>
+              <h2 className="text-base font-bold text-white truncate">{currentPack.name}</h2>
+              <span className="text-xs text-muted-foreground shrink-0">v{currentPack.version}</span>
+              {currentPack.updateAvailable && (
+                <span className="bg-accent text-accent-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0">
+                  UPDATE
+                </span>
+              )}
+            </>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-2 mr-3 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5">
             <Avatar className="h-6 w-6 border border-white/10">
@@ -590,7 +585,7 @@ export default function Home() {
       </main>
 
       {!loading && currentPack && (
-        <footer className="h-16 border-t border-white/5 bg-card/50 backdrop-blur flex items-center px-6 shrink-0">
+        <footer className="h-16 border-t border-white/5 bg-card/50 backdrop-blur flex items-center justify-center px-6 shrink-0">
           <ModpackActionBar key={currentPack.id} pack={currentPack} />
         </footer>
       )}
