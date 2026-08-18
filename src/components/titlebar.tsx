@@ -30,23 +30,13 @@ export function Titlebar() {
       className="h-11 shrink-0 flex items-center justify-between bg-black/40 border-b border-white/5 select-none"
     >
       <div className="flex items-center gap-1 px-2">
-        {onModpackDetail && (
-          <button
-            style={noDragStyle}
-            onClick={() => setLocation("/")}
-            className="h-7 w-7 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-            aria-label="Volver"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-        )}
         <button
           style={noDragStyle}
-          onClick={() => setLocation("/settings")}
+          onClick={() => setLocation(onModpackDetail ? "/" : "/settings")}
           className="h-7 w-7 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-          aria-label="Ajustes"
+          aria-label={onModpackDetail ? "Volver" : "Ajustes"}
         >
-          <Home className="h-4 w-4" />
+          {onModpackDetail ? <ArrowLeft className="h-4 w-4" /> : <Home className="h-4 w-4" />}
         </button>
         <img
           src="/logo.png"
