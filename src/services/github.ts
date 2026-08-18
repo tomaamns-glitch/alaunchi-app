@@ -31,6 +31,8 @@ export interface SnapshotEntry {
   path: string;
   hash: string;
   size: number;
+  /** SHA-1 of the file, used to look it up on Modrinth (their API only indexes sha1/sha512). */
+  sha1?: string;
 }
 
 export interface SnapshotManifest {
@@ -215,6 +217,13 @@ async function sha256(buf: ArrayBuffer): Promise<string> {
     .join("");
 }
 
+async function sha1(buf: ArrayBuffer): Promise<string> {
+  const h = await crypto.subtle.digest("SHA-1", buf);
+  return Array.from(new Uint8Array(h))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 export type PublishStage = "hashing" | "uploading" | "manifest" | "done";
 
 export interface PublishProgress {
@@ -253,8 +262,8 @@ export async function publishSnapshot(
       if (i >= files.length) return;
       const w = files[i];
       const buf = await w.file.arrayBuffer();
-      const hash = await sha256(buf);
-      entries[i] = { path: w.relativePath, hash, size: w.file.size };
+      const [hash, hash1] = await Promise.all([sha256(buf), sha1(buf)]);
+      entries[i] = { path: w.relativePath, hash, size: w.file.size, sha1: hash1 };
       hashed++;
       onProgress({
         stage: "hashing",
