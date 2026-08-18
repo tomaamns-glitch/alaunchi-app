@@ -5,7 +5,6 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Download,
-  Play,
   RefreshCw,
   Loader2,
   AlertTriangle,
@@ -189,16 +188,19 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   return (
     <div className="w-64">
       {status !== "idle" ? (
-        <div className="space-y-1">
-          <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-              <span className="truncate">{stageLabel}</span>
-            </div>
+        <>
+          <div className="flex items-center justify-center gap-2 text-[11px] text-muted-foreground h-14">
+            <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+            <span className="truncate">{stageLabel}</span>
             <span className="shrink-0 tabular-nums">{Math.round(progress)}%</span>
           </div>
-          <Progress value={progress} className="h-1.5" />
-        </div>
+          <div className="fixed inset-x-0 bottom-20 h-[3px] bg-white/10 z-20">
+            <div
+              className="h-full bg-accent transition-[width] duration-300 ease-out"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        </>
       ) : (
         <Button
           data-testid={pack.installed ? `button-play-${pack.id}` : `button-install-${pack.id}`}
@@ -212,7 +214,6 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
         >
           {!pack.installed && <Download className="mr-2 h-4 w-4" />}
           {pack.installed && pack.updateAvailable && <RefreshCw className="mr-2 h-4 w-4" />}
-          {pack.installed && !pack.updateAvailable && <Play className="mr-2 h-4 w-4 fill-current" />}
           {pack.installed ? (pack.updateAvailable ? "ACTUALIZAR Y JUGAR" : "JUGAR") : "INSTALAR"}
         </Button>
       )}
