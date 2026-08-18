@@ -561,34 +561,32 @@ export default function Home() {
       </main>
 
       {!loading && currentPack && (
-        <footer className="h-20 border-t border-white/5 bg-card/50 backdrop-blur grid grid-cols-[1fr_auto_1fr] items-center px-6 shrink-0">
-          <div className="flex items-center">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5">
-              <Avatar className="h-6 w-6 border border-white/10">
-                <AvatarFallback className="bg-accent/20 text-accent text-xs font-bold">
-                  {username?.charAt(0)?.toUpperCase() ?? "?"}
-                </AvatarFallback>
-              </Avatar>
-              <span className="text-sm font-medium text-gray-200" data-testid="text-username">
-                {username}
-              </span>
-            </div>
+        <footer className="relative h-20 border-t border-white/5 bg-card/50 backdrop-blur flex items-center justify-between px-6 shrink-0">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5">
+            <Avatar className="h-6 w-6 border border-white/10">
+              <AvatarFallback className="bg-accent/20 text-accent text-xs font-bold">
+                {username?.charAt(0)?.toUpperCase() ?? "?"}
+              </AvatarFallback>
+            </Avatar>
+            <span className="text-sm font-medium text-gray-200" data-testid="text-username">
+              {username}
+            </span>
           </div>
-          <div className="-mt-10">
+
+          <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2">
             <ModpackActionBar key={currentPack.id} pack={currentPack} />
           </div>
-          <div className="flex justify-end">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setLocation(`/modpack/${currentPack.id}`)}
-              data-testid="button-instance-manager"
-              className="text-gray-400 hover:text-white"
-              aria-label="Gestor de instancia"
-            >
-              <Package className="h-5 w-5" />
-            </Button>
-          </div>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setLocation(`/modpack/${currentPack.id}`)}
+            data-testid="button-instance-manager"
+            className="text-gray-400 hover:text-white"
+            aria-label="Gestor de instancia"
+          >
+            <Package className="h-5 w-5" />
+          </Button>
         </footer>
       )}
     </div>
