@@ -26,7 +26,14 @@ interface ModrinthProject {
 interface ModrinthVersionFull {
   id: string;
   version_number: string;
+  version_type: "release" | "beta" | "alpha";
+  date_published: string;
   files: Array<{ primary: boolean; filename: string; url: string; hashes: { sha1: string } }>;
+}
+
+interface ModrinthProjectFull {
+  description: string;
+  gallery: Array<{ url: string; title?: string; featured: boolean }>;
 }
 
 const API = "https://api.modrinth.com/v2";
@@ -114,9 +121,43 @@ export async function identifyModrinthFiles(entries: HashableFile[]): Promise<Ma
 export interface ModrinthUpdate {
   versionId: string;
   versionNumber: string;
+  versionType: "release" | "beta" | "alpha";
   filename: string;
   url: string;
   sha1: string;
+}
+
+/** All versions of a project for a given loader + Minecraft version, newest first. */
+export async function listVersions(
+  projectId: string,
+  loader: string,
+  gameVersion: string
+): Promise<ModrinthUpdate[]> {
+  try {
+    const params = new URLSearchParams({
+      loaders: JSON.stringify([loader]),
+      game_versions: JSON.stringify([gameVersion]),
+    });
+    const res = await fetch(`${API}/project/${projectId}/version?${params}`);
+    if (!res.ok) return [];
+    const versions: ModrinthVersionFull[] = await res.json();
+    return versions
+      .map((v) => {
+        const file = v.files.find((f) => f.primary) ?? v.files[0];
+        if (!file) return null;
+        return {
+          versionId: v.id,
+          versionNumber: v.version_number,
+          versionType: v.version_type,
+          filename: file.filename,
+          url: file.url,
+          sha1: file.hashes.sha1,
+        };
+      })
+      .filter((v): v is ModrinthUpdate => v !== null);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -128,26 +169,35 @@ export async function getLatestVersion(
   loader: string,
   gameVersion: string
 ): Promise<ModrinthUpdate | null> {
+  const versions = await listVersions(projectId, loader, gameVersion);
+  return versions[0] ?? null;
+}
+
+export interface ModrinthProjectDetail {
+  description: string;
+  gallery: Array<{ url: string; title?: string }>;
+}
+
+const projectDetailCache = new Map<string, ModrinthProjectDetail | null>();
+
+/** Full project info (description + gallery) for the mod-detail view. */
+export async function getProjectDetail(projectId: string): Promise<ModrinthProjectDetail | null> {
+  if (projectDetailCache.has(projectId)) return projectDetailCache.get(projectId)!;
   try {
-    const params = new URLSearchParams({
-      loaders: JSON.stringify([loader]),
-      game_versions: JSON.stringify([gameVersion]),
-    });
-    const res = await fetch(`${API}/project/${projectId}/version?${params}`);
-    if (!res.ok) return null;
-    const versions: ModrinthVersionFull[] = await res.json();
-    const latest = versions[0];
-    if (!latest) return null;
-    const file = latest.files.find((f) => f.primary) ?? latest.files[0];
-    if (!file) return null;
-    return {
-      versionId: latest.id,
-      versionNumber: latest.version_number,
-      filename: file.filename,
-      url: file.url,
-      sha1: file.hashes.sha1,
+    const res = await fetch(`${API}/project/${projectId}`);
+    if (!res.ok) {
+      projectDetailCache.set(projectId, null);
+      return null;
+    }
+    const p: ModrinthProjectFull = await res.json();
+    const detail: ModrinthProjectDetail = {
+      description: p.description,
+      gallery: (p.gallery ?? []).map((g) => ({ url: g.url, title: g.title })),
     };
+    projectDetailCache.set(projectId, detail);
+    return detail;
   } catch {
+    projectDetailCache.set(projectId, null);
     return null;
   }
 }
