@@ -67,3 +67,30 @@ export async function chooseDataDir(): Promise<{ canceled: boolean; path?: strin
 export async function openDataDir(): Promise<void> {
   if (isElectron) await eAPI.openDataDir();
 }
+
+export interface InstanceFile {
+  path: string;
+  size: number;
+  sha1: string | null;
+}
+
+/** Lists actual files under mods/shaderpacks/resourcepacks in an installed instance. */
+export async function listInstanceFiles(modpackId: string): Promise<InstanceFile[]> {
+  if (!isElectron) return [];
+  return eAPI.listInstanceFiles({ modpackId });
+}
+
+export async function deleteInstanceFile(modpackId: string, path: string): Promise<void> {
+  if (isElectron) await eAPI.deleteInstanceFile({ modpackId, path });
+}
+
+export async function updateInstanceFile(
+  modpackId: string,
+  oldPath: string,
+  newPath: string,
+  url: string,
+  sha1?: string
+): Promise<{ newPath: string }> {
+  if (!isElectron) return { newPath };
+  return eAPI.updateInstanceFile({ modpackId, oldPath, newPath, url, sha1 });
+}
