@@ -72,17 +72,17 @@ export default function ModpackDetail() {
   );
 
   return (
-    <div className="min-h-full bg-background text-foreground flex flex-col">
-      <main className="flex-1 max-w-5xl mx-auto w-full">
-        <div className="relative h-32 md:h-40 bg-black/50 overflow-hidden">
-          {pack.imageUrl ? (
-            <img src={pack.imageUrl} alt={pack.name} className="w-full h-full object-cover" />
-          ) : (
-            <div className="w-full h-full bg-gradient-to-br from-accent/20 to-black" />
-          )}
-          <div className="absolute inset-0 bg-gradient-to-t from-background via-background/30 to-transparent" />
-        </div>
+    <div className="min-h-full bg-background text-foreground">
+      <div className="relative h-32 md:h-40 bg-black/50 overflow-hidden">
+        {pack.imageUrl ? (
+          <img src={pack.imageUrl} alt={pack.name} className="w-full h-full object-cover" />
+        ) : (
+          <div className="w-full h-full bg-gradient-to-br from-accent/20 to-black" />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/30 to-transparent" />
+      </div>
 
+      <div className="max-w-5xl mx-auto w-full">
         <div className="px-8 -mt-8 relative z-10">
           <div className="flex items-end gap-4">
             <div className="h-20 w-20 rounded-2xl border-2 border-background bg-black/70 overflow-hidden shrink-0 shadow-2xl">
@@ -160,7 +160,7 @@ export default function ModpackDetail() {
             )}
           </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 }
