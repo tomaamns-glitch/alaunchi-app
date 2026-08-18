@@ -4,7 +4,7 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, Loader2, Package, Sparkles, Image as ImageIcon, FileQuestion } from "lucide-react";
+import { ArrowLeft, ArrowUpDown, Loader2, Package, Sparkles, Image as ImageIcon, FileQuestion } from "lucide-react";
 import { SnapshotEntry, fetchSnapshot } from "@/services/github";
 import { identifyModrinthFiles, type ModrinthMatch } from "@/services/modrinth";
 import { getGithubRepo } from "@/lib/app-config";
@@ -43,6 +43,7 @@ export default function ModpackDetail() {
   const [loading, setLoading] = useState(false);
   const [content, setContent] = useState<Record<Category, SnapshotEntry[]> | null>(null);
   const [modrinthMatches, setModrinthMatches] = useState<Map<string, ModrinthMatch>>(new Map());
+  const [sortAsc, setSortAsc] = useState(true);
 
   useEffect(() => {
     if (modpacks.length === 0) loadModpacks();
@@ -146,21 +147,29 @@ export default function ModpackDetail() {
                 </TabsList>
                 {categories.map((c) => (
                   <TabsContent key={c} value={c} className="mt-4">
-                    <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    <button
+                      onClick={() => setSortAsc((v) => !v)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:text-white transition-colors"
+                    >
+                      Nombre
+                      <ArrowUpDown className="h-3 w-3" />
+                    </button>
+                    <div className="flex flex-col gap-1.5">
                       {content![c]
                         .slice()
-                        .sort((a, b) =>
-                          (modrinthMatches.get(a.path)?.title ?? fileName(a.path)).localeCompare(
+                        .sort((a, b) => {
+                          const cmp = (modrinthMatches.get(a.path)?.title ?? fileName(a.path)).localeCompare(
                             modrinthMatches.get(b.path)?.title ?? fileName(b.path)
-                          )
-                        )
+                          );
+                          return sortAsc ? cmp : -cmp;
+                        })
                         .map((f) => {
                           const match = modrinthMatches.get(f.path);
                           const CategoryIcon = CATEGORY_META[c].icon;
                           return (
                             <div
                               key={f.path}
-                              className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 border border-white/5 rounded-md"
+                              className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 border border-white/5 rounded-md w-full"
                             >
                               {match ? (
                                 <>
@@ -171,10 +180,8 @@ export default function ModpackDetail() {
                                       <CategoryIcon className="h-3.5 w-3.5 text-muted-foreground" />
                                     </div>
                                   )}
-                                  <div className="min-w-0 flex-1">
-                                    <p className="text-gray-100 font-medium truncate">{match.title}</p>
-                                    <p className="text-muted-foreground text-[11px] truncate">v{match.versionNumber}</p>
-                                  </div>
+                                  <p className="text-gray-100 font-medium truncate flex-1">{match.title}</p>
+                                  <p className="text-muted-foreground text-[11px] shrink-0">v{match.versionNumber}</p>
                                 </>
                               ) : (
                                 <>
