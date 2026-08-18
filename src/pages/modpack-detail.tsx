@@ -74,7 +74,7 @@ export default function ModpackDetail() {
   return (
     <div className="min-h-full bg-background text-foreground flex flex-col">
       <main className="flex-1 max-w-5xl mx-auto w-full">
-        <div className="relative h-64 md:h-80 bg-black/50 overflow-hidden">
+        <div className="relative h-32 md:h-40 bg-black/50 overflow-hidden">
           {pack.imageUrl ? (
             <img src={pack.imageUrl} alt={pack.name} className="w-full h-full object-cover" />
           ) : (
@@ -83,24 +83,24 @@ export default function ModpackDetail() {
           <div className="absolute inset-0 bg-gradient-to-t from-background via-background/30 to-transparent" />
         </div>
 
-        <div className="px-8 -mt-14 relative z-10">
-          <div className="flex items-end gap-5">
-            <div className="h-28 w-28 rounded-2xl border-2 border-background bg-black/70 overflow-hidden shrink-0 shadow-2xl">
+        <div className="px-8 -mt-8 relative z-10">
+          <div className="flex items-end gap-4">
+            <div className="h-20 w-20 rounded-2xl border-2 border-background bg-black/70 overflow-hidden shrink-0 shadow-2xl">
               {pack.imageUrl ? (
                 <img src={pack.imageUrl} alt="" className="w-full h-full object-cover" />
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-4xl font-black text-accent/60">
+                <div className="w-full h-full flex items-center justify-center text-3xl font-black text-accent/60">
                   {pack.name.charAt(0)}
                 </div>
               )}
             </div>
-            <div className="pb-2 min-w-0">
-              <h2 className="text-3xl font-bold text-white drop-shadow-md truncate">{pack.name}</h2>
+            <div className="pb-1 min-w-0">
+              <h2 className="text-2xl font-bold text-white drop-shadow-md truncate">{pack.name}</h2>
             </div>
           </div>
         </div>
 
-        <div className="px-8 pt-6 pb-12 space-y-6">
+        <div className="px-8 pt-4 pb-8 space-y-4">
           <p className="text-base text-gray-300 max-w-3xl">{pack.description}</p>
 
           <div className="flex flex-wrap gap-2">
