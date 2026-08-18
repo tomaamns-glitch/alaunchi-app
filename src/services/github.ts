@@ -5,7 +5,10 @@ export interface Modpack {
   minecraftVersion: string;
   loaderType: "forge" | "fabric" | "neoforge" | "vanilla";
   version: string;
+  /** Small square logo/icon — catalog thumbnails, the detail page's icon badge. */
   imageUrl: string;
+  /** Wide cover image — the home screen banner and the detail page's hero strip. */
+  bannerUrl: string;
   installed: boolean;
   installedVersion?: string;
   updateAvailable: boolean;
@@ -21,6 +24,7 @@ export interface NewModpackData {
   loaderType: "forge" | "fabric" | "neoforge" | "vanilla";
   version: string;
   imageUrl: string;
+  bannerUrl: string;
 }
 
 export interface SnapshotEntry {
@@ -460,6 +464,7 @@ export async function createModpack(
     loaderType: data.loaderType,
     version: data.version,
     imageUrl: data.imageUrl,
+    bannerUrl: data.bannerUrl,
     fileCount: 0,
     totalSizeMb: 0,
   };

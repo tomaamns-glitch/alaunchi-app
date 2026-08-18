@@ -531,9 +531,9 @@ export default function Home() {
                   onClick={() => setLocation(`/modpack/${currentPack.id}`)}
                   className="absolute inset-0 cursor-pointer"
                 >
-                  {currentPack.imageUrl ? (
+                  {currentPack.bannerUrl || currentPack.imageUrl ? (
                     <img
-                      src={currentPack.imageUrl}
+                      src={currentPack.bannerUrl || currentPack.imageUrl}
                       alt={currentPack.name}
                       className="w-full h-full object-cover"
                     />
