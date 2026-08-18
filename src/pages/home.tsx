@@ -1,7 +1,7 @@
 import { useAuth } from "@/hooks/use-auth";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useLocation } from "wouter";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Settings,
@@ -15,6 +15,7 @@ import {
   Sparkles,
   ChevronLeft,
   ChevronRight,
+  Package,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { installSnapshot, launchMinecraft } from "@/services/electron";
@@ -337,8 +338,28 @@ export default function Home() {
   };
 
   const currentPack = modpacks[currentIndex];
-  const goPrev = () => setCurrentIndex((i) => (i - 1 + modpacks.length) % modpacks.length);
-  const goNext = () => setCurrentIndex((i) => (i + 1) % modpacks.length);
+
+  const [showDots, setShowDots] = useState(false);
+  const dotsHideTimer = useRef<number | undefined>(undefined);
+
+  const flashDots = () => {
+    setShowDots(true);
+    if (dotsHideTimer.current) window.clearTimeout(dotsHideTimer.current);
+    dotsHideTimer.current = window.setTimeout(() => setShowDots(false), 4000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (dotsHideTimer.current) window.clearTimeout(dotsHideTimer.current);
+    };
+  }, []);
+
+  const goToIndex = (i: number) => {
+    setCurrentIndex(i);
+    flashDots();
+  };
+  const goPrev = () => goToIndex((currentIndex - 1 + modpacks.length) % modpacks.length);
+  const goNext = () => goToIndex((currentIndex + 1) % modpacks.length);
 
   useDynamicAccent(currentPack?.bannerUrl || currentPack?.imageUrl);
 
@@ -531,8 +552,14 @@ export default function Home() {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.3 }}
-                  onClick={() => setLocation(`/modpack/${currentPack.id}`)}
-                  className="absolute inset-0 cursor-pointer"
+                  drag={modpacks.length > 1 ? "x" : false}
+                  dragConstraints={{ left: 0, right: 0 }}
+                  dragElastic={0.15}
+                  onDragEnd={(_, info) => {
+                    if (info.offset.x < -100) goNext();
+                    else if (info.offset.x > 100) goPrev();
+                  }}
+                  className={`absolute inset-0 ${modpacks.length > 1 ? "cursor-grab active:cursor-grabbing" : ""}`}
                 >
                   {currentPack.bannerUrl || currentPack.imageUrl ? (
                     <img
@@ -568,18 +595,28 @@ export default function Home() {
                     </div>
                   </div>
 
-                  <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
-                    {modpacks.map((m, i) => (
-                      <button
-                        key={m.id}
-                        onClick={(e) => { e.stopPropagation(); setCurrentIndex(i); }}
-                        className={`h-1.5 rounded-full transition-all ${
-                          i === currentIndex ? "w-6 bg-accent" : "w-1.5 bg-white/30 hover:bg-white/50"
-                        }`}
-                        aria-label={`Ir a ${m.name}`}
-                      />
-                    ))}
-                  </div>
+                  <AnimatePresence>
+                    {showDots && (
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.5 }}
+                        className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-1.5 z-10"
+                      >
+                        {modpacks.map((m, i) => (
+                          <button
+                            key={m.id}
+                            onClick={(e) => { e.stopPropagation(); goToIndex(i); }}
+                            className={`h-1.5 rounded-full transition-all ${
+                              i === currentIndex ? "w-6 bg-accent" : "w-1.5 bg-white/30 hover:bg-white/50"
+                            }`}
+                            aria-label={`Ir a ${m.name}`}
+                          />
+                        ))}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </>
               )}
             </div>
@@ -588,8 +625,21 @@ export default function Home() {
       </main>
 
       {!loading && currentPack && (
-        <footer className="h-16 border-t border-white/5 bg-card/50 backdrop-blur flex items-center justify-center px-6 shrink-0">
+        <footer className="h-16 border-t border-white/5 bg-card/50 backdrop-blur grid grid-cols-[1fr_auto_1fr] items-center px-6 shrink-0">
+          <div />
           <ModpackActionBar key={currentPack.id} pack={currentPack} />
+          <div className="flex justify-end">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setLocation(`/modpack/${currentPack.id}`)}
+              data-testid="button-instance-manager"
+              className="text-gray-400 hover:text-white"
+              aria-label="Gestor de instancia"
+            >
+              <Package className="h-5 w-5" />
+            </Button>
+          </div>
         </footer>
       )}
     </div>
