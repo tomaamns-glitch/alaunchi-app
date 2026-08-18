@@ -574,7 +574,9 @@ export default function Home() {
               </span>
             </div>
           </div>
-          <ModpackActionBar key={currentPack.id} pack={currentPack} />
+          <div className="-mt-10">
+            <ModpackActionBar key={currentPack.id} pack={currentPack} />
+          </div>
           <div className="flex justify-end">
             <Button
               variant="ghost"
