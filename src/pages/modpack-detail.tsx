@@ -5,6 +5,7 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
 import {
   ArrowLeft,
   ArrowUpDown,
@@ -19,6 +20,7 @@ import {
   CheckSquare,
   FileText,
   List,
+  Download,
 } from "lucide-react";
 import { SnapshotEntry, fetchSnapshot } from "@/services/github";
 import {
@@ -26,11 +28,19 @@ import {
   getLatestVersion,
   getProjectDetail,
   listVersions,
+  searchProjects,
   type ModrinthMatch,
   type ModrinthUpdate,
   type ModrinthProjectDetail,
+  type ModrinthSearchHit,
 } from "@/services/modrinth";
-import { listInstanceFiles, deleteInstanceFile, updateInstanceFile, type InstanceFile } from "@/services/electron";
+import {
+  listInstanceFiles,
+  deleteInstanceFile,
+  updateInstanceFile,
+  downloadInstanceFile,
+  type InstanceFile,
+} from "@/services/electron";
 import { getGithubRepo } from "@/lib/app-config";
 import { formatBytes } from "@/lib/format";
 import { toast } from "sonner";
@@ -111,6 +121,14 @@ export default function ModpackDetail() {
   const [modDetailLoading, setModDetailLoading] = useState(false);
   const [projectDetail, setProjectDetail] = useState<ModrinthProjectDetail | null>(null);
   const [modVersions, setModVersions] = useState<ModrinthUpdate[]>([]);
+
+  // Browse/search Modrinth to install new content into the active category.
+  const [activeCategory, setActiveCategory] = useState<Category>("mods");
+  const [searchMode, setSearchMode] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<ModrinthSearchHit[]>([]);
+  const [popularResults, setPopularResults] = useState<ModrinthSearchHit[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
 
   const openMod = (path: string) => {
     setPanelDirection(1);
@@ -207,27 +225,106 @@ export default function ModpackDetail() {
     };
   }, [selectedModPath]);
 
-  const applyFileSwap = (c: Category, oldPath: string, newPath: string, size: number, version: ModrinthUpdate) => {
-    setOptionalContent((prev) =>
-      prev[c].some((f) => f.path === oldPath)
-        ? { ...prev, [c]: prev[c].map((f) => (f.path === oldPath ? { path: newPath, size, sha1: version.sha1 } : f)) }
-        : prev
-    );
+  // Browse (empty query) or search Modrinth for the active category, debounced while typing.
+  useEffect(() => {
+    if (!searchMode || !pack) return;
+    let cancelled = false;
+    setSearchLoading(true);
+    const delay = searchQuery.trim() ? 350 : 0;
+    const timer = setTimeout(() => {
+      searchProjects(activeCategory, searchQuery, pack.loaderType, pack.minecraftVersion).then((hits) => {
+        if (cancelled) return;
+        if (searchQuery.trim()) setSearchResults(hits);
+        else setPopularResults(hits);
+        setSearchLoading(false);
+      });
+    }, delay);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [searchMode, searchQuery, activeCategory, pack?.loaderType, pack?.minecraftVersion]);
+
+  /** Downloads a chosen version into the instance — replacing an existing file, or a fresh install
+   *  if `path` is a not-yet-installed search result (synthetic "search:<projectId>" key). */
+  const handleInstallVersion = async (
+    c: Category,
+    path: string,
+    version: ModrinthUpdate,
+    matchInfo: { title: string; iconUrl: string | null; projectId: string }
+  ) => {
+    if (!pack) return;
+    const isFresh = path.startsWith("search:");
+    setBusyPaths((s) => new Set(s).add(path));
+    try {
+      const newPath = `${c}/${version.filename}`;
+      if (isFresh) {
+        await downloadInstanceFile(pack.id, newPath, version.url, version.sha1);
+        setOptionalContent((prev) => ({
+          ...prev,
+          [c]: [...prev[c], { path: newPath, size: version.size, sha1: version.sha1 }],
+        }));
+      } else {
+        await updateInstanceFile(pack.id, path, newPath, version.url, version.sha1);
+        setOptionalContent((prev) =>
+          prev[c].some((f) => f.path === path)
+            ? { ...prev, [c]: prev[c].map((f) => (f.path === path ? { path: newPath, size: version.size, sha1: version.sha1 } : f)) }
+            : prev
+        );
+      }
+      setModrinthMatches((prev) => {
+        const next = new Map(prev);
+        next.delete(path);
+        next.set(newPath, {
+          title: matchInfo.title,
+          iconUrl: matchInfo.iconUrl,
+          projectId: matchInfo.projectId,
+          versionId: version.versionId,
+          versionNumber: version.versionNumber,
+        });
+        return next;
+      });
+      setUpdates((prev) => {
+        const next = new Map(prev);
+        next.delete(path);
+        return next;
+      });
+      if (selectedModPath === path) setSelectedModPath(newPath);
+      toast.success(isFresh ? `${matchInfo.title} instalado.` : `Cambiado a v${version.versionNumber}.`);
+    } catch (e: any) {
+      toast.error(e?.message || "Error al instalar.");
+    } finally {
+      setBusyPaths((s) => {
+        const next = new Set(s);
+        next.delete(path);
+        return next;
+      });
+    }
+  };
+
+  const handleInstallFromSearch = async (hit: ModrinthSearchHit) => {
+    if (!pack) return;
+    const version = await getLatestVersion(hit.projectId, pack.loaderType, pack.minecraftVersion);
+    if (!version) {
+      toast.error("No hay versión compatible con este pack.");
+      return;
+    }
+    await handleInstallVersion(activeCategory, `search:${hit.projectId}`, version, hit);
+  };
+
+  const openModFromSearch = (hit: ModrinthSearchHit) => {
     setModrinthMatches((prev) => {
       const next = new Map(prev);
-      const match = next.get(oldPath);
-      if (match) {
-        next.delete(oldPath);
-        next.set(newPath, { ...match, versionId: version.versionId, versionNumber: version.versionNumber });
-      }
+      next.set(`search:${hit.projectId}`, {
+        title: hit.title,
+        iconUrl: hit.iconUrl,
+        projectId: hit.projectId,
+        versionId: "",
+        versionNumber: "",
+      });
       return next;
     });
-    setUpdates((prev) => {
-      const next = new Map(prev);
-      next.delete(oldPath);
-      return next;
-    });
-    if (selectedModPath === oldPath) setSelectedModPath(newPath);
+    openMod(`search:${hit.projectId}`);
   };
 
   const handleDelete = async (c: Category, path: string) => {
@@ -249,25 +346,6 @@ export default function ModpackDetail() {
     }
   };
 
-  const handleSwitchVersion = async (c: Category, path: string, size: number, version: ModrinthUpdate) => {
-    if (!pack) return;
-    setBusyPaths((s) => new Set(s).add(path));
-    try {
-      const newPath = `${c}/${version.filename}`;
-      await updateInstanceFile(pack.id, path, newPath, version.url, version.sha1);
-      applyFileSwap(c, path, newPath, size, version);
-      toast.success(`Cambiado a v${version.versionNumber}.`);
-    } catch (e: any) {
-      toast.error(e?.message || "Error al cambiar de versión.");
-    } finally {
-      setBusyPaths((s) => {
-        const next = new Set(s);
-        next.delete(path);
-        return next;
-      });
-    }
-  };
-
   if (!pack) {
     return (
       <div className="min-h-full bg-background text-foreground flex flex-col items-center justify-center gap-4">
@@ -279,9 +357,12 @@ export default function ModpackDetail() {
     );
   }
 
-  const categories = (Object.keys(CATEGORY_META) as Category[]).filter(
-    (c) => (content?.[c]?.length ?? 0) > 0 || optionalContent[c].length > 0
-  );
+  // Once the pack is installed, always offer all 3 tabs (even empty ones) so the
+  // user can navigate to e.g. Shaders and install their first one. Before that,
+  // only show tabs for what the published manifest actually contains.
+  const categories: Category[] = pack.installed
+    ? (Object.keys(CATEGORY_META) as Category[])
+    : (Object.keys(CATEGORY_META) as Category[]).filter((c) => (content?.[c]?.length ?? 0) > 0);
 
   const rowsFor = (c: Category): ContentRow[] => [
     ...(content?.[c] ?? []).map((f): ContentRow => ({ path: f.path, size: f.size, mandatory: true })),
@@ -290,7 +371,8 @@ export default function ModpackDetail() {
 
   const titleFor = (path: string) => modrinthMatches.get(path)?.title ?? guessTitle(fileName(path));
 
-  const selectedCategory = selectedModPath ? categoryOf(selectedModPath) : null;
+  const effectiveCategory = categories.includes(activeCategory) ? activeCategory : categories[0];
+  const selectedCategory = selectedModPath ? categoryOf(selectedModPath) ?? effectiveCategory : null;
   const selectedMatch = selectedModPath ? modrinthMatches.get(selectedModPath) : null;
   const selectedRow =
     selectedModPath && selectedCategory ? rowsFor(selectedCategory).find((r) => r.path === selectedModPath) : null;
@@ -309,7 +391,7 @@ export default function ModpackDetail() {
       <div className="max-w-5xl mx-auto w-full">
         <div className="px-8 -mt-8 relative z-10">
           <div className="inline-flex items-center gap-4 max-w-full bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-2xl p-4">
-            {selectedModPath && selectedMatch && selectedRow ? (
+            {selectedModPath && selectedMatch ? (
                 <motion.div
                   key="mod-header"
                   className="flex items-center gap-4 min-w-0"
@@ -340,8 +422,14 @@ export default function ModpackDetail() {
                       {selectedMatch.title}
                     </motion.h2>
                     <div className="flex flex-wrap items-center gap-2 text-sm">
-                      <Badge variant="secondary">v{selectedMatch.versionNumber}</Badge>
-                      <span className="text-muted-foreground text-xs">{formatBytes(selectedRow.size)}</span>
+                      {selectedRow ? (
+                        <>
+                          <Badge variant="secondary">v{selectedMatch.versionNumber}</Badge>
+                          <span className="text-muted-foreground text-xs">{formatBytes(selectedRow.size)}</span>
+                        </>
+                      ) : (
+                        <Badge variant="outline">No instalado</Badge>
+                      )}
                     </div>
                   </div>
                 </motion.div>
@@ -465,11 +553,14 @@ export default function ModpackDetail() {
                             </div>
                             {isInstalled ? (
                               <Check className="h-4 w-4 text-accent shrink-0" />
-                            ) : selectedRow && !selectedRow.mandatory ? (
+                            ) : !selectedRow || !selectedRow.mandatory ? (
                               <button
-                                onClick={() => handleSwitchVersion(selectedCategory, selectedModPath!, selectedRow.size, v)}
+                                onClick={() =>
+                                  selectedMatch &&
+                                  handleInstallVersion(selectedCategory!, selectedModPath!, v, selectedMatch)
+                                }
                                 disabled={busy}
-                                title={`Cambiar a v${v.versionNumber}`}
+                                title={selectedRow ? `Cambiar a v${v.versionNumber}` : `Instalar v${v.versionNumber}`}
                                 className="h-7 w-7 flex items-center justify-center rounded-full text-accent hover:bg-accent/10 transition-colors shrink-0 disabled:opacity-50"
                               >
                                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowDownCircle className="h-4 w-4" />}
@@ -492,24 +583,108 @@ export default function ModpackDetail() {
                 <p className="text-sm">Sin manifiesto publicado todavía.</p>
               </div>
             ) : (
-              <Tabs defaultValue={categories[0]}>
-                <TabsList className="bg-card/50 border border-white/5">
-                  {categories.map((c) => {
-                    const Icon = CATEGORY_META[c].icon;
-                    return (
-                      <TabsTrigger
-                        key={c}
-                        value={c}
-                        className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5"
-                      >
-                        <Icon className="h-3.5 w-3.5" />
-                        {CATEGORY_META[c].label}
-                        <span className="opacity-60">({rowsFor(c).length})</span>
-                      </TabsTrigger>
+              <Tabs value={effectiveCategory} onValueChange={(v) => setActiveCategory(v as Category)}>
+                <div className="flex items-center justify-between gap-2 flex-wrap mb-4">
+                  {searchMode ? (
+                    <Input
+                      autoFocus
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder={`Buscar ${CATEGORY_META[effectiveCategory].label.toLowerCase()}`}
+                      className="max-w-xs bg-background/50 border-white/10 text-white"
+                    />
+                  ) : (
+                    <TabsList className="bg-card/50 border border-white/5">
+                      {categories.map((c) => {
+                        const Icon = CATEGORY_META[c].icon;
+                        return (
+                          <TabsTrigger
+                            key={c}
+                            value={c}
+                            className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5"
+                          >
+                            <Icon className="h-3.5 w-3.5" />
+                            {CATEGORY_META[c].label}
+                            <span className="opacity-60">({rowsFor(c).length})</span>
+                          </TabsTrigger>
+                        );
+                      })}
+                    </TabsList>
+                  )}
+                  {pack.installed && (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        if (searchMode) {
+                          setSearchMode(false);
+                          setSearchQuery("");
+                        } else {
+                          setSearchMode(true);
+                        }
+                      }}
+                      className="bg-green-600 hover:bg-green-500 text-white font-bold"
+                    >
+                      {searchMode ? "Volver" : `Instalar ${CATEGORY_META[effectiveCategory].label}`}
+                    </Button>
+                  )}
+                </div>
+
+                {searchMode ? (
+                  (() => {
+                    const results = searchQuery.trim() ? searchResults : popularResults;
+                    const CategoryIcon = CATEGORY_META[effectiveCategory].icon;
+                    return searchLoading ? (
+                      <div className="flex items-center justify-center py-16 text-muted-foreground">
+                        <Loader2 className="h-5 w-5 animate-spin mr-2" /> Buscando...
+                      </div>
+                    ) : results.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+                        <FileQuestion className="h-6 w-6" />
+                        <p className="text-sm">Sin resultados.</p>
+                      </div>
+                    ) : (
+                      <div className="grid sm:grid-cols-2 gap-2">
+                        {results.map((hit) => {
+                          const busy = busyPaths.has(`search:${hit.projectId}`);
+                          return (
+                            <div key={hit.projectId} className="flex items-start gap-3 p-3 bg-card/50 rounded-md">
+                              <div
+                                onClick={() => openModFromSearch(hit)}
+                                className="flex items-start gap-3 min-w-0 flex-1 cursor-pointer"
+                              >
+                                {hit.iconUrl ? (
+                                  <img src={hit.iconUrl} alt="" className="h-11 w-11 rounded shrink-0 object-cover bg-black/30" />
+                                ) : (
+                                  <div className="h-11 w-11 rounded shrink-0 bg-black/30 flex items-center justify-center">
+                                    <CategoryIcon className="h-5 w-5 text-muted-foreground" />
+                                  </div>
+                                )}
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-gray-100 font-medium text-sm truncate">{hit.title}</p>
+                                  <p className="text-muted-foreground text-[11px] line-clamp-2">{hit.description}</p>
+                                </div>
+                              </div>
+                              <div className="flex flex-col items-end gap-1 shrink-0">
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleInstallFromSearch(hit)}
+                                  disabled={busy}
+                                  className="h-7 px-2 text-[11px] bg-accent hover:bg-accent/90 text-accent-foreground font-bold"
+                                >
+                                  {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Download className="h-3 w-3 mr-1" />Instalar</>}
+                                </Button>
+                                <span className="text-[10px] text-muted-foreground">
+                                  {hit.downloads.toLocaleString()} descargas
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     );
-                  })}
-                </TabsList>
-                {categories.map((c) => (
+                  })()
+                ) : (
+                categories.map((c) => (
                   <TabsContent key={c} value={c} className="mt-4">
                     <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-2xl p-3">
                       <div className="flex items-center justify-between">
@@ -589,7 +764,7 @@ export default function ModpackDetail() {
                                 </div>
                                 {!row.mandatory && update && (
                                   <button
-                                    onClick={() => handleSwitchVersion(c, row.path, row.size, update)}
+                                    onClick={() => match && handleInstallVersion(c, row.path, update, match)}
                                     disabled={busy}
                                     title={`Actualizar a v${update.versionNumber}`}
                                     className="h-7 w-7 flex items-center justify-center rounded-full text-accent hover:bg-accent/10 transition-colors shrink-0 disabled:opacity-50"
@@ -613,7 +788,8 @@ export default function ModpackDetail() {
                       </div>
                     </div>
                   </TabsContent>
-                ))}
+                ))
+                )}
               </Tabs>
             )}
               </motion.div>
