@@ -82,6 +82,16 @@ function hashFile(filePath) {
   });
 }
 
+function hashFileSha1(filePath) {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash("sha1");
+    const s = fsSync.createReadStream(filePath);
+    s.on("data", (c) => h.update(c));
+    s.on("end", () => resolve(h.digest("hex")));
+    s.on("error", reject);
+  });
+}
+
 // Per-hash in-flight dedup so concurrent workers wanting the same hash share one download.
 const inFlightObjects = new Map();
 
@@ -763,6 +773,65 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
 
   win?.webContents.send("install-progress", { modpackId, stage: "done", progress: 100 });
   return { success: true, totalFiles: total };
+});
+
+// Content folders scanned for the instance-manager view (mods/shaders/resourcepacks
+// tabs) — anything found here that isn't part of the published manifest is an
+// "optional" file the player added themselves (manually or via Modrinth).
+const CONTENT_DIRS = ["mods", "shaderpacks", "resourcepacks"];
+
+ipcMain.handle("mc:list-instance-files", async (_, { modpackId }) => {
+  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const out = [];
+  for (const dir of CONTENT_DIRS) {
+    const full = path.join(instanceDir, dir);
+    let entries;
+    try {
+      entries = await fs.readdir(full, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const filePath = path.join(full, entry.name);
+      try {
+        const stat = await fs.stat(filePath);
+        const sha1 = await hashFileSha1(filePath).catch(() => null);
+        out.push({ path: `${dir}/${entry.name}`, size: stat.size, sha1 });
+      } catch {}
+    }
+  }
+  return out;
+});
+
+ipcMain.handle("mc:delete-instance-file", async (_, { modpackId, path: relPath }) => {
+  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const target = safeJoin(instanceDir, relPath);
+  await fs.unlink(target);
+  return { success: true };
+});
+
+ipcMain.handle("mc:update-instance-file", async (_, { modpackId, oldPath, newPath, url, sha1 }) => {
+  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const target = safeJoin(instanceDir, newPath);
+  const oldTarget = safeJoin(instanceDir, oldPath);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const tmpPath = `${target}.tmp.${process.pid}.${Date.now().toString(36)}`;
+  try {
+    await downloadFile(url, tmpPath, null);
+    if (sha1) {
+      const actual = await hashFileSha1(tmpPath);
+      if (actual !== sha1) throw new Error("Hash mismatch al descargar la actualización.");
+    }
+    await fs.rename(tmpPath, target);
+  } catch (e) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw e;
+  }
+  if (oldPath !== newPath) {
+    await fs.unlink(oldTarget).catch(() => {});
+  }
+  return { success: true, newPath };
 });
 
 ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, authToken, username, uuid, xuid, clientId }) => {

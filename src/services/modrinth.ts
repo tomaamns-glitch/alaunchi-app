@@ -1,12 +1,18 @@
-import type { SnapshotEntry } from "./github";
-
 export interface ModrinthMatch {
   title: string;
   iconUrl: string | null;
+  versionId: string;
   versionNumber: string;
+  projectId: string;
+}
+
+interface HashableFile {
+  path: string;
+  sha1?: string | null;
 }
 
 interface ModrinthVersionFile {
+  id: string;
   project_id: string;
   version_number: string;
 }
@@ -15,6 +21,12 @@ interface ModrinthProject {
   id: string;
   title: string;
   icon_url: string | null;
+}
+
+interface ModrinthVersionFull {
+  id: string;
+  version_number: string;
+  files: Array<{ primary: boolean; filename: string; url: string; hashes: { sha1: string } }>;
 }
 
 const API = "https://api.modrinth.com/v2";
@@ -69,11 +81,11 @@ async function lookupProjects(ids: string[]): Promise<Record<string, ModrinthPro
 }
 
 /**
- * Identifies which manifest files are recognized Modrinth projects, matched by
- * file hash. Returns a map keyed by file path — entries with no match (not on
- * Modrinth, or manifest published before sha1 was tracked) are simply absent.
+ * Identifies which files are recognized Modrinth projects, matched by file
+ * hash (sha1). Returns a map keyed by file path — entries with no match (not
+ * on Modrinth, or missing a tracked sha1) are simply absent.
  */
-export async function identifyModrinthFiles(entries: SnapshotEntry[]): Promise<Map<string, ModrinthMatch>> {
+export async function identifyModrinthFiles(entries: HashableFile[]): Promise<Map<string, ModrinthMatch>> {
   const hashes = entries.map((e) => e.sha1).filter((h): h is string => !!h);
   if (hashes.length === 0) return new Map();
 
@@ -91,8 +103,51 @@ export async function identifyModrinthFiles(entries: SnapshotEntry[]): Promise<M
     result.set(entry.path, {
       title: project.title,
       iconUrl: project.icon_url,
+      versionId: version.id,
       versionNumber: version.version_number,
+      projectId: version.project_id,
     });
   }
   return result;
+}
+
+export interface ModrinthUpdate {
+  versionId: string;
+  versionNumber: string;
+  filename: string;
+  url: string;
+  sha1: string;
+}
+
+/**
+ * Latest available version of a project for a given loader + Minecraft version,
+ * used to offer updates for optionally-installed (non-manifest) files.
+ */
+export async function getLatestVersion(
+  projectId: string,
+  loader: string,
+  gameVersion: string
+): Promise<ModrinthUpdate | null> {
+  try {
+    const params = new URLSearchParams({
+      loaders: JSON.stringify([loader]),
+      game_versions: JSON.stringify([gameVersion]),
+    });
+    const res = await fetch(`${API}/project/${projectId}/version?${params}`);
+    if (!res.ok) return null;
+    const versions: ModrinthVersionFull[] = await res.json();
+    const latest = versions[0];
+    if (!latest) return null;
+    const file = latest.files.find((f) => f.primary) ?? latest.files[0];
+    if (!file) return null;
+    return {
+      versionId: latest.id,
+      versionNumber: latest.version_number,
+      filename: file.filename,
+      url: file.url,
+      sha1: file.hashes.sha1,
+    };
+  } catch {
+    return null;
+  }
 }
