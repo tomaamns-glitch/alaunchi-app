@@ -397,23 +397,7 @@ export default function Home() {
 
   return (
     <div className="min-h-full bg-background text-foreground flex flex-col">
-      <header className="h-16 border-b border-white/5 bg-card/50 backdrop-blur flex items-center justify-between px-6 sticky top-0 z-50">
-        <div className="flex items-center gap-3">
-          <img
-            src="/logo.png"
-            alt="ALaunchi"
-            className="h-8 object-contain"
-            onError={(e) => {
-              e.currentTarget.style.display = "none";
-              const sibling = e.currentTarget.nextElementSibling as HTMLElement | null;
-              sibling?.classList.remove("hidden");
-            }}
-          />
-          <span className="hidden font-bold tracking-tight text-white text-lg">
-            <span className="text-accent">AL</span>aunchi
-          </span>
-        </div>
-
+      <header className="h-16 border-b border-white/5 bg-card/50 backdrop-blur flex items-center justify-end px-6 sticky top-0 z-50">
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-2 mr-3 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5">
             <Avatar className="h-6 w-6 border border-white/10">

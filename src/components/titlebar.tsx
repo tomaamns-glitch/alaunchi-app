@@ -22,11 +22,22 @@ export function Titlebar() {
   return (
     <div
       style={dragStyle}
-      className="h-8 shrink-0 flex items-center justify-between bg-black/40 border-b border-white/5 select-none"
+      className="h-11 shrink-0 flex items-center justify-between bg-black/40 border-b border-white/5 select-none"
     >
-      <div className="flex items-center gap-2 px-3 text-xs font-semibold text-gray-400">
-        <img src="/logo.png" alt="" className="h-4 w-4 object-contain" onError={(e) => { e.currentTarget.style.display = "none"; }} />
-        ALaunchi
+      <div className="flex items-center gap-2 px-4">
+        <img
+          src="/logo.png"
+          alt="ALaunchi"
+          className="h-6 object-contain"
+          onError={(e) => {
+            e.currentTarget.style.display = "none";
+            const sibling = e.currentTarget.nextElementSibling as HTMLElement | null;
+            sibling?.classList.remove("hidden");
+          }}
+        />
+        <span className="hidden font-bold tracking-tight text-white text-sm">
+          <span className="text-accent">AL</span>aunchi
+        </span>
       </div>
       <div style={noDragStyle} className="flex items-center h-full">
         <button
