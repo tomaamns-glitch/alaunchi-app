@@ -73,13 +73,6 @@ export default function ModpackDetail() {
 
   return (
     <div className="min-h-full bg-background text-foreground flex flex-col">
-      <header className="h-16 border-b border-white/5 bg-card/50 backdrop-blur flex items-center px-6 sticky top-0 z-50 gap-4">
-        <Button variant="ghost" size="icon" onClick={() => setLocation("/")} className="text-gray-400 hover:text-white">
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
-        <h1 className="text-xl font-bold text-white truncate">{pack.name}</h1>
-      </header>
-
       <main className="flex-1 max-w-5xl mx-auto w-full">
         <div className="relative h-64 md:h-80 bg-black/50 overflow-hidden">
           {pack.imageUrl ? (

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Minus, Square, Copy, X } from "lucide-react";
+import { useLocation, useRoute } from "wouter";
+import { ArrowLeft, Minus, Square, Copy, X } from "lucide-react";
 import { isElectron } from "@/services/electron";
 
 const api = (window as any).electronAPI;
@@ -9,6 +10,8 @@ const noDragStyle = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
 
 export function Titlebar() {
   const [maximized, setMaximized] = useState(false);
+  const [, setLocation] = useLocation();
+  const [onModpackDetail] = useRoute("/modpack/:id");
 
   useEffect(() => {
     if (!isElectron) return;
@@ -24,7 +27,17 @@ export function Titlebar() {
       style={dragStyle}
       className="h-11 shrink-0 flex items-center justify-between bg-black/40 border-b border-white/5 select-none"
     >
-      <div className="flex items-center gap-2 px-4">
+      <div className="flex items-center gap-1 px-2">
+        {onModpackDetail && (
+          <button
+            style={noDragStyle}
+            onClick={() => setLocation("/")}
+            className="h-7 w-7 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+            aria-label="Volver"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+        )}
         <img
           src="/logo.png"
           alt="ALaunchi"
