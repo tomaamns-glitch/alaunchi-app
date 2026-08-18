@@ -4,8 +4,6 @@ import { useLocation } from "wouter";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Settings,
-  LogOut,
   Download,
   Play,
   RefreshCw,
@@ -189,16 +187,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   const isActing = status !== "idle";
 
   return (
-    <div className="w-64 flex flex-col items-center gap-1">
-      <div className="flex items-center gap-2 max-w-full">
-        <h2 className="text-sm font-bold text-white truncate">{pack.name}</h2>
-        <span className="text-xs text-muted-foreground shrink-0">v{pack.version}</span>
-        {pack.updateAvailable && status === "idle" && (
-          <span className="bg-accent text-accent-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0">
-            UPDATE
-          </span>
-        )}
-      </div>
+    <div className="w-64">
       {status !== "idle" ? (
         <div className="space-y-1">
           <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
@@ -237,7 +226,7 @@ type JavaInstallStage = "idle" | "fetching" | "downloading" | "extracting" | "do
 type UpdateState = "idle" | "checking" | "available" | "downloading" | "downloaded" | "error";
 
 export default function Home() {
-  const { isAuthenticated, username, logout, loadPersistedAuth } = useAuth();
+  const { isAuthenticated, username, loadPersistedAuth } = useAuth();
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks, loading } = useModpacks();
   const isAdmin = useIsAdmin();
@@ -373,11 +362,6 @@ export default function Home() {
   useDynamicAccent(currentPack?.bannerUrl || currentPack?.imageUrl);
 
   if (!isAuthenticated) return null;
-
-  const handleLogout = async () => {
-    await logout();
-    setLocation("/login");
-  };
 
   const javaStageLabel: Record<JavaInstallStage, string> = {
     idle: "",
@@ -578,8 +562,8 @@ export default function Home() {
 
       {!loading && currentPack && (
         <footer className="h-20 border-t border-white/5 bg-card/50 backdrop-blur grid grid-cols-[1fr_auto_1fr] items-center px-6 shrink-0">
-          <div className="flex items-center gap-1">
-            <div className="flex items-center gap-2 mr-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5">
+          <div className="flex items-center">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5">
               <Avatar className="h-6 w-6 border border-white/10">
                 <AvatarFallback className="bg-accent/20 text-accent text-xs font-bold">
                   {username?.charAt(0)?.toUpperCase() ?? "?"}
@@ -589,24 +573,6 @@ export default function Home() {
                 {username}
               </span>
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setLocation("/settings")}
-              data-testid="button-settings"
-              className="text-gray-400 hover:text-white"
-            >
-              <Settings className="h-5 w-5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={handleLogout}
-              data-testid="button-logout"
-              className="text-gray-400 hover:text-red-400"
-            >
-              <LogOut className="h-5 w-5" />
-            </Button>
           </div>
           <ModpackActionBar key={currentPack.id} pack={currentPack} />
           <div className="flex justify-end">

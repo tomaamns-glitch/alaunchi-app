@@ -42,9 +42,9 @@ export function Titlebar() {
         )}
         <button
           style={noDragStyle}
-          onClick={() => setLocation("/")}
+          onClick={() => setLocation("/settings")}
           className="h-7 w-7 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-          aria-label="Inicio"
+          aria-label="Ajustes"
         >
           <Home className="h-4 w-4" />
         </button>
@@ -61,15 +61,6 @@ export function Titlebar() {
         <span className="hidden font-bold tracking-tight text-white text-sm">
           <span className="text-accent">AL</span>aunchi
         </span>
-        {isAdmin && (
-          <button
-            style={noDragStyle}
-            onClick={() => setLocation("/admin")}
-            className="ml-1 px-2 py-1 rounded text-[10px] font-mono font-bold text-gray-400 border border-white/10 hover:bg-white/10 hover:text-white transition-colors"
-          >
-            ADMIN
-          </button>
-        )}
       </div>
       <div style={noDragStyle} className="flex items-center h-full">
         <button
@@ -79,6 +70,18 @@ export function Titlebar() {
         >
           <Minus className="h-3.5 w-3.5" />
         </button>
+        {isAdmin && (
+          <>
+            <div className="w-px h-4 bg-white/10" />
+            <button
+              onClick={() => setLocation("/admin")}
+              className="h-full px-3 flex items-center justify-center text-[10px] font-mono font-bold text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+            >
+              ADMIN
+            </button>
+            <div className="w-px h-4 bg-white/10" />
+          </>
+        )}
         <button
           onClick={() => api.maximize()}
           className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
