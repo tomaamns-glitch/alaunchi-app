@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useLocation, useRoute } from "wouter";
-import { ArrowLeft, Minus, Square, Copy, X } from "lucide-react";
+import { ArrowLeft, Home, Minus, Square, Copy, X } from "lucide-react";
 import { isElectron } from "@/services/electron";
+import { useIsAdmin } from "@/hooks/use-is-admin";
 
 const api = (window as any).electronAPI;
 
@@ -12,6 +13,7 @@ export function Titlebar() {
   const [maximized, setMaximized] = useState(false);
   const [, setLocation] = useLocation();
   const [onModpackDetail] = useRoute("/modpack/:id");
+  const isAdmin = useIsAdmin();
 
   useEffect(() => {
     if (!isElectron) return;
@@ -38,6 +40,14 @@ export function Titlebar() {
             <ArrowLeft className="h-4 w-4" />
           </button>
         )}
+        <button
+          style={noDragStyle}
+          onClick={() => setLocation("/")}
+          className="h-7 w-7 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+          aria-label="Inicio"
+        >
+          <Home className="h-4 w-4" />
+        </button>
         <img
           src="/logo.png"
           alt="ALaunchi"
@@ -51,6 +61,15 @@ export function Titlebar() {
         <span className="hidden font-bold tracking-tight text-white text-sm">
           <span className="text-accent">AL</span>aunchi
         </span>
+        {isAdmin && (
+          <button
+            style={noDragStyle}
+            onClick={() => setLocation("/admin")}
+            className="ml-1 px-2 py-1 rounded text-[10px] font-mono font-bold text-gray-400 border border-white/10 hover:bg-white/10 hover:text-white transition-colors"
+          >
+            ADMIN
+          </button>
+        )}
       </div>
       <div style={noDragStyle} className="flex items-center h-full">
         <button
