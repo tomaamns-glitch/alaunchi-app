@@ -8,7 +8,6 @@ import { ArrowLeft, ArrowUpDown, Loader2, Package, Sparkles, Image as ImageIcon,
 import { SnapshotEntry, fetchSnapshot } from "@/services/github";
 import { identifyModrinthFiles, type ModrinthMatch } from "@/services/modrinth";
 import { getGithubRepo } from "@/lib/app-config";
-import { formatBytes } from "@/lib/format";
 
 type Category = "mods" | "shaderpacks" | "resourcepacks";
 
@@ -31,6 +30,15 @@ function categorize(files: SnapshotEntry[]): Record<Category, SnapshotEntry[]> {
 
 function fileName(path: string): string {
   return path.split("/").pop() || path;
+}
+
+/** Best-effort mod name from a filename: everything before the first "-" or "_", capitalized. */
+function guessTitle(filename: string): string {
+  const base = filename.replace(/\.[^.]+$/, "");
+  const stop = base.search(/[-_]/);
+  const raw = (stop === -1 ? base : base.slice(0, stop)).trim();
+  if (!raw) return filename;
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
 export default function ModpackDetail() {
@@ -158,8 +166,8 @@ export default function ModpackDetail() {
                       {content![c]
                         .slice()
                         .sort((a, b) => {
-                          const cmp = (modrinthMatches.get(a.path)?.title ?? fileName(a.path)).localeCompare(
-                            modrinthMatches.get(b.path)?.title ?? fileName(b.path)
+                          const cmp = (modrinthMatches.get(a.path)?.title ?? guessTitle(fileName(a.path))).localeCompare(
+                            modrinthMatches.get(b.path)?.title ?? guessTitle(fileName(b.path))
                           );
                           return sortAsc ? cmp : -cmp;
                         })
@@ -187,8 +195,13 @@ export default function ModpackDetail() {
                                 </>
                               ) : (
                                 <>
-                                  <span className="font-mono text-gray-200 truncate flex-1">{fileName(f.path)}</span>
-                                  <span className="text-muted-foreground shrink-0 tabular-nums">{formatBytes(f.size)}</span>
+                                  <div className="h-7 w-7 rounded shrink-0 bg-black/30 flex items-center justify-center">
+                                    <span className="text-[9px] font-bold text-muted-foreground">Ms</span>
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-gray-100 font-medium truncate">{guessTitle(fileName(f.path))}</p>
+                                    <p className="text-muted-foreground text-[11px] font-mono truncate">{fileName(f.path)}</p>
+                                  </div>
                                 </>
                               )}
                             </div>
