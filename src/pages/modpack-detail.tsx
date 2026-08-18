@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArrowLeft, Loader2, Package, Sparkles, Image as ImageIcon, FileQuestion } from "lucide-react";
 import { SnapshotEntry, fetchSnapshot } from "@/services/github";
+import { identifyModrinthFiles, type ModrinthMatch } from "@/services/modrinth";
 import { getGithubRepo } from "@/lib/app-config";
 import { formatBytes } from "@/lib/format";
 
@@ -41,6 +42,7 @@ export default function ModpackDetail() {
 
   const [loading, setLoading] = useState(false);
   const [content, setContent] = useState<Record<Category, SnapshotEntry[]> | null>(null);
+  const [modrinthMatches, setModrinthMatches] = useState<Map<string, ModrinthMatch>>(new Map());
 
   useEffect(() => {
     if (modpacks.length === 0) loadModpacks();
@@ -49,10 +51,14 @@ export default function ModpackDetail() {
   useEffect(() => {
     if (!id) return;
     setLoading(true);
+    setModrinthMatches(new Map());
     const repoUrl = getGithubRepo();
     const token = localStorage.getItem("githubToken") || undefined;
     fetchSnapshot(repoUrl, id, token)
-      .then((manifest) => setContent(manifest ? categorize(manifest.files) : { mods: [], shaderpacks: [], resourcepacks: [] }))
+      .then((manifest) => {
+        setContent(manifest ? categorize(manifest.files) : { mods: [], shaderpacks: [], resourcepacks: [] });
+        if (manifest) identifyModrinthFiles(manifest.files).then(setModrinthMatches);
+      })
       .finally(() => setLoading(false));
   }, [id]);
 
@@ -143,16 +149,42 @@ export default function ModpackDetail() {
                     <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
                       {content![c]
                         .slice()
-                        .sort((a, b) => a.path.localeCompare(b.path))
-                        .map((f) => (
-                          <div
-                            key={f.path}
-                            className="flex items-center justify-between gap-3 px-3 py-2.5 text-xs bg-card/50 border border-white/5 rounded-md"
-                          >
-                            <span className="font-mono text-gray-200 truncate">{fileName(f.path)}</span>
-                            <span className="text-muted-foreground shrink-0 tabular-nums">{formatBytes(f.size)}</span>
-                          </div>
-                        ))}
+                        .sort((a, b) =>
+                          (modrinthMatches.get(a.path)?.title ?? fileName(a.path)).localeCompare(
+                            modrinthMatches.get(b.path)?.title ?? fileName(b.path)
+                          )
+                        )
+                        .map((f) => {
+                          const match = modrinthMatches.get(f.path);
+                          const CategoryIcon = CATEGORY_META[c].icon;
+                          return (
+                            <div
+                              key={f.path}
+                              className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 border border-white/5 rounded-md"
+                            >
+                              {match ? (
+                                <>
+                                  {match.iconUrl ? (
+                                    <img src={match.iconUrl} alt="" className="h-7 w-7 rounded shrink-0 object-cover bg-black/30" />
+                                  ) : (
+                                    <div className="h-7 w-7 rounded shrink-0 bg-black/30 flex items-center justify-center">
+                                      <CategoryIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                                    </div>
+                                  )}
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-gray-100 font-medium truncate">{match.title}</p>
+                                    <p className="text-muted-foreground text-[11px] truncate">v{match.versionNumber}</p>
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="font-mono text-gray-200 truncate flex-1">{fileName(f.path)}</span>
+                                  <span className="text-muted-foreground shrink-0 tabular-nums">{formatBytes(f.size)}</span>
+                                </>
+                              )}
+                            </div>
+                          );
+                        })}
                     </div>
                   </TabsContent>
                 ))}
