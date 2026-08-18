@@ -94,3 +94,8 @@ export async function updateInstanceFile(
   if (!isElectron) return { newPath };
   return eAPI.updateInstanceFile({ modpackId, oldPath, newPath, url, sha1 });
 }
+
+/** Downloads a brand-new file into the instance (no existing file to replace). */
+export async function downloadInstanceFile(modpackId: string, path: string, url: string, sha1?: string): Promise<void> {
+  if (isElectron) await eAPI.downloadInstanceFile({ modpackId, path, url, sha1 });
+}

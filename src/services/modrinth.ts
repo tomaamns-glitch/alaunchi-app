@@ -28,7 +28,7 @@ interface ModrinthVersionFull {
   version_number: string;
   version_type: "release" | "beta" | "alpha";
   date_published: string;
-  files: Array<{ primary: boolean; filename: string; url: string; hashes: { sha1: string } }>;
+  files: Array<{ primary: boolean; filename: string; url: string; size: number; hashes: { sha1: string } }>;
 }
 
 interface ModrinthProjectFull {
@@ -125,6 +125,7 @@ export interface ModrinthUpdate {
   filename: string;
   url: string;
   sha1: string;
+  size: number;
 }
 
 /** All versions of a project for a given loader + Minecraft version, newest first. */
@@ -152,6 +153,7 @@ export async function listVersions(
           filename: file.filename,
           url: file.url,
           sha1: file.hashes.sha1,
+          size: file.size,
         };
       })
       .filter((v): v is ModrinthUpdate => v !== null);
@@ -199,5 +201,67 @@ export async function getProjectDetail(projectId: string): Promise<ModrinthProje
   } catch {
     projectDetailCache.set(projectId, null);
     return null;
+  }
+}
+
+export interface ModrinthSearchHit {
+  projectId: string;
+  title: string;
+  description: string;
+  iconUrl: string | null;
+  downloads: number;
+}
+
+interface ModrinthSearchResponse {
+  hits: Array<{
+    project_id: string;
+    title: string;
+    description: string;
+    icon_url: string | null;
+    downloads: number;
+  }>;
+}
+
+const PROJECT_TYPE: Record<"mods" | "shaderpacks" | "resourcepacks", string> = {
+  mods: "mod",
+  shaderpacks: "shader",
+  resourcepacks: "resourcepack",
+};
+
+/**
+ * Searches (or, with an empty query, browses currently-popular) Modrinth
+ * projects for a category, filtered to what's compatible with the pack.
+ * Only mods are filtered by loader — shaders/resourcepacks use different,
+ * inconsistent loader facets on Modrinth (iris/optifine/canvas), so we skip
+ * that filter for them rather than risk silently excluding valid results.
+ */
+export async function searchProjects(
+  category: "mods" | "shaderpacks" | "resourcepacks",
+  query: string,
+  loader: string,
+  gameVersion: string,
+  limit = 20
+): Promise<ModrinthSearchHit[]> {
+  try {
+    const facets = [[`project_type:${PROJECT_TYPE[category]}`], [`versions:${gameVersion}`]];
+    if (category === "mods") facets.push([`categories:${loader}`]);
+    const params = new URLSearchParams({
+      query,
+      facets: JSON.stringify(facets),
+      index: query.trim() ? "relevance" : "downloads",
+      limit: String(limit),
+    });
+    const res = await fetch(`${API}/search?${params}`);
+    if (!res.ok) return [];
+    const data: ModrinthSearchResponse = await res.json();
+    return data.hits.map((h) => ({
+      projectId: h.project_id,
+      title: h.title,
+      description: h.description,
+      iconUrl: h.icon_url,
+      downloads: h.downloads,
+    }));
+  } catch {
+    return [];
   }
 }
