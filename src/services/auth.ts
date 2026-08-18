@@ -51,9 +51,24 @@ async function msTokenToMinecraft(msAccessToken: string): Promise<{
 }> {
   const xblRes = await eAPI.xboxAuth({ msToken: msAccessToken });
   const xstsRes = await eAPI.xstsAuth({ xblToken: xblRes.xblToken });
+
+  // The minecraftservices-scoped XSTS response doesn't always carry the XUID in
+  // DisplayClaims — Microsoft only guarantees it for the xboxlive.com relying
+  // party. Fetch it there instead (best-effort) so online joins don't get stuck
+  // with an empty --xuid; failure here shouldn't block login.
+  let xuid = xstsRes.xuid || "";
+  if (!xuid) {
+    try {
+      const xuidRes = await eAPI.xstsAuth({ xblToken: xblRes.xblToken, relyingParty: "http://xboxlive.com" });
+      xuid = xuidRes.xuid || "";
+    } catch (e) {
+      console.warn("[msTokenToMinecraft] No se pudo obtener el XUID vía xboxlive.com:", e);
+    }
+  }
+
   const mcRes = await eAPI.minecraftAuth({ xstsToken: xstsRes.xstsToken, userHash: xstsRes.userHash });
   const profile = await eAPI.getMinecraftProfile({ mcToken: mcRes.mcToken });
-  return { mcToken: mcRes.mcToken, username: profile.username, uuid: profile.uuid, xuid: xstsRes.xuid || "" };
+  return { mcToken: mcRes.mcToken, username: profile.username, uuid: profile.uuid, xuid };
 }
 
 export function getAzureClientId(): string {

@@ -28,11 +28,13 @@ interface ModrinthVersionFull {
   version_number: string;
   version_type: "release" | "beta" | "alpha";
   date_published: string;
+  downloads: number;
   files: Array<{ primary: boolean; filename: string; url: string; size: number; hashes: { sha1: string } }>;
 }
 
 interface ModrinthProjectFull {
   description: string;
+  categories: string[];
   gallery: Array<{ url: string; title?: string; featured: boolean }>;
 }
 
@@ -126,19 +128,27 @@ export interface ModrinthUpdate {
   url: string;
   sha1: string;
   size: number;
+  datePublished: string;
+  downloads: number;
 }
 
-/** All versions of a project for a given loader + Minecraft version, newest first. */
+/**
+ * All versions of a project for a given loader + Minecraft version, newest first.
+ * Shaders/resourcepacks use loader facets Modrinth doesn't tag consistently
+ * (iris/optifine/canvas) — like searchProjects, skip the loader filter for them
+ * rather than risk finding zero compatible versions for a real shader/pack.
+ */
 export async function listVersions(
   projectId: string,
   loader: string,
-  gameVersion: string
+  gameVersion: string,
+  category: "mods" | "shaderpacks" | "resourcepacks" = "mods"
 ): Promise<ModrinthUpdate[]> {
   try {
     const params = new URLSearchParams({
-      loaders: JSON.stringify([loader]),
       game_versions: JSON.stringify([gameVersion]),
     });
+    if (category === "mods") params.set("loaders", JSON.stringify([loader]));
     const res = await fetch(`${API}/project/${projectId}/version?${params}`);
     if (!res.ok) return [];
     const versions: ModrinthVersionFull[] = await res.json();
@@ -154,6 +164,8 @@ export async function listVersions(
           url: file.url,
           sha1: file.hashes.sha1,
           size: file.size,
+          datePublished: v.date_published,
+          downloads: v.downloads,
         };
       })
       .filter((v): v is ModrinthUpdate => v !== null);
@@ -169,14 +181,16 @@ export async function listVersions(
 export async function getLatestVersion(
   projectId: string,
   loader: string,
-  gameVersion: string
+  gameVersion: string,
+  category: "mods" | "shaderpacks" | "resourcepacks" = "mods"
 ): Promise<ModrinthUpdate | null> {
-  const versions = await listVersions(projectId, loader, gameVersion);
+  const versions = await listVersions(projectId, loader, gameVersion, category);
   return versions[0] ?? null;
 }
 
 export interface ModrinthProjectDetail {
   description: string;
+  categories: string[];
   gallery: Array<{ url: string; title?: string }>;
 }
 
@@ -194,6 +208,7 @@ export async function getProjectDetail(projectId: string): Promise<ModrinthProje
     const p: ModrinthProjectFull = await res.json();
     const detail: ModrinthProjectDetail = {
       description: p.description,
+      categories: p.categories ?? [],
       gallery: (p.gallery ?? []).map((g) => ({ url: g.url, title: g.title })),
     };
     projectDetailCache.set(projectId, detail);
@@ -235,12 +250,15 @@ const PROJECT_TYPE: Record<"mods" | "shaderpacks" | "resourcepacks", string> = {
  * inconsistent loader facets on Modrinth (iris/optifine/canvas), so we skip
  * that filter for them rather than risk silently excluding valid results.
  */
+export const SEARCH_PAGE_SIZE = 20;
+
 export async function searchProjects(
   category: "mods" | "shaderpacks" | "resourcepacks",
   query: string,
   loader: string,
   gameVersion: string,
-  limit = 20
+  offset = 0,
+  limit = SEARCH_PAGE_SIZE
 ): Promise<ModrinthSearchHit[]> {
   try {
     const facets = [[`project_type:${PROJECT_TYPE[category]}`], [`versions:${gameVersion}`]];
@@ -249,6 +267,7 @@ export async function searchProjects(
       query,
       facets: JSON.stringify(facets),
       index: query.trim() ? "relevance" : "downloads",
+      offset: String(offset),
       limit: String(limit),
     });
     const res = await fetch(`${API}/search?${params}`);

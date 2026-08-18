@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useLocation, useParams } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import { useModpacks } from "@/hooks/use-modpacks";
@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import {
   ArrowLeft,
   ArrowUpDown,
-  ArrowDownCircle,
+  ArrowDown,
   Check,
   X,
   Loader2,
@@ -21,6 +21,8 @@ import {
   FileText,
   List,
   Download,
+  Lock,
+  RefreshCw,
 } from "lucide-react";
 import { SnapshotEntry, fetchSnapshot } from "@/services/github";
 import {
@@ -29,6 +31,7 @@ import {
   getProjectDetail,
   listVersions,
   searchProjects,
+  SEARCH_PAGE_SIZE,
   type ModrinthMatch,
   type ModrinthUpdate,
   type ModrinthProjectDetail,
@@ -41,9 +44,11 @@ import {
   downloadInstanceFile,
   type InstanceFile,
 } from "@/services/electron";
+import { translateToSpanish } from "@/services/translate";
 import { getGithubRepo } from "@/lib/app-config";
 import { formatBytes } from "@/lib/format";
 import { toast } from "sonner";
+import { SiModrinth } from "react-icons/si";
 
 type Category = "mods" | "shaderpacks" | "resourcepacks";
 type ModDetailTab = "description" | "gallery" | "versions";
@@ -53,6 +58,18 @@ const CATEGORY_META: Record<Category, { label: string; icon: typeof Package }> =
   shaderpacks: { label: "Shaders", icon: Sparkles },
   resourcepacks: { label: "Resource Packs", icon: ImageIcon },
 };
+
+// Stability color scale for a version's release channel — green is the most
+// stable (release), red the least (alpha) — with a single-letter badge.
+const VERSION_TYPE_META: Record<"release" | "beta" | "alpha", { letter: string; className: string }> = {
+  release: { letter: "R", className: "bg-green-500/15 text-green-400 border-green-500/30" },
+  beta: { letter: "B", className: "bg-amber-500/15 text-amber-400 border-amber-500/30" },
+  alpha: { letter: "A", className: "bg-red-500/15 text-red-400 border-red-500/30" },
+};
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" });
+}
 
 function categoryOf(path: string): Category | null {
   const top = path.split("/")[0]?.toLowerCase();
@@ -121,6 +138,8 @@ export default function ModpackDetail() {
   const [modDetailLoading, setModDetailLoading] = useState(false);
   const [projectDetail, setProjectDetail] = useState<ModrinthProjectDetail | null>(null);
   const [modVersions, setModVersions] = useState<ModrinthUpdate[]>([]);
+  const [translatedDescription, setTranslatedDescription] = useState<string | null>(null);
+  const [showOriginalDescription, setShowOriginalDescription] = useState(false);
 
   // Browse/search Modrinth to install new content into the active category.
   const [activeCategory, setActiveCategory] = useState<Category>("mods");
@@ -129,6 +148,10 @@ export default function ModpackDetail() {
   const [searchResults, setSearchResults] = useState<ModrinthSearchHit[]>([]);
   const [popularResults, setPopularResults] = useState<ModrinthSearchHit[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [resultsOffset, setResultsOffset] = useState(0);
+  const [hasMoreResults, setHasMoreResults] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   const openMod = (path: string) => {
     setPanelDirection(1);
@@ -179,7 +202,9 @@ export default function ModpackDetail() {
           optionalFiles.map(async (f) => {
             const match = matches.get(f.path);
             if (!match) return;
-            const latest = await getLatestVersion(match.projectId, pack.loaderType, pack.minecraftVersion);
+            const cat = categoryOf(f.path);
+            if (!cat) return;
+            const latest = await getLatestVersion(match.projectId, pack.loaderType, pack.minecraftVersion, cat);
             if (latest && latest.versionId !== match.versionId) {
               updateEntries.set(f.path, latest);
             }
@@ -208,9 +233,10 @@ export default function ModpackDetail() {
     let cancelled = false;
     setModDetailLoading(true);
     setModDetailTab("description");
+    const cat = categoryOf(selectedModPath) ?? activeCategory;
     Promise.all([
       getProjectDetail(match.projectId),
-      listVersions(match.projectId, pack.loaderType, pack.minecraftVersion),
+      listVersions(match.projectId, pack.loaderType, pack.minecraftVersion, cat),
     ])
       .then(([detail, versions]) => {
         if (cancelled) return;
@@ -225,17 +251,37 @@ export default function ModpackDetail() {
     };
   }, [selectedModPath]);
 
+  // Auto-translates the description to Spanish once it loads; falls back to the
+  // original silently if translation fails (unofficial keyless endpoint).
+  useEffect(() => {
+    setShowOriginalDescription(false);
+    setTranslatedDescription(null);
+    const text = projectDetail?.description;
+    if (!text || !text.trim()) return;
+    let cancelled = false;
+    translateToSpanish(text).then((translated) => {
+      if (!cancelled) setTranslatedDescription(translated);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectDetail]);
+
   // Browse (empty query) or search Modrinth for the active category, debounced while typing.
+  // Resets pagination — this is always page one of a fresh query/category.
   useEffect(() => {
     if (!searchMode || !pack) return;
     let cancelled = false;
     setSearchLoading(true);
+    setResultsOffset(0);
+    setHasMoreResults(true);
     const delay = searchQuery.trim() ? 350 : 0;
     const timer = setTimeout(() => {
-      searchProjects(activeCategory, searchQuery, pack.loaderType, pack.minecraftVersion).then((hits) => {
+      searchProjects(activeCategory, searchQuery, pack.loaderType, pack.minecraftVersion, 0).then((hits) => {
         if (cancelled) return;
         if (searchQuery.trim()) setSearchResults(hits);
         else setPopularResults(hits);
+        setHasMoreResults(hits.length === SEARCH_PAGE_SIZE);
         setSearchLoading(false);
       });
     }, delay);
@@ -244,6 +290,34 @@ export default function ModpackDetail() {
       clearTimeout(timer);
     };
   }, [searchMode, searchQuery, activeCategory, pack?.loaderType, pack?.minecraftVersion]);
+
+  // Fetches the next page of results and appends it — Modrinth's catalog is much
+  // larger than one page, so browsing/searching keeps loading instead of capping at 20.
+  const loadMoreResults = useCallback(() => {
+    if (!pack || loadingMore || searchLoading || !hasMoreResults) return;
+    const nextOffset = resultsOffset + SEARCH_PAGE_SIZE;
+    setLoadingMore(true);
+    searchProjects(activeCategory, searchQuery, pack.loaderType, pack.minecraftVersion, nextOffset).then((hits) => {
+      if (searchQuery.trim()) setSearchResults((prev) => [...prev, ...hits]);
+      else setPopularResults((prev) => [...prev, ...hits]);
+      setResultsOffset(nextOffset);
+      setHasMoreResults(hits.length === SEARCH_PAGE_SIZE);
+      setLoadingMore(false);
+    });
+  }, [pack, loadingMore, searchLoading, hasMoreResults, resultsOffset, activeCategory, searchQuery]);
+
+  // Auto-loads more results as the sentinel at the bottom of the list scrolls into view.
+  useEffect(() => {
+    if (!searchMode || !hasMoreResults) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries[0].isIntersecting) loadMoreResults(); },
+      { rootMargin: "300px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [searchMode, hasMoreResults, loadMoreResults]);
 
   /** Downloads a chosen version into the instance — replacing an existing file, or a fresh install
    *  if `path` is a not-yet-installed search result (synthetic "search:<projectId>" key). */
@@ -304,7 +378,7 @@ export default function ModpackDetail() {
 
   const handleInstallFromSearch = async (hit: ModrinthSearchHit) => {
     if (!pack) return;
-    const version = await getLatestVersion(hit.projectId, pack.loaderType, pack.minecraftVersion);
+    const version = await getLatestVersion(hit.projectId, pack.loaderType, pack.minecraftVersion, activeCategory);
     if (!version) {
       toast.error("No hay versión compatible con este pack.");
       return;
@@ -376,6 +450,26 @@ export default function ModpackDetail() {
   const selectedMatch = selectedModPath ? modrinthMatches.get(selectedModPath) : null;
   const selectedRow =
     selectedModPath && selectedCategory ? rowsFor(selectedCategory).find((r) => r.path === selectedModPath) : null;
+  const selectedLocked = !!selectedRow?.mandatory;
+  const selectedUpdate = selectedModPath && selectedRow && !selectedLocked ? updates.get(selectedModPath) : undefined;
+  const selectedUpToDate = !!selectedRow && !selectedLocked && !selectedUpdate;
+  const selectedActionable = !selectedLocked && !selectedUpToDate;
+  const showHeaderAction = !!selectedModPath && !!selectedMatch && !!selectedCategory;
+  const selectedBusy = selectedModPath ? busyPaths.has(selectedModPath) : false;
+
+  const handleHeaderInstallClick = () => {
+    if (!selectedActionable || !selectedMatch || !selectedModPath || !selectedCategory) return;
+    if (selectedRow && selectedUpdate) {
+      handleInstallVersion(selectedCategory, selectedModPath, selectedUpdate, selectedMatch);
+    } else if (!selectedRow) {
+      const latest = modVersions[0];
+      if (!latest) {
+        toast.error("No hay versión compatible con este pack.");
+        return;
+      }
+      handleInstallVersion(selectedCategory, selectedModPath, latest, selectedMatch);
+    }
+  };
 
   return (
     <div className="min-h-full bg-background text-foreground">
@@ -388,13 +482,13 @@ export default function ModpackDetail() {
         <div className="absolute inset-0 bg-gradient-to-t from-background via-background/30 to-transparent" />
       </div>
 
-      <div className="max-w-5xl mx-auto w-full">
-        <div className="px-8 -mt-8 relative z-10">
-          <div className="inline-flex items-center gap-4 max-w-full bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-2xl p-4">
+      <div className="max-w-7xl mx-auto w-full">
+        <div className="px-4 -mt-14 relative z-10">
+          <div className="flex items-center justify-between gap-4 max-w-full bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4">
             {selectedModPath && selectedMatch ? (
                 <motion.div
                   key="mod-header"
-                  className="flex items-center gap-4 min-w-0"
+                  className="flex items-center gap-4 min-w-0 flex-1"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                 >
@@ -407,7 +501,7 @@ export default function ModpackDetail() {
                   </button>
                   <motion.div
                     layoutId={`icon-${selectedModPath}`}
-                    className="h-20 w-20 rounded-2xl border-2 border-background bg-black/70 overflow-hidden shrink-0 shadow-2xl"
+                    className="h-20 w-20 rounded-md border-2 border-background bg-black/70 overflow-hidden shrink-0 shadow-2xl"
                   >
                     {selectedMatch.iconUrl ? (
                       <img src={selectedMatch.iconUrl} alt="" className="w-full h-full object-cover" />
@@ -423,15 +517,46 @@ export default function ModpackDetail() {
                     </motion.h2>
                     <div className="flex flex-wrap items-center gap-2 text-sm">
                       {selectedRow ? (
-                        <>
-                          <Badge variant="secondary">v{selectedMatch.versionNumber}</Badge>
-                          <span className="text-muted-foreground text-xs">{formatBytes(selectedRow.size)}</span>
-                        </>
+                        <Badge variant="secondary">v{selectedMatch.versionNumber}</Badge>
                       ) : (
                         <Badge variant="outline">No instalado</Badge>
                       )}
                     </div>
+                    {!!projectDetail?.categories?.length && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {projectDetail.categories.map((cat) => (
+                          <Badge key={cat} variant="outline" className="text-[10px] capitalize bg-accent/15 text-accent border-accent/30">
+                            {cat}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
                   </div>
+                </motion.div>
+              ) : searchMode ? (
+                <motion.div
+                  key="search-header"
+                  className="flex items-center gap-3 min-w-0 flex-1"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                >
+                  <button
+                    onClick={() => {
+                      setSearchMode(false);
+                      setSearchQuery("");
+                    }}
+                    className="h-8 w-8 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors shrink-0"
+                    aria-label="Volver al pack"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </button>
+                  <Input
+                    autoFocus
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder={`Buscar ${CATEGORY_META[effectiveCategory].label.toLowerCase()}`}
+                    className="flex-1 bg-background/50 border-white/10 text-white h-10 text-base"
+                  />
                 </motion.div>
               ) : (
                 <motion.div
@@ -440,7 +565,7 @@ export default function ModpackDetail() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                 >
-                  <div className="h-20 w-20 rounded-2xl border-2 border-background bg-black/70 overflow-hidden shrink-0 shadow-2xl">
+                  <div className="h-20 w-20 rounded-md border-2 border-background bg-black/70 overflow-hidden shrink-0 shadow-2xl">
                     {pack.imageUrl ? (
                       <img src={pack.imageUrl} alt="" className="w-full h-full object-cover" />
                     ) : (
@@ -450,23 +575,55 @@ export default function ModpackDetail() {
                     )}
                   </div>
                   <div className="min-w-0 space-y-2">
-                    <h2 className="text-2xl font-bold text-white truncate">{pack.name}</h2>
+                    <div className="flex items-baseline gap-2 min-w-0">
+                      <h2 className="text-3xl font-bold text-white truncate">{pack.name}</h2>
+                      <span className="text-sm font-normal text-muted-foreground shrink-0">{pack.version}v</span>
+                    </div>
                     <div className="flex flex-wrap gap-2">
+                      <Badge variant="secondary">{pack.minecraftVersion}</Badge>
                       <Badge variant="secondary" className="uppercase">{pack.loaderType}</Badge>
-                      <Badge variant="secondary">MC {pack.minecraftVersion}</Badge>
-                      <Badge variant="secondary">Pack v{pack.version}</Badge>
-                      <Badge variant="outline">{pack.fileCount} archivos · {pack.totalSizeMb} MB</Badge>
+                      <Badge variant="outline">{pack.totalSizeMb} MB</Badge>
                     </div>
                   </div>
                 </motion.div>
               )}
+            {showHeaderAction && (
+              <div className="flex flex-col items-center gap-1 shrink-0">
+                <Button
+                  size="icon"
+                  onClick={handleHeaderInstallClick}
+                  disabled={selectedBusy || !selectedActionable}
+                  aria-label={selectedLocked ? "Instalado (obligatorio)" : selectedUpToDate ? "Instalado" : selectedUpdate ? "Actualizar" : "Instalar"}
+                  className={`h-10 w-10 self-center ${
+                    selectedActionable
+                      ? "bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30"
+                      : "bg-white/5 text-muted-foreground"
+                  }`}
+                >
+                  {selectedBusy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : selectedLocked ? (
+                    <Lock className="h-4 w-4" />
+                  ) : selectedUpToDate ? (
+                    <Check className="h-4 w-4" />
+                  ) : selectedUpdate ? (
+                    <RefreshCw className="h-4 w-4" />
+                  ) : (
+                    <ArrowDown className="h-4 w-4 text-white" />
+                  )}
+                </Button>
+                {selectedRow && (
+                  <span className="text-[10px] text-muted-foreground whitespace-nowrap">{formatBytes(selectedRow.size)}</span>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="px-8 pt-4 pb-8 space-y-4">
-          {!selectedModPath && <p className="text-base text-gray-300 max-w-3xl">{pack.description}</p>}
+        <div className={`px-4 pb-8 space-y-4 ${searchMode ? "" : "pt-4"}`}>
+          {!selectedModPath && !searchMode && <p className="text-base text-gray-300 max-w-3xl">{pack.description}</p>}
 
-          <div className="mt-4 bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-2xl p-4 overflow-hidden">
+          <div className={`${searchMode ? "" : "mt-4"} bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 overflow-hidden`}>
             <AnimatePresence mode="wait" initial={false} custom={panelDirection}>
               <motion.div
                 key={selectedModPath ? "mod" : "pack"}
@@ -479,17 +636,33 @@ export default function ModpackDetail() {
               >
             {selectedModPath && selectedCategory ? (
               <Tabs value={modDetailTab} onValueChange={(v) => setModDetailTab(v as ModDetailTab)}>
-                <TabsList className="bg-card/50 border border-white/5">
-                  <TabsTrigger value="description" className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5">
-                    <FileText className="h-3.5 w-3.5" /> Descripción
-                  </TabsTrigger>
-                  <TabsTrigger value="gallery" className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5">
-                    <ImageIcon className="h-3.5 w-3.5" /> Imágenes
-                  </TabsTrigger>
-                  <TabsTrigger value="versions" className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5">
-                    <List className="h-3.5 w-3.5" /> Versiones
-                  </TabsTrigger>
-                </TabsList>
+                <div className="flex items-center justify-between gap-2">
+                  <TabsList className="bg-card/50 border border-white/5">
+                    <TabsTrigger value="description" className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5">
+                      <FileText className="h-3.5 w-3.5" /> Descripción
+                    </TabsTrigger>
+                    <TabsTrigger value="gallery" className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5">
+                      <ImageIcon className="h-3.5 w-3.5" /> Imágenes
+                    </TabsTrigger>
+                    <TabsTrigger value="versions" className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5">
+                      <List className="h-3.5 w-3.5" /> Versiones
+                    </TabsTrigger>
+                  </TabsList>
+                  <AnimatePresence>
+                    {modDetailTab === "description" && translatedDescription && (
+                      <motion.button
+                        key="toggle-original"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        onClick={() => setShowOriginalDescription((v) => !v)}
+                        className="text-xs font-medium text-sky-400/90 hover:text-sky-300 transition-colors shrink-0"
+                      >
+                        {showOriginalDescription ? "Mostrar traducción" : "Mostrar original"}
+                      </motion.button>
+                    )}
+                  </AnimatePresence>
+                </div>
 
                 <TabsContent value="description" className="mt-4">
                   {modDetailLoading ? (
@@ -498,7 +671,8 @@ export default function ModpackDetail() {
                     </div>
                   ) : (
                     <p className="text-sm text-gray-300 whitespace-pre-line">
-                      {projectDetail?.description || "Sin descripción."}
+                      {(showOriginalDescription ? projectDetail?.description : translatedDescription ?? projectDetail?.description) ||
+                        "Sin descripción."}
                     </p>
                   )}
                 </TabsContent>
@@ -520,7 +694,7 @@ export default function ModpackDetail() {
                           key={g.url}
                           src={g.url}
                           alt={g.title || ""}
-                          className="w-full aspect-video object-cover rounded-lg border border-white/10"
+                          className="w-full aspect-video object-cover rounded-md border border-white/10"
                         />
                       ))}
                     </div>
@@ -538,37 +712,63 @@ export default function ModpackDetail() {
                       <p className="text-sm">No hay versiones compatibles.</p>
                     </div>
                   ) : (
-                    <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                      {modVersions.map((v) => {
-                        const isInstalled = v.versionId === selectedMatch?.versionId;
-                        const busy = busyPaths.has(selectedModPath!);
-                        return (
-                          <div
-                            key={v.versionId}
-                            className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full"
-                          >
-                            <div className="min-w-0 flex-1">
-                              <p className="text-muted-foreground uppercase text-[10px] font-bold">{v.versionType}</p>
-                              <p className="text-gray-100 font-medium text-sm truncate">v{v.versionNumber}</p>
-                            </div>
-                            {isInstalled ? (
-                              <Check className="h-4 w-4 text-accent shrink-0" />
-                            ) : !selectedRow || !selectedRow.mandatory ? (
-                              <button
-                                onClick={() =>
-                                  selectedMatch &&
-                                  handleInstallVersion(selectedCategory!, selectedModPath!, v, selectedMatch)
-                                }
-                                disabled={busy}
-                                title={selectedRow ? `Cambiar a v${v.versionNumber}` : `Instalar v${v.versionNumber}`}
-                                className="h-7 w-7 flex items-center justify-center rounded-full text-accent hover:bg-accent/10 transition-colors shrink-0 disabled:opacity-50"
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">
+                        Elige qué versión instalar. El color del estado indica su estabilidad: verde es la más estable, rojo la menos.
+                      </p>
+                      <div className="flex items-center gap-3 px-3 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+                        <span className="w-6 text-center shrink-0">Estado</span>
+                        <span className="flex-1">Nombre</span>
+                        <span className="w-24 shrink-0">Fecha</span>
+                        <span className="w-16 shrink-0">Descargas</span>
+                        <span className="w-7 shrink-0" />
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        {modVersions.map((v) => {
+                          const isInstalled = v.versionId === selectedMatch?.versionId;
+                          const busy = busyPaths.has(selectedModPath!);
+                          const locked = !!selectedRow && selectedRow.mandatory && !isInstalled;
+                          const typeMeta = VERSION_TYPE_META[v.versionType];
+                          return (
+                            <div
+                              key={v.versionId}
+                              className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full"
+                            >
+                              <span
+                                className={`h-6 w-6 flex items-center justify-center rounded-md border text-[11px] font-bold shrink-0 ${typeMeta.className}`}
+                                title={v.versionType}
                               >
-                                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowDownCircle className="h-4 w-4" />}
-                              </button>
-                            ) : null}
-                          </div>
-                        );
-                      })}
+                                {typeMeta.letter}
+                              </span>
+                              <p className="text-gray-100 font-medium text-sm truncate flex-1 min-w-0">v{v.versionNumber}</p>
+                              <span className="text-muted-foreground text-[11px] w-24 shrink-0">{formatDate(v.datePublished)}</span>
+                              <span className="text-muted-foreground text-[11px] w-16 shrink-0 flex items-center gap-0.5">
+                                {v.downloads.toLocaleString()}
+                                <ArrowDown className="h-2.5 w-2.5" />
+                              </span>
+                              <div className="w-7 shrink-0 flex items-center justify-center">
+                                {isInstalled ? (
+                                  <Check className="h-4 w-4 text-accent" />
+                                ) : locked ? (
+                                  <Lock className="h-4 w-4 text-muted-foreground" />
+                                ) : (
+                                  <button
+                                    onClick={() =>
+                                      selectedMatch &&
+                                      handleInstallVersion(selectedCategory!, selectedModPath!, v, selectedMatch)
+                                    }
+                                    disabled={busy}
+                                    title={selectedRow ? `Cambiar a v${v.versionNumber}` : `Instalar v${v.versionNumber}`}
+                                    className="h-7 w-7 flex items-center justify-center rounded-full text-white hover:bg-white/10 transition-colors disabled:opacity-50"
+                                  >
+                                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowDown className="h-4 w-4" />}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </TabsContent>
@@ -584,16 +784,8 @@ export default function ModpackDetail() {
               </div>
             ) : (
               <Tabs value={effectiveCategory} onValueChange={(v) => setActiveCategory(v as Category)}>
-                <div className="flex items-center justify-between gap-2 flex-wrap mb-4">
-                  {searchMode ? (
-                    <Input
-                      autoFocus
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder={`Buscar ${CATEGORY_META[effectiveCategory].label.toLowerCase()}`}
-                      className="max-w-xs bg-background/50 border-white/10 text-white"
-                    />
-                  ) : (
+                {!searchMode && (
+                  <div className="flex items-center justify-between gap-2 flex-wrap mb-4">
                     <TabsList className="bg-card/50 border border-white/5">
                       {categories.map((c) => {
                         const Icon = CATEGORY_META[c].icon;
@@ -610,24 +802,18 @@ export default function ModpackDetail() {
                         );
                       })}
                     </TabsList>
-                  )}
-                  {pack.installed && (
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        if (searchMode) {
-                          setSearchMode(false);
-                          setSearchQuery("");
-                        } else {
-                          setSearchMode(true);
-                        }
-                      }}
-                      className="bg-green-600 hover:bg-green-500 text-white font-bold"
-                    >
-                      {searchMode ? "Volver" : `Instalar ${CATEGORY_META[effectiveCategory].label}`}
-                    </Button>
-                  )}
-                </div>
+                    {pack.installed && (
+                      <Button
+                        size="sm"
+                        onClick={() => setSearchMode(true)}
+                        className="bg-green-600 hover:bg-green-500 border-transparent text-white font-bold gap-1.5"
+                      >
+                        <SiModrinth className="h-3.5 w-3.5" />
+                        {`Instalar ${CATEGORY_META[effectiveCategory].label}`}
+                      </Button>
+                    )}
+                  </div>
+                )}
 
                 {searchMode ? (
                   (() => {
@@ -643,63 +829,100 @@ export default function ModpackDetail() {
                         <p className="text-sm">Sin resultados.</p>
                       </div>
                     ) : (
-                      <div className="grid sm:grid-cols-2 gap-2">
-                        {results.map((hit) => {
-                          const busy = busyPaths.has(`search:${hit.projectId}`);
-                          return (
-                            <div key={hit.projectId} className="flex items-start gap-3 p-3 bg-card/50 rounded-md">
-                              <div
-                                onClick={() => openModFromSearch(hit)}
-                                className="flex items-start gap-3 min-w-0 flex-1 cursor-pointer"
-                              >
-                                {hit.iconUrl ? (
-                                  <img src={hit.iconUrl} alt="" className="h-11 w-11 rounded shrink-0 object-cover bg-black/30" />
-                                ) : (
-                                  <div className="h-11 w-11 rounded shrink-0 bg-black/30 flex items-center justify-center">
-                                    <CategoryIcon className="h-5 w-5 text-muted-foreground" />
+                      <div className="flex flex-col gap-2">
+                        {(() => {
+                          const installedByProject = new Map<string, { path: string; mandatory: boolean }>();
+                          for (const row of rowsFor(effectiveCategory)) {
+                            const match = modrinthMatches.get(row.path);
+                            if (match) installedByProject.set(match.projectId, { path: row.path, mandatory: row.mandatory });
+                          }
+                          return results.map((hit) => {
+                            const installed = installedByProject.get(hit.projectId);
+                            const locked = installed?.mandatory ?? false;
+                            const update = installed && !locked ? updates.get(installed.path) : undefined;
+                            const upToDate = !!installed && !locked && !update;
+                            const busyKey = installed ? installed.path : `search:${hit.projectId}`;
+                            const busy = busyPaths.has(busyKey);
+                            const actionable = !locked && !upToDate;
+                            return (
+                              <div key={hit.projectId} className="flex items-center gap-4 p-4 bg-card/50 rounded-md w-full">
+                                <div
+                                  onClick={() => openModFromSearch(hit)}
+                                  className="flex items-center gap-4 min-w-0 flex-1 cursor-pointer"
+                                >
+                                  {hit.iconUrl ? (
+                                    <img src={hit.iconUrl} alt="" className="h-14 w-14 rounded shrink-0 object-cover bg-black/30" />
+                                  ) : (
+                                    <div className="h-14 w-14 rounded shrink-0 bg-black/30 flex items-center justify-center">
+                                      <CategoryIcon className="h-6 w-6 text-muted-foreground" />
+                                    </div>
+                                  )}
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-gray-100 font-semibold text-lg truncate">{hit.title}</p>
+                                    <p className="text-muted-foreground text-sm">{hit.description}</p>
                                   </div>
-                                )}
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-gray-100 font-medium text-sm truncate">{hit.title}</p>
-                                  <p className="text-muted-foreground text-[11px] line-clamp-2">{hit.description}</p>
+                                </div>
+                                <div className="flex items-center gap-3 shrink-0">
+                                  <span className="text-[10px] text-muted-foreground whitespace-nowrap flex items-center gap-0.5">
+                                    {hit.downloads.toLocaleString()}
+                                    <ArrowDown className="h-2.5 w-2.5" />
+                                  </span>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => {
+                                      if (!actionable) return;
+                                      if (installed && update) handleInstallVersion(activeCategory, installed.path, update, hit);
+                                      else handleInstallFromSearch(hit);
+                                    }}
+                                    disabled={busy || !actionable}
+                                    className={`h-8 px-3 text-xs font-bold ${
+                                      actionable
+                                        ? "bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30"
+                                        : "bg-white/5 text-muted-foreground"
+                                    }`}
+                                  >
+                                    {busy ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : locked ? (
+                                      <><Lock className="h-3.5 w-3.5 mr-1" />Instalado</>
+                                    ) : upToDate ? (
+                                      <><Check className="h-3.5 w-3.5 mr-1" />Instalado</>
+                                    ) : update ? (
+                                      <><RefreshCw className="h-3.5 w-3.5 mr-1" />Actualizar</>
+                                    ) : (
+                                      <><Download className="h-3.5 w-3.5 mr-1" />Instalar</>
+                                    )}
+                                  </Button>
                                 </div>
                               </div>
-                              <div className="flex flex-col items-end gap-1 shrink-0">
-                                <Button
-                                  size="sm"
-                                  onClick={() => handleInstallFromSearch(hit)}
-                                  disabled={busy}
-                                  className="h-7 px-2 text-[11px] bg-accent hover:bg-accent/90 text-accent-foreground font-bold"
-                                >
-                                  {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Download className="h-3 w-3 mr-1" />Instalar</>}
-                                </Button>
-                                <span className="text-[10px] text-muted-foreground">
-                                  {hit.downloads.toLocaleString()} descargas
-                                </span>
-                              </div>
-                            </div>
-                          );
-                        })}
+                            );
+                          });
+                        })()}
+                        {hasMoreResults && (
+                          <div ref={sentinelRef} className="flex items-center justify-center h-10 text-muted-foreground">
+                            {loadingMore && <Loader2 className="h-4 w-4 animate-spin" />}
+                          </div>
+                        )}
                       </div>
                     );
                   })()
                 ) : (
                 categories.map((c) => (
                   <TabsContent key={c} value={c} className="mt-4">
-                    <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-2xl p-3">
-                      <div className="flex items-center justify-between">
+                    <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-3">
+                      <div className="flex items-center justify-between px-2 py-1">
                         <button
                           onClick={() => setSortAsc((v) => !v)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:text-white transition-colors"
+                          className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-muted-foreground hover:text-white transition-colors"
                         >
                           Nombre
                           <ArrowUpDown className="h-3 w-3" />
                         </button>
                         <button
                           onClick={() => setShowInstalledFirst((v) => !v)}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                          className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition-colors ${
                             showInstalledFirst
-                              ? "bg-accent text-accent-foreground"
+                              ? "bg-accent/15 text-accent border border-accent/30"
                               : "text-muted-foreground hover:text-white"
                           }`}
                         >
@@ -753,11 +976,11 @@ export default function ModpackDetail() {
                                   )}
                                   <div className="min-w-0 flex-1">
                                     {match ? (
-                                      <motion.p layoutId={`title-${row.path}`} className="text-gray-100 font-medium text-sm truncate">
+                                      <motion.p layoutId={`title-${row.path}`} className="text-gray-100 font-medium text-base truncate">
                                         {match.title}
                                       </motion.p>
                                     ) : (
-                                      <p className="text-gray-100 font-medium text-sm truncate">{titleFor(row.path)}</p>
+                                      <p className="text-gray-100 font-medium text-base truncate">{titleFor(row.path)}</p>
                                     )}
                                     <p className="text-muted-foreground text-[11px] font-mono truncate">{fileName(row.path)}</p>
                                   </div>
@@ -769,7 +992,7 @@ export default function ModpackDetail() {
                                     title={`Actualizar a v${update.versionNumber}`}
                                     className="h-7 w-7 flex items-center justify-center rounded-full text-accent hover:bg-accent/10 transition-colors shrink-0 disabled:opacity-50"
                                   >
-                                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowDownCircle className="h-4 w-4" />}
+                                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                                   </button>
                                 )}
                                 {!row.mandatory && (

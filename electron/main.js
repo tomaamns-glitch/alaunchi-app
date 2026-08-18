@@ -15,6 +15,15 @@ const execAsync = promisify(exec);
 
 const isDev = process.env.NODE_ENV === "development";
 
+// Safety net: an uncaught error in the main process would otherwise show Electron's
+// default "A JavaScript error occurred in the main process" dialog and can leave
+// the app in a broken state. Log it instead — individual operations (downloads,
+// IPC handlers) already reject their own promises, so the caller in the renderer
+// gets a proper error toast rather than the whole app appearing to crash.
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err);
+});
+
 // ─── CONFIGURACIÓN DEL LAUNCHER ────────────────────────────────────────────
 // Cambia azureClientId por el tuyo antes de distribuir la app.
 // Los usuarios finales no necesitan configurar nada.
@@ -270,6 +279,20 @@ function downloadFile(url, destPath, onProgress, headers) {
     const file = fsSync.createWriteStream(destPath);
     const protocol = url.startsWith("https") ? https : http;
 
+    // Attach this immediately: the stream can emit "error" (e.g. EPERM from an
+    // antivirus briefly locking the temp file) before the HTTP response arrives
+    // and handleResponse() attaches its own listener below. An EventEmitter that
+    // errors with no listener throws, which crashes the whole main process.
+    let settled = false;
+    file.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      file.close(() => {
+        fsSync.unlink(destPath, () => {});
+        reject(err);
+      });
+    });
+
     const handleResponse = (res) => {
       if (res.statusCode === 301 || res.statusCode === 302) {
         file.close(() => {
@@ -295,19 +318,19 @@ function downloadFile(url, destPath, onProgress, headers) {
         if (onProgress && total > 0) onProgress(Math.round((downloaded / total) * 100));
       });
       res.pipe(file);
-      file.on("finish", () => { file.close(() => resolve()); });
-      file.on("error", (err) => {
-        file.close(() => {
-          fsSync.unlink(destPath, () => {});
-          reject(err);
-        });
+      file.on("finish", () => {
+        settled = true;
+        file.close(() => resolve());
       });
+      // Errors from here on are also caught by the early "error" listener above.
     };
 
     const request = headers
       ? protocol.get(url, { headers }, handleResponse)
       : protocol.get(url, handleResponse);
     request.on("error", (err) => {
+      if (settled) return;
+      settled = true;
       file.close(() => {
         fsSync.unlink(destPath, () => {});
         reject(err);
@@ -832,6 +855,25 @@ ipcMain.handle("mc:update-instance-file", async (_, { modpackId, oldPath, newPat
     await fs.unlink(oldTarget).catch(() => {});
   }
   return { success: true, newPath };
+});
+
+ipcMain.handle("mc:download-instance-file", async (_, { modpackId, path: relPath, url, sha1 }) => {
+  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const target = safeJoin(instanceDir, relPath);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const tmpPath = `${target}.tmp.${process.pid}.${Date.now().toString(36)}`;
+  try {
+    await downloadFile(url, tmpPath, null);
+    if (sha1) {
+      const actual = await hashFileSha1(tmpPath);
+      if (actual !== sha1) throw new Error("Hash mismatch al descargar el archivo.");
+    }
+    await fs.rename(tmpPath, target);
+  } catch (e) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw e;
+  }
+  return { success: true };
 });
 
 ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, authToken, username, uuid, xuid, clientId }) => {
@@ -1816,12 +1858,12 @@ ipcMain.handle("ms:xbox-auth", async (_, { msToken }) => {
   });
 });
 
-ipcMain.handle("ms:xsts-auth", async (_, { xblToken }) => {
+ipcMain.handle("ms:xsts-auth", async (_, { xblToken, relyingParty }) => {
   return new Promise((resolve, reject) => {
     if (!xblToken) return reject(new Error("Falta el token de Xbox Live (xblToken)."));
     const body = JSON.stringify({
       Properties: { SandboxId: "RETAIL", UserTokens: [xblToken] },
-      RelyingParty: "rp://api.minecraftservices.com/",
+      RelyingParty: relyingParty || "rp://api.minecraftservices.com/",
       TokenType: "JWT",
     });
     const req = https.request({
