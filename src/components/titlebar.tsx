@@ -63,16 +63,8 @@ export function Titlebar() {
         </span>
       </div>
       <div style={noDragStyle} className="flex items-center h-full">
-        <button
-          onClick={() => api.minimize()}
-          className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-          aria-label="Minimizar"
-        >
-          <Minus className="h-3.5 w-3.5" />
-        </button>
         {isAdmin && (
           <>
-            <div className="w-px h-4 bg-white/10" />
             <button
               onClick={() => setLocation("/admin")}
               className="h-full px-3 flex items-center justify-center text-[10px] font-mono font-bold text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
@@ -82,6 +74,13 @@ export function Titlebar() {
             <div className="w-px h-4 bg-white/10" />
           </>
         )}
+        <button
+          onClick={() => api.minimize()}
+          className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+          aria-label="Minimizar"
+        >
+          <Minus className="h-3.5 w-3.5" />
+        </button>
         <button
           onClick={() => api.maximize()}
           className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
