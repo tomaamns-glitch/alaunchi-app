@@ -30,14 +30,14 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <div className="h-screen flex flex-col overflow-hidden">
-          <Titlebar />
-          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-            <WouterRouter hook={useHashLocation}>
+        <WouterRouter hook={useHashLocation}>
+          <div className="h-screen flex flex-col overflow-hidden">
+            <Titlebar />
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
               <Router />
-            </WouterRouter>
+            </div>
           </div>
-        </div>
+        </WouterRouter>
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
