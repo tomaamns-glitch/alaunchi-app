@@ -3,7 +3,19 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { useLocation } from "wouter";
 import { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Settings, LogOut, Download, Play, RefreshCw, Loader2, AlertTriangle, Coffee, Sparkles } from "lucide-react";
+import {
+  Settings,
+  LogOut,
+  Download,
+  Play,
+  RefreshCw,
+  Loader2,
+  AlertTriangle,
+  Coffee,
+  Sparkles,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { installSnapshot, launchMinecraft } from "@/services/electron";
 import { getAzureClientId } from "@/services/auth";
@@ -15,11 +27,6 @@ import { getGithubRepo } from "@/lib/app-config";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 
 const api = (window as any).electronAPI;
-
-interface ModpackCardProps {
-  pack: Modpack;
-  index: number;
-}
 
 const LAUNCH_STAGE_PROGRESS: Record<string, number> = {
   preparing: 5,
@@ -50,7 +57,11 @@ const INSTALL_STAGE_LABEL: Record<string, string> = {
   done: "Completado",
 };
 
-function ModpackCard({ pack, index }: ModpackCardProps) {
+interface ModpackActionBarProps {
+  pack: Modpack;
+}
+
+function ModpackActionBar({ pack }: ModpackActionBarProps) {
   const [status, setStatus] = useState<"idle" | "installing" | "updating" | "launching">("idle");
   const [progress, setProgress] = useState(0);
   const [stageLabel, setStageLabel] = useState("");
@@ -132,15 +143,6 @@ function ModpackCard({ pack, index }: ModpackCardProps) {
       // launchers do to avoid "Invalid session" errors on online servers. The token stored
       // in the auth state may be hours old; silently get a fresh one if needed.
       const auth = await getValidTokenForLaunch();
-      console.log("[handlePlay] auth from getValidTokenForLaunch:", {
-        hasAuth: !!auth,
-        hasMcToken: !!auth?.mcToken,
-        mcTokenLen: auth?.mcToken?.length ?? 0,
-        username: auth?.username,
-        uuid: auth?.uuid,
-        hasXuid: !!auth?.xuid,
-        xuidLen: auth?.xuid?.length ?? 0,
-      });
       if (!auth) {
         toast.error("Tu sesión de Microsoft ha caducado. Por favor, inicia sesión de nuevo.");
         setStatus("idle");
@@ -153,18 +155,12 @@ function ModpackCard({ pack, index }: ModpackCardProps) {
       // past getValidTokenForLaunch.
       if (!auth.mcToken || !auth.username || !auth.uuid) {
         toast.error("Sesión de Microsoft incompleta. Cierra sesión y vuelve a iniciar sesión.");
-        console.error("[handlePlay] BLOCKED launch: missing fields", {
-          mcTokenEmpty: !auth.mcToken,
-          usernameEmpty: !auth.username,
-          uuidEmpty: !auth.uuid,
-        });
         setStatus("idle");
         setStageLabel("");
         return;
       }
       if (!auth.xuid) {
         toast.error("Falta el XUID de Xbox. Cierra sesión y vuelve a iniciar sesión para activar servidores online.");
-        console.error("[handlePlay] BLOCKED launch: missing xuid");
         setStatus("idle");
         setStageLabel("");
         return;
@@ -189,85 +185,56 @@ function ModpackCard({ pack, index }: ModpackCardProps) {
   };
 
   const isActing = status !== "idle";
-  const [, setLocation] = useLocation();
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay: index * 0.1 }}
-      data-testid={`card-modpack-${pack.id}`}
-      onClick={() => setLocation(`/modpack/${pack.id}`)}
-      className="group relative flex flex-col bg-card rounded-xl overflow-hidden border border-white/5 shadow-lg hover:border-accent/30 transition-all duration-300 hover:-translate-y-1 cursor-pointer"
-    >
-      {pack.updateAvailable && status === "idle" && (
-        <div className="absolute top-3 right-3 z-10 bg-accent text-accent-foreground text-[10px] font-bold px-2 py-1 rounded-full animate-pulse shadow-lg">
-          UPDATE
-        </div>
-      )}
-
-      <div className="aspect-[3/4] relative overflow-hidden bg-black/50">
-        {pack.imageUrl ? (
-          <img
-            src={pack.imageUrl}
-            alt={pack.name}
-            className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 group-hover:brightness-110"
-          />
-        ) : (
-          <div className="w-full h-full bg-gradient-to-br from-accent/20 to-black flex items-center justify-center">
-            <span className="text-4xl font-black text-accent/40">{pack.name.charAt(0)}</span>
-          </div>
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-card via-card/20 to-transparent opacity-80" />
-        <div className="absolute top-3 left-3 flex gap-1.5">
-          <span className="px-2 py-1 text-xs font-bold bg-black/60 backdrop-blur-md rounded border border-white/10 text-white">
-            {pack.minecraftVersion}
-          </span>
-          <span className="px-2 py-1 text-xs font-bold bg-black/60 backdrop-blur-md rounded border border-white/10 text-gray-300 uppercase">
-            {pack.loaderType}
-          </span>
-        </div>
-      </div>
-
-      <div className="p-5 flex flex-col flex-1 relative z-10 -mt-12">
-        <h3 className="text-xl font-bold tracking-tight text-white mb-1 drop-shadow-md">{pack.name}</h3>
-        <p className="text-sm text-muted-foreground mb-4 line-clamp-2 h-10">{pack.description}</p>
-
-        <div className="mt-auto pt-2">
-          {status !== "idle" ? (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-                  <span className="truncate">{stageLabel}</span>
-                </div>
-                <span className="shrink-0 tabular-nums">{Math.round(progress)}%</span>
-              </div>
-              <Progress value={progress} className="h-2" />
-            </div>
-          ) : (
-            <Button
-              data-testid={pack.installed ? `button-play-${pack.id}` : `button-install-${pack.id}`}
-              className={`w-full font-bold h-12 tracking-wide transition-all ${
-                pack.installed
-                  ? "bg-accent hover:bg-accent/90 text-accent-foreground shadow-[0_0_15px_rgba(245,166,35,0.25)]"
-                  : "bg-white/10 hover:bg-white/20 text-white"
-              }`}
-              onClick={(e) => {
-                e.stopPropagation();
-                pack.installed ? handlePlay() : handleInstall();
-              }}
-              disabled={isActing}
-            >
-              {!pack.installed && <Download className="mr-2 h-4 w-4" />}
-              {pack.installed && pack.updateAvailable && <RefreshCw className="mr-2 h-4 w-4" />}
-              {pack.installed && !pack.updateAvailable && <Play className="mr-2 h-4 w-4 fill-current" />}
-              {pack.installed ? (pack.updateAvailable ? "ACTUALIZAR Y JUGAR" : "JUGAR") : "INSTALAR"}
-            </Button>
+    <div className="flex items-center justify-between gap-4 w-full min-w-0">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <h2 className="text-base font-bold text-white truncate">{pack.name}</h2>
+          {pack.updateAvailable && status === "idle" && (
+            <span className="bg-accent text-accent-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0">
+              UPDATE
+            </span>
           )}
         </div>
+        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <span className="uppercase">{pack.loaderType}</span>
+          <span>·</span>
+          <span>MC {pack.minecraftVersion}</span>
+        </div>
       </div>
-    </motion.div>
+
+      <div className="shrink-0 w-64">
+        {status !== "idle" ? (
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                <span className="truncate">{stageLabel}</span>
+              </div>
+              <span className="shrink-0 tabular-nums">{Math.round(progress)}%</span>
+            </div>
+            <Progress value={progress} className="h-1.5" />
+          </div>
+        ) : (
+          <Button
+            data-testid={pack.installed ? `button-play-${pack.id}` : `button-install-${pack.id}`}
+            className={`w-full font-bold h-10 tracking-wide transition-all ${
+              pack.installed
+                ? "bg-accent hover:bg-accent/90 text-accent-foreground shadow-[0_0_15px_rgba(245,166,35,0.25)]"
+                : "bg-white/10 hover:bg-white/20 text-white"
+            }`}
+            onClick={pack.installed ? handlePlay : handleInstall}
+            disabled={isActing}
+          >
+            {!pack.installed && <Download className="mr-2 h-4 w-4" />}
+            {pack.installed && pack.updateAvailable && <RefreshCw className="mr-2 h-4 w-4" />}
+            {pack.installed && !pack.updateAvailable && <Play className="mr-2 h-4 w-4 fill-current" />}
+            {pack.installed ? (pack.updateAvailable ? "ACTUALIZAR Y JUGAR" : "JUGAR") : "INSTALAR"}
+          </Button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -277,10 +244,12 @@ type JavaInstallStage = "idle" | "fetching" | "downloading" | "extracting" | "do
 type UpdateState = "idle" | "checking" | "available" | "downloading" | "downloaded" | "error";
 
 export default function Home() {
-  const { isAuthenticated, username, uuid, mcToken, logout, loadPersistedAuth } = useAuth();
+  const { isAuthenticated, username, logout, loadPersistedAuth } = useAuth();
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks, loading } = useModpacks();
   const isAdmin = useIsAdmin();
+
+  const [currentIndex, setCurrentIndex] = useState(0);
 
   const [javaStatus, setJavaStatus] = useState<JavaStatus>("checking");
   const [javaInstalling, setJavaInstalling] = useState(false);
@@ -303,6 +272,10 @@ export default function Home() {
       checkJava();
     }
   }, [isAuthenticated, setLocation, loadModpacks]);
+
+  useEffect(() => {
+    if (currentIndex >= modpacks.length) setCurrentIndex(0);
+  }, [modpacks.length, currentIndex]);
 
   useEffect(() => {
     if (!api) return;
@@ -395,9 +368,13 @@ export default function Home() {
     done: "¡Listo!",
   };
 
+  const currentPack = modpacks[currentIndex];
+  const goPrev = () => setCurrentIndex((i) => (i - 1 + modpacks.length) % modpacks.length);
+  const goNext = () => setCurrentIndex((i) => (i + 1) % modpacks.length);
+
   return (
     <div className="min-h-full bg-background text-foreground flex flex-col">
-      <header className="h-16 border-b border-white/5 bg-card/50 backdrop-blur flex items-center justify-end px-6 sticky top-0 z-50">
+      <header className="h-16 border-b border-white/5 bg-card/50 backdrop-blur flex items-center justify-end px-6 sticky top-0 z-50 shrink-0">
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-2 mr-3 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5">
             <Avatar className="h-6 w-6 border border-white/10">
@@ -448,7 +425,7 @@ export default function Home() {
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="bg-accent/10 border-b border-accent/30 px-6 py-3 flex items-center justify-between gap-4"
+            className="bg-accent/10 border-b border-accent/30 px-6 py-3 flex items-center justify-between gap-4 shrink-0"
           >
             <div className="flex items-center gap-3">
               <Sparkles className="h-4 w-4 text-accent shrink-0" />
@@ -495,7 +472,7 @@ export default function Home() {
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="bg-amber-950/60 border-b border-amber-500/30 px-6 py-3 flex items-center justify-between gap-4"
+            className="bg-amber-950/60 border-b border-amber-500/30 px-6 py-3 flex items-center justify-between gap-4 shrink-0"
           >
             <div className="flex items-center gap-3">
               <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
@@ -527,13 +504,13 @@ export default function Home() {
         )}
       </AnimatePresence>
 
-      <main className="flex-1 p-8 max-w-7xl mx-auto w-full">
+      <main className="flex-1 relative overflow-hidden min-h-0">
         {loading ? (
-          <div className="flex items-center justify-center h-64">
+          <div className="flex items-center justify-center h-full">
             <Loader2 className="h-8 w-8 animate-spin text-accent" />
           </div>
         ) : modpacks.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-64 text-muted-foreground gap-3">
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
             <p className="text-lg font-medium">No hay modpacks disponibles</p>
             {isAdmin ? (
               <>
@@ -547,17 +524,76 @@ export default function Home() {
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {modpacks.map((pack, i) => (
-              <ModpackCard
-                key={pack.id}
-                pack={pack}
-                index={i}
-              />
-            ))}
-          </div>
+          currentPack && (
+            <div className="absolute inset-0">
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={currentPack.id}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.3 }}
+                  onClick={() => setLocation(`/modpack/${currentPack.id}`)}
+                  className="absolute inset-0 cursor-pointer"
+                >
+                  {currentPack.imageUrl ? (
+                    <img
+                      src={currentPack.imageUrl}
+                      alt={currentPack.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-gradient-to-br from-accent/20 to-black flex items-center justify-center">
+                      <span className="text-8xl font-black text-accent/30">{currentPack.name.charAt(0)}</span>
+                    </div>
+                  )}
+                  <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-background/40" />
+                </motion.div>
+              </AnimatePresence>
+
+              {modpacks.length > 1 && (
+                <>
+                  <div
+                    onClick={(e) => { e.stopPropagation(); goPrev(); }}
+                    className="group absolute inset-y-0 left-0 w-24 flex items-center justify-start pl-4 cursor-pointer z-10"
+                  >
+                    <div className="h-11 w-11 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <ChevronLeft className="h-5 w-5 text-white" />
+                    </div>
+                  </div>
+                  <div
+                    onClick={(e) => { e.stopPropagation(); goNext(); }}
+                    className="group absolute inset-y-0 right-0 w-24 flex items-center justify-end pr-4 cursor-pointer z-10"
+                  >
+                    <div className="h-11 w-11 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <ChevronRight className="h-5 w-5 text-white" />
+                    </div>
+                  </div>
+
+                  <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
+                    {modpacks.map((m, i) => (
+                      <button
+                        key={m.id}
+                        onClick={(e) => { e.stopPropagation(); setCurrentIndex(i); }}
+                        className={`h-1.5 rounded-full transition-all ${
+                          i === currentIndex ? "w-6 bg-accent" : "w-1.5 bg-white/30 hover:bg-white/50"
+                        }`}
+                        aria-label={`Ir a ${m.name}`}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )
         )}
       </main>
+
+      {!loading && currentPack && (
+        <footer className="h-16 border-t border-white/5 bg-card/50 backdrop-blur flex items-center px-6 shrink-0">
+          <ModpackActionBar key={currentPack.id} pack={currentPack} />
+        </footer>
+      )}
     </div>
   );
 }
