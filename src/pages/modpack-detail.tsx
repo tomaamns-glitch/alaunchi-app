@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useParams } from "wouter";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -293,14 +293,12 @@ export default function ModpackDetail() {
       <div className="max-w-5xl mx-auto w-full">
         <div className="px-8 -mt-8 relative z-10">
           <div className="inline-flex items-center gap-4 max-w-full bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-2xl p-4">
-            <AnimatePresence mode="wait">
-              {selectedModPath && selectedMatch && selectedRow ? (
+            {selectedModPath && selectedMatch && selectedRow ? (
                 <motion.div
                   key="mod-header"
                   className="flex items-center gap-4 min-w-0"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
                 >
                   <button
                     onClick={() => setSelectedModPath(null)}
@@ -337,7 +335,6 @@ export default function ModpackDetail() {
                   className="flex items-center gap-4 min-w-0"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
                 >
                   <div className="h-20 w-20 rounded-2xl border-2 border-background bg-black/70 overflow-hidden shrink-0 shadow-2xl">
                     {pack.imageUrl ? (
@@ -359,7 +356,6 @@ export default function ModpackDetail() {
                   </div>
                 </motion.div>
               )}
-            </AnimatePresence>
           </div>
         </div>
 
