@@ -25,6 +25,7 @@ import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { getGithubRepo } from "@/lib/app-config";
 import { useIsAdmin } from "@/hooks/use-is-admin";
+import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
 
 const api = (window as any).electronAPI;
 
@@ -335,6 +336,12 @@ export default function Home() {
     }
   };
 
+  const currentPack = modpacks[currentIndex];
+  const goPrev = () => setCurrentIndex((i) => (i - 1 + modpacks.length) % modpacks.length);
+  const goNext = () => setCurrentIndex((i) => (i + 1) % modpacks.length);
+
+  useDynamicAccent(currentPack?.bannerUrl || currentPack?.imageUrl);
+
   if (!isAuthenticated) return null;
 
   const handleLogout = async () => {
@@ -349,10 +356,6 @@ export default function Home() {
     extracting: "Extrayendo...",
     done: "¡Listo!",
   };
-
-  const currentPack = modpacks[currentIndex];
-  const goPrev = () => setCurrentIndex((i) => (i - 1 + modpacks.length) % modpacks.length);
-  const goNext = () => setCurrentIndex((i) => (i + 1) % modpacks.length);
 
   return (
     <div className="min-h-full bg-background text-foreground flex flex-col">
