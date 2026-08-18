@@ -76,7 +76,8 @@ tu-repo/
     "minecraftVersion": "1.20.4",
     "loaderType": "vanilla",
     "version": "1.0.0",
-    "imageUrl": "https://raw.githubusercontent.com/tu-usuario/tu-repo/main/modpacks/vanilla-plus/cover.jpg",
+    "imageUrl": "https://raw.githubusercontent.com/tu-usuario/tu-repo/main/modpacks/vanilla-plus/logo.jpg",
+    "bannerUrl": "https://raw.githubusercontent.com/tu-usuario/tu-repo/main/modpacks/vanilla-plus/banner.jpg",
     "fileCount": 45,
     "totalSizeMb": 250
   }

@@ -42,6 +42,7 @@ const emptyForm = (): NewModpackData => ({
   loaderType: "fabric",
   version: "1.0.0",
   imageUrl: "",
+  bannerUrl: "",
 });
 
 function stripFolderPrefix(relPath: string): string {
@@ -510,14 +511,27 @@ export default function Admin() {
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <Label>URL de imagen de portada</Label>
-              <Input
-                value={newForm.imageUrl}
-                onChange={(e) => setNewForm({ ...newForm, imageUrl: e.target.value })}
-                className="bg-background/50 border-white/10 text-white"
-                placeholder="https://... o /nombre.png"
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>URL de logo</Label>
+                <Input
+                  value={newForm.imageUrl}
+                  onChange={(e) => setNewForm({ ...newForm, imageUrl: e.target.value })}
+                  className="bg-background/50 border-white/10 text-white"
+                  placeholder="https://... o /logo.png"
+                />
+                <p className="text-[11px] text-muted-foreground">Icono cuadrado — catálogo y detalle.</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label>URL de banner</Label>
+                <Input
+                  value={newForm.bannerUrl}
+                  onChange={(e) => setNewForm({ ...newForm, bannerUrl: e.target.value })}
+                  className="bg-background/50 border-white/10 text-white"
+                  placeholder="https://... o /banner.png"
+                />
+                <p className="text-[11px] text-muted-foreground">Imagen ancha — pantalla principal.</p>
+              </div>
             </div>
 
             <DialogFooter className="pt-2">

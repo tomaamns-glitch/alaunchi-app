@@ -74,8 +74,8 @@ export default function ModpackDetail() {
   return (
     <div className="min-h-full bg-background text-foreground">
       <div className="relative h-32 md:h-40 bg-black/50 overflow-hidden">
-        {pack.imageUrl ? (
-          <img src={pack.imageUrl} alt={pack.name} className="w-full h-full object-cover" />
+        {pack.bannerUrl || pack.imageUrl ? (
+          <img src={pack.bannerUrl || pack.imageUrl} alt={pack.name} className="w-full h-full object-cover" />
         ) : (
           <div className="w-full h-full bg-gradient-to-br from-accent/20 to-black" />
         )}
