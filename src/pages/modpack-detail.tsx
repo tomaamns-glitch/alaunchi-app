@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useParams } from "wouter";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -74,6 +74,12 @@ function guessTitle(filename: string): string {
   return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
+const sweepVariants = {
+  enter: (dir: number) => ({ opacity: 0, x: dir * 18 }),
+  center: { opacity: 1, x: 0 },
+  exit: (dir: number) => ({ opacity: 0, x: -dir * 18 }),
+};
+
 interface ContentRow {
   path: string;
   size: number;
@@ -100,10 +106,20 @@ export default function ModpackDetail() {
 
   // Mod detail view (opened by clicking a row's icon/name).
   const [selectedModPath, setSelectedModPath] = useState<string | null>(null);
+  const [panelDirection, setPanelDirection] = useState(1);
   const [modDetailTab, setModDetailTab] = useState<ModDetailTab>("description");
   const [modDetailLoading, setModDetailLoading] = useState(false);
   const [projectDetail, setProjectDetail] = useState<ModrinthProjectDetail | null>(null);
   const [modVersions, setModVersions] = useState<ModrinthUpdate[]>([]);
+
+  const openMod = (path: string) => {
+    setPanelDirection(1);
+    setSelectedModPath(path);
+  };
+  const closeMod = () => {
+    setPanelDirection(-1);
+    setSelectedModPath(null);
+  };
 
   useEffect(() => {
     if (modpacks.length === 0) loadModpacks();
@@ -220,7 +236,7 @@ export default function ModpackDetail() {
     try {
       await deleteInstanceFile(pack.id, path);
       setOptionalContent((prev) => ({ ...prev, [c]: prev[c].filter((f) => f.path !== path) }));
-      if (selectedModPath === path) setSelectedModPath(null);
+      if (selectedModPath === path) closeMod();
       toast.success(`${fileName(path)} eliminado.`);
     } catch (e: any) {
       toast.error(e?.message || "Error al eliminar el archivo.");
@@ -301,7 +317,7 @@ export default function ModpackDetail() {
                   animate={{ opacity: 1 }}
                 >
                   <button
-                    onClick={() => setSelectedModPath(null)}
+                    onClick={closeMod}
                     className="h-8 w-8 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors shrink-0"
                     aria-label="Volver al pack"
                   >
@@ -362,7 +378,17 @@ export default function ModpackDetail() {
         <div className="px-8 pt-4 pb-8 space-y-4">
           {!selectedModPath && <p className="text-base text-gray-300 max-w-3xl">{pack.description}</p>}
 
-          <div className="mt-4 bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-2xl p-4">
+          <div className="mt-4 bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-2xl p-4 overflow-hidden">
+            <AnimatePresence mode="wait" initial={false} custom={panelDirection}>
+              <motion.div
+                key={selectedModPath ? "mod" : "pack"}
+                custom={panelDirection}
+                variants={sweepVariants}
+                initial="enter"
+                animate="center"
+                exit="exit"
+                transition={{ duration: 0.22, ease: "easeOut" }}
+              >
             {selectedModPath && selectedCategory ? (
               <Tabs value={modDetailTab} onValueChange={(v) => setModDetailTab(v as ModDetailTab)}>
                 <TabsList className="bg-card/50 border border-white/5">
@@ -528,7 +554,7 @@ export default function ModpackDetail() {
                                 className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full"
                               >
                                 <div
-                                  onClick={() => match && setSelectedModPath(row.path)}
+                                  onClick={() => match && openMod(row.path)}
                                   className={`flex items-center gap-3 min-w-0 flex-1 ${match ? "cursor-pointer" : ""}`}
                                 >
                                   {match?.iconUrl ? (
@@ -590,6 +616,8 @@ export default function ModpackDetail() {
                 ))}
               </Tabs>
             )}
+              </motion.div>
+            </AnimatePresence>
           </div>
         </div>
       </div>
