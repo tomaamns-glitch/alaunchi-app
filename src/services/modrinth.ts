@@ -23,18 +23,28 @@ interface ModrinthProject {
   icon_url: string | null;
 }
 
+interface ModrinthVersionDependencyRaw {
+  project_id: string | null;
+  version_id: string | null;
+  dependency_type: "required" | "optional" | "incompatible" | "embedded";
+}
+
 interface ModrinthVersionFull {
   id: string;
   version_number: string;
   version_type: "release" | "beta" | "alpha";
   date_published: string;
   downloads: number;
+  dependencies: ModrinthVersionDependencyRaw[];
   files: Array<{ primary: boolean; filename: string; url: string; size: number; hashes: { sha1: string } }>;
 }
 
 interface ModrinthProjectFull {
   description: string;
+  body: string;
   categories: string[];
+  downloads: number;
+  followers: number;
   gallery: Array<{ url: string; title?: string; featured: boolean }>;
 }
 
@@ -120,6 +130,12 @@ export async function identifyModrinthFiles(entries: HashableFile[]): Promise<Ma
   return result;
 }
 
+export interface ModrinthVersionDependency {
+  projectId: string | null;
+  versionId: string | null;
+  dependencyType: "required" | "optional" | "incompatible" | "embedded";
+}
+
 export interface ModrinthUpdate {
   versionId: string;
   versionNumber: string;
@@ -130,6 +146,7 @@ export interface ModrinthUpdate {
   size: number;
   datePublished: string;
   downloads: number;
+  dependencies: ModrinthVersionDependency[];
 }
 
 /**
@@ -166,6 +183,11 @@ export async function listVersions(
           size: file.size,
           datePublished: v.date_published,
           downloads: v.downloads,
+          dependencies: (v.dependencies ?? []).map((d) => ({
+            projectId: d.project_id,
+            versionId: d.version_id,
+            dependencyType: d.dependency_type,
+          })),
         };
       })
       .filter((v): v is ModrinthUpdate => v !== null);
@@ -190,7 +212,10 @@ export async function getLatestVersion(
 
 export interface ModrinthProjectDetail {
   description: string;
+  body: string;
   categories: string[];
+  downloads: number;
+  followers: number;
   gallery: Array<{ url: string; title?: string }>;
 }
 
@@ -208,7 +233,10 @@ export async function getProjectDetail(projectId: string): Promise<ModrinthProje
     const p: ModrinthProjectFull = await res.json();
     const detail: ModrinthProjectDetail = {
       description: p.description,
+      body: p.body,
       categories: p.categories ?? [],
+      downloads: p.downloads ?? 0,
+      followers: p.followers ?? 0,
       gallery: (p.gallery ?? []).map((g) => ({ url: g.url, title: g.title })),
     };
     projectDetailCache.set(projectId, detail);
@@ -217,6 +245,32 @@ export async function getProjectDetail(projectId: string): Promise<ModrinthProje
     projectDetailCache.set(projectId, null);
     return null;
   }
+}
+
+export interface ModrinthDependency {
+  projectId: string;
+  title: string;
+  iconUrl: string | null;
+}
+
+/** Resolves a version's "required" dependencies into displayable project info. */
+export async function getRequiredDependencies(
+  dependencies: ModrinthVersionDependency[] | undefined
+): Promise<ModrinthDependency[]> {
+  if (!dependencies || dependencies.length === 0) return [];
+  const requiredIds = Array.from(
+    new Set(
+      dependencies
+        .filter((d) => d.dependencyType === "required" && d.projectId)
+        .map((d) => d.projectId as string)
+    )
+  );
+  if (requiredIds.length === 0) return [];
+  const projects = await lookupProjects(requiredIds);
+  return requiredIds
+    .map((id) => projects[id])
+    .filter((p): p is ModrinthProject => !!p)
+    .map((p) => ({ projectId: p.id, title: p.title, iconUrl: p.icon_url }));
 }
 
 export interface ModrinthSearchHit {

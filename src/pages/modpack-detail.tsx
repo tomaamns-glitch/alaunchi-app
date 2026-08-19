@@ -29,6 +29,7 @@ import {
   identifyModrinthFiles,
   getLatestVersion,
   getProjectDetail,
+  getRequiredDependencies,
   listVersions,
   searchProjects,
   SEARCH_PAGE_SIZE,
@@ -36,7 +37,12 @@ import {
   type ModrinthUpdate,
   type ModrinthProjectDetail,
   type ModrinthSearchHit,
+  type ModrinthDependency,
 } from "@/services/modrinth";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import {
   listInstanceFiles,
   deleteInstanceFile,
@@ -51,13 +57,31 @@ import { toast } from "sonner";
 import { SiModrinth } from "react-icons/si";
 
 type Category = "mods" | "shaderpacks" | "resourcepacks";
-type ModDetailTab = "description" | "gallery" | "versions";
+type ModDetailTab = "description" | "gallery" | "versions" | "dependencies";
 
 const CATEGORY_META: Record<Category, { label: string; icon: typeof Package }> = {
   mods: { label: "Mods", icon: Package },
   shaderpacks: { label: "Shaders", icon: Sparkles },
   resourcepacks: { label: "Resource Packs", icon: ImageIcon },
 };
+
+// Mod descriptions on Modrinth often embed raw HTML (social-button rows, centered
+// banners) — rehype-raw needs an explicit schema to keep it, and mod authors rely
+// on inline `style`/`align` for that layout, which the default sanitize schema strips.
+const MARKDOWN_SANITIZE_SCHEMA = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    "*": [...(defaultSchema.attributes?.["*"] ?? []), "style", "align"],
+  },
+};
+
+// A machine translator has no notion of markup — fed raw HTML it will happily
+// translate attribute names/values too (style="..." becomes estilo="...") and
+// break the markup. Skip auto-translation for descriptions that embed HTML.
+function containsHtml(text: string): boolean {
+  return /<[a-z][^>]*>/i.test(text);
+}
 
 // Stability color scale for a version's release channel — green is the most
 // stable (release), red the least (alpha) — with a single-letter badge.
@@ -140,6 +164,8 @@ export default function ModpackDetail() {
   const [modVersions, setModVersions] = useState<ModrinthUpdate[]>([]);
   const [translatedDescription, setTranslatedDescription] = useState<string | null>(null);
   const [showOriginalDescription, setShowOriginalDescription] = useState(false);
+  const [dependencies, setDependencies] = useState<ModrinthDependency[]>([]);
+  const [dependenciesLoading, setDependenciesLoading] = useState(false);
 
   // Browse/search Modrinth to install new content into the active category.
   const [activeCategory, setActiveCategory] = useState<Category>("mods");
@@ -251,13 +277,13 @@ export default function ModpackDetail() {
     };
   }, [selectedModPath]);
 
-  // Auto-translates the description to Spanish once it loads; falls back to the
-  // original silently if translation fails (unofficial keyless endpoint).
+  // Auto-translates the long-form description to Spanish once it loads; falls back
+  // to the original silently if translation fails (unofficial keyless endpoint).
   useEffect(() => {
     setShowOriginalDescription(false);
     setTranslatedDescription(null);
-    const text = projectDetail?.description;
-    if (!text || !text.trim()) return;
+    const text = projectDetail?.body;
+    if (!text || !text.trim() || containsHtml(text)) return;
     let cancelled = false;
     translateToSpanish(text).then((translated) => {
       if (!cancelled) setTranslatedDescription(translated);
@@ -266,6 +292,27 @@ export default function ModpackDetail() {
       cancelled = true;
     };
   }, [projectDetail]);
+
+  // Resolves the required-dependency projects for whichever version is "current"
+  // (the installed one if there is one, otherwise the latest compatible version).
+  useEffect(() => {
+    if (modVersions.length === 0) {
+      setDependencies([]);
+      return;
+    }
+    const currentVersionId = selectedModPath ? modrinthMatches.get(selectedModPath)?.versionId : undefined;
+    const current = modVersions.find((v) => v.versionId === currentVersionId) ?? modVersions[0];
+    let cancelled = false;
+    setDependenciesLoading(true);
+    getRequiredDependencies(current.dependencies).then((deps) => {
+      if (cancelled) return;
+      setDependencies(deps);
+      setDependenciesLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [modVersions, selectedModPath, modrinthMatches]);
 
   // Browse (empty query) or search Modrinth for the active category, debounced while typing.
   // Resets pagination — this is always page one of a fresh query/category.
@@ -511,26 +558,33 @@ export default function ModpackDetail() {
                       </div>
                     )}
                   </motion.div>
-                  <div className="min-w-0 space-y-2">
-                    <motion.h2 layoutId={`title-${selectedModPath}`} className="text-2xl font-bold text-white truncate">
-                      {selectedMatch.title}
-                    </motion.h2>
-                    <div className="flex flex-wrap items-center gap-2 text-sm">
-                      {selectedRow ? (
-                        <Badge variant="secondary">v{selectedMatch.versionNumber}</Badge>
-                      ) : (
-                        <Badge variant="outline">No instalado</Badge>
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex items-baseline gap-2 min-w-0">
+                      <motion.h2 layoutId={`title-${selectedModPath}`} className="text-2xl font-bold text-white truncate">
+                        {selectedMatch.title}
+                      </motion.h2>
+                      {selectedRow && (
+                        <span className="text-sm text-muted-foreground shrink-0">v{selectedMatch.versionNumber}</span>
                       )}
                     </div>
-                    {!!projectDetail?.categories?.length && (
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {projectDetail.categories.map((cat) => (
-                          <Badge key={cat} variant="outline" className="text-[10px] capitalize bg-accent/15 text-accent border-accent/30">
-                            {cat}
-                          </Badge>
-                        ))}
-                      </div>
+                    {!!projectDetail?.description && (
+                      <p className="text-sm text-gray-300">{projectDetail.description}</p>
                     )}
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                      <span>{(projectDetail?.downloads ?? 0).toLocaleString()} descargas</span>
+                      <span className="opacity-50">•</span>
+                      <span>{(projectDetail?.followers ?? 0).toLocaleString()} me gusta</span>
+                      {!!projectDetail?.categories?.length && (
+                        <>
+                          <span className="opacity-50">•</span>
+                          {projectDetail.categories.map((cat) => (
+                            <Badge key={cat} variant="outline" className="text-[10px] capitalize bg-accent/15 text-accent border-accent/30">
+                              {cat}
+                            </Badge>
+                          ))}
+                        </>
+                      )}
+                    </div>
                   </div>
                 </motion.div>
               ) : searchMode ? (
@@ -647,6 +701,9 @@ export default function ModpackDetail() {
                     <TabsTrigger value="versions" className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5">
                       <List className="h-3.5 w-3.5" /> Versiones
                     </TabsTrigger>
+                    <TabsTrigger value="dependencies" className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5">
+                      <Package className="h-3.5 w-3.5" /> Dependencias
+                    </TabsTrigger>
                   </TabsList>
                   <AnimatePresence>
                     {modDetailTab === "description" && translatedDescription && (
@@ -669,11 +726,17 @@ export default function ModpackDetail() {
                     <div className="flex items-center justify-center py-16 text-muted-foreground">
                       <Loader2 className="h-5 w-5 animate-spin mr-2" /> Cargando...
                     </div>
+                  ) : projectDetail?.body ? (
+                    <div className="prose prose-sm prose-invert max-w-none prose-img:rounded-md prose-a:text-accent">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        rehypePlugins={[rehypeRaw, [rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA]]}
+                      >
+                        {(showOriginalDescription ? projectDetail.body : translatedDescription ?? projectDetail.body)}
+                      </ReactMarkdown>
+                    </div>
                   ) : (
-                    <p className="text-sm text-gray-300 whitespace-pre-line">
-                      {(showOriginalDescription ? projectDetail?.description : translatedDescription ?? projectDetail?.description) ||
-                        "Sin descripción."}
-                    </p>
+                    <p className="text-sm text-gray-300">Sin descripción.</p>
                   )}
                 </TabsContent>
 
@@ -769,6 +832,35 @@ export default function ModpackDetail() {
                           );
                         })}
                       </div>
+                    </div>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="dependencies" className="mt-4">
+                  {dependenciesLoading ? (
+                    <div className="flex items-center justify-center py-16 text-muted-foreground">
+                      <Loader2 className="h-5 w-5 animate-spin mr-2" /> Cargando...
+                    </div>
+                  ) : dependencies.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+                      <Package className="h-6 w-6" />
+                      <p className="text-sm">Este contenido no necesita otros mods para funcionar.</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-1.5">
+                      {dependencies.map((dep) => (
+                        <div key={dep.projectId} className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full">
+                          {dep.iconUrl ? (
+                            <img src={dep.iconUrl} alt="" className="h-8 w-8 rounded shrink-0 object-cover bg-black/30" />
+                          ) : (
+                            <div className="h-8 w-8 rounded shrink-0 bg-black/30 flex items-center justify-center">
+                              <Package className="h-4 w-4 text-muted-foreground" />
+                            </div>
+                          )}
+                          <p className="text-gray-100 font-medium text-sm truncate flex-1 min-w-0">{dep.title}</p>
+                          <Badge variant="outline" className="text-[10px] shrink-0">Obligatoria</Badge>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </TabsContent>

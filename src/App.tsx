@@ -7,6 +7,7 @@ import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
 import Home from "@/pages/home";
 import Admin from "@/pages/admin";
+import AdminModpack from "@/pages/admin-modpack";
 import Settings from "@/pages/settings";
 import ModpackDetail from "@/pages/modpack-detail";
 import { Titlebar } from "@/components/titlebar";
@@ -19,6 +20,7 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/login" component={Login} />
       <Route path="/admin" component={Admin} />
+      <Route path="/admin/:id" component={AdminModpack} />
       <Route path="/settings" component={Settings} />
       <Route path="/modpack/:id" component={ModpackDetail} />
       <Route component={NotFound} />
