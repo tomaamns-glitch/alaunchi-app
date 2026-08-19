@@ -3,3 +3,13 @@ dist/
 release/
 *.log
 .DS_Store
+
+# Stray Minecraft runtime data — a game launch used this folder as its working
+# directory instead of an isolated instance dir; none of this is app source.
+/config/
+/customnpcs/
+/logs/
+/patchouli_books/
+/schematics/
+/patchouli_data.json
+hs_err_pid*.log

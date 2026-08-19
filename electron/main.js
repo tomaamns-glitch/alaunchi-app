@@ -233,6 +233,19 @@ function createWindow() {
     win.show();
   });
 
+  // Links inside rendered mod descriptions (Discord/GitHub/etc.) must open in the
+  // user's real browser, not navigate the launcher's own window away from the app.
+  const isAppUrl = (url) => (isDev ? url.startsWith("http://localhost:5173") : url.startsWith("file://"));
+  win.webContents.on("will-navigate", (event, url) => {
+    if (isAppUrl(url)) return;
+    event.preventDefault();
+    shell.openExternal(url);
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (!isAppUrl(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+
   if (isDev) {
     win.loadURL("http://localhost:5173");
     win.webContents.openDevTools({ mode: "detach" });

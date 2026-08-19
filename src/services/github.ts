@@ -41,6 +41,7 @@ export interface SnapshotManifest {
   publishedAt: string;
   objectsTag: string;
   files: SnapshotEntry[];
+  changelog?: string;
 }
 
 export interface ParsedRepo {
@@ -59,6 +60,84 @@ export function parseRepo(repoUrl: string): ParsedRepo | null {
 
 function rawUrl(owner: string, repo: string, filePath: string, branch = "main"): string {
   return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+}
+
+interface MinimalResponse {
+  status: number;
+  ok: boolean;
+  text(): Promise<string>;
+  headers: { get(name: string): string | null };
+}
+
+/**
+ * Uploads a release asset via XHR (not fetch) specifically so we get real upload
+ * progress events — that's what lets the timeout below be an *inactivity* timeout
+ * (no bytes moving for N seconds) instead of a total-duration one. A total-duration
+ * timeout has to guess a minimum throughput, and guesses too low, a big-but-healthy
+ * upload gets killed; too high, a genuinely stalled one hangs for ages. Progress
+ * events sidestep the guess entirely: the timer only fires on true silence.
+ */
+function uploadAssetXhr(url: string, token: string, body: ArrayBuffer, inactivityMs = 25_000): Promise<MinimalResponse> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+
+    let timer: ReturnType<typeof setTimeout>;
+    const resetTimer = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => xhr.abort(), inactivityMs);
+    };
+    resetTimer();
+
+    xhr.upload.onprogress = resetTimer;
+    xhr.onload = () => {
+      clearTimeout(timer);
+      resolve({
+        status: xhr.status,
+        ok: xhr.status >= 200 && xhr.status < 300,
+        text: async () => xhr.responseText,
+        headers: { get: (name) => xhr.getResponseHeader(name) },
+      });
+    };
+    xhr.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("Error de red durante la subida."));
+    };
+    xhr.onabort = () => {
+      clearTimeout(timer);
+      const err = new Error("upload stalled");
+      err.name = "AbortError";
+      reject(err);
+    };
+    xhr.send(body);
+  });
+}
+
+/**
+ * GitHub's secondary rate limit (403, "You have exceeded a secondary rate limit")
+ * fires when too many write requests land close together — exactly what our parallel
+ * upload workers do on a big modpack. GitHub's own docs say to back off and retry, so
+ * do that automatically instead of failing the whole publish over a transient limit.
+ */
+async function withRateLimitRetry<T extends MinimalResponse>(
+  attempt: () => Promise<T>,
+  onWaiting?: (waitSeconds: number, tryNum: number) => void
+): Promise<T> {
+  const MAX_ATTEMPTS = 6;
+  for (let tryNum = 1; ; tryNum++) {
+    const res = await attempt();
+    if (res.status !== 403) return res;
+    const text = await res.text();
+    if (!/secondary rate limit/i.test(text) || tryNum >= MAX_ATTEMPTS) {
+      throw new Error(`GitHub 403: ${text.slice(0, 300)}`);
+    }
+    const retryAfterHeader = res.headers.get("retry-after");
+    const waitSeconds = retryAfterHeader ? parseInt(retryAfterHeader, 10) : Math.min(20 * tryNum, 120);
+    onWaiting?.(waitSeconds, tryNum);
+    await new Promise((r) => setTimeout(r, waitSeconds * 1000));
+  }
 }
 
 async function ghApiFetch(
@@ -234,22 +313,36 @@ export interface PublishProgress {
   reusedFromGitHub?: number;
 }
 
-export async function publishSnapshot(
+export interface ModpackUpdatePlan {
+  /** Existing manifest entries carried forward unchanged — not re-hashed or re-uploaded. */
+  unchanged: SnapshotEntry[];
+  /** Brand-new files, or replacement content for an existing path — the only ones hashed/uploaded. */
+  files: WalkedFile[];
+}
+
+/**
+ * Publishes a new version from an explicit add/remove/replace diff against what's
+ * currently published, instead of re-hashing an entire folder every time. Only
+ * `plan.files` (added or replaced content) is hashed and uploaded; `plan.unchanged`
+ * entries are carried into the new manifest as-is.
+ */
+export async function publishModpackUpdate(
   token: string,
   repoUrl: string,
   modpackId: string,
-  files: WalkedFile[],
+  plan: ModpackUpdatePlan,
   newVersion: string,
+  changelog: string | undefined,
   onProgress: (p: PublishProgress) => void
 ): Promise<{ uploaded: number; reused: number; totalFiles: number; totalBytes: number }> {
   const parsed = parseRepo(repoUrl);
   if (!parsed) throw new Error("URL de repositorio no válida.");
   if (!token) throw new Error("Necesitas un token de GitHub con permiso 'repo' en Ajustes.");
   if (!newVersion) throw new Error("Indica el número de versión a publicar.");
-  if (files.length === 0) throw new Error("La carpeta seleccionada está vacía.");
+  const { files } = plan;
   const { owner, repo } = parsed;
 
-  // 1. Hash all files in parallel
+  // 1. Hash the changed files in parallel (unchanged entries already carry their hash).
   const entries: SnapshotEntry[] = new Array(files.length);
   let hashed = 0;
   onProgress({ stage: "hashing", done: 0, total: files.length });
@@ -300,16 +393,48 @@ export async function publishSnapshot(
   }
   const uploadBase = (release.upload_url as string).replace("{?name,label}", "");
 
-  // 3. List existing assets (asset name = hash, so we know what's already uploaded)
+  // 3. List existing assets (asset name = hash, so we know what's already uploaded).
+  // A modpack's objects release can hold thousands of assets after a few publishes —
+  // fetch page 1 first to read the total page count off the Link header, then fetch
+  // the rest in parallel instead of one page at a time (which used to make even a
+  // single-file update sit through the whole history before it could start uploading).
   const existingHashes = new Set<string>();
-  for (let page = 1; ; page++) {
-    const batch: any[] = await ghApiFetch(
-      `/repos/${owner}/${repo}/releases/${release.id}/assets?per_page=100&page=${page}`,
-      token
+  async function fetchAssetsPage(pageNum: number): Promise<{ items: any[]; linkHeader: string | null }> {
+    const res = await withRateLimitRetry(() =>
+      fetch(
+        `https://api.github.com/repos/${owner}/${repo}/releases/${release.id}/assets?per_page=100&page=${pageNum}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+        }
+      )
     );
-    if (!Array.isArray(batch) || batch.length === 0) break;
-    for (const a of batch) existingHashes.add(a.name);
-    if (batch.length < 100) break;
+    if (!res.ok) throw new Error(`Error listando assets del release (${res.status})`);
+    return { items: await res.json(), linkHeader: res.headers.get("link") };
+  }
+
+  const first = await fetchAssetsPage(1);
+  for (const a of first.items) existingHashes.add(a.name);
+  let lastPage = 1;
+  const lastMatch = first.linkHeader?.match(/[?&]page=(\d+)[^>]*>;\s*rel="last"/);
+  if (lastMatch) lastPage = parseInt(lastMatch[1], 10);
+
+  if (lastPage > 1) {
+    const remainingPages = Array.from({ length: lastPage - 1 }, (_, i) => i + 2);
+    let pageIdx = 0;
+    const LIST_CONC = 6;
+    async function listWorker() {
+      while (true) {
+        const i = pageIdx++;
+        if (i >= remainingPages.length) return;
+        const { items } = await fetchAssetsPage(remainingPages[i]);
+        for (const a of items) existingHashes.add(a.name);
+      }
+    }
+    await Promise.all(Array.from({ length: LIST_CONC }, () => listWorker()));
   }
 
   // 4. Dedupe by hash; upload only what's missing.
@@ -339,61 +464,131 @@ export async function publishSnapshot(
     reusedFromGitHub: reused,
   });
 
+  // Uploads one file, retrying network-level failures (a stalled connection — 5s with
+  // zero progress — or a dropped connection) in place instead of giving up on the whole
+  // batch. Each retry reuses the same hash, so it's always safe: GitHub either accepts
+  // it fresh or tells us (422) it's already there from an earlier attempt.
+  async function uploadOneFile(u: { hash: string; file: File }): Promise<"uploaded" | "reused"> {
+    const ab = await u.file.arrayBuffer();
+    const url = `${uploadBase}?name=${encodeURIComponent(u.hash)}`;
+    const MAX_FILE_RETRIES = 4;
+    let res: MinimalResponse | null = null;
+    let lastErr: any = null;
+    for (let attempt = 1; attempt <= MAX_FILE_RETRIES; attempt++) {
+      try {
+        res = await withRateLimitRetry(
+          () => uploadAssetXhr(url, token, ab, 5_000),
+          (waitSeconds, tryNum) =>
+            onProgress({
+              stage: "uploading",
+              done: uploaded,
+              total: toUpload.length,
+              currentFile: `Límite de GitHub alcanzado, esperando ${waitSeconds}s antes de reintentar (${tryNum})...`,
+              reusedFromGitHub: reused,
+            })
+        );
+        break;
+      } catch (e: any) {
+        lastErr = e;
+        if (attempt < MAX_FILE_RETRIES) {
+          onProgress({
+            stage: "uploading",
+            done: uploaded,
+            total: toUpload.length,
+            currentFile: `${u.file.name}: sin respuesta, reconectando (intento ${attempt + 1}/${MAX_FILE_RETRIES})...`,
+            reusedFromGitHub: reused,
+          });
+          await new Promise((r) => setTimeout(r, 1000 * attempt));
+        }
+      }
+    }
+    if (!res) {
+      throw lastErr ?? new Error(`No se pudo subir ${u.file.name} tras ${MAX_FILE_RETRIES} intentos.`);
+    }
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      // 422 on this endpoint: our asset name is always a valid SHA-256 hex string with a
+      // real octet-stream body, so GitHub has no other plausible validation complaint here —
+      // it means an asset with this name (i.e. this exact content) already exists, uploaded
+      // between our listing call and now (a concurrent publish, or an earlier retried attempt).
+      // Matching GitHub's exact wording is brittle; any 422 here means "already there".
+      if (res.status === 422) return "reused";
+      throw new Error(`Error subiendo objeto ${u.hash.slice(0, 8)} (${res.status}): ${txt.slice(0, 160)}`);
+    }
+    return "uploaded";
+  }
+
   let upIdx = 0;
-  const UP_CONC = 4;
+  // GitHub's own guidance for write endpoints is to avoid concurrent requests — 4 was
+  // enough to trip the secondary rate limit on a big modpack's worth of uploads.
+  const UP_CONC = 2;
+  const failedFiles: string[] = [];
+  // If one file fails for good, the next one starting fresh right after it is no
+  // slower to detect a REAL outage — it just repeats the same ~25s of retries before
+  // also giving up, making a dropped connection look like it's failing file after
+  // file forever. Shared across workers: once several fail back-to-back, assume the
+  // connection itself is down and pause for real instead of hammering it per file.
+  let consecutiveFailures = 0;
   async function uploadWorker() {
     while (true) {
       const i = upIdx++;
       if (i >= toUpload.length) return;
       const u = toUpload[i];
-      const ab = await u.file.arrayBuffer();
-      const res = await fetch(`${uploadBase}?name=${encodeURIComponent(u.hash)}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/octet-stream",
-        },
-        body: ab,
-      });
-      if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        // 422 already_exists: another publisher uploaded the same hash between listing and now.
-        // Since the asset name IS the content hash, an existing asset with this name is correct by definition.
-        if (res.status === 422 && /already_exists/i.test(txt)) {
-          uploaded++;
-          onProgress({
-            stage: "uploading",
-            done: uploaded,
-            total: toUpload.length,
-            currentFile: u.file.name,
-            reusedFromGitHub: reused,
-          });
-          continue;
-        }
-        throw new Error(
-          `Error subiendo objeto ${u.hash.slice(0, 8)} (${res.status}): ${txt.slice(0, 160)}`
-        );
+
+      if (consecutiveFailures >= 3) {
+        const cooldownSeconds = Math.min(30 * (consecutiveFailures - 2), 180);
+        onProgress({
+          stage: "uploading",
+          done: uploaded,
+          total: toUpload.length,
+          currentFile: `Varios archivos seguidos sin respuesta — parece que se cortó la conexión. Esperando ${cooldownSeconds}s antes de seguir...`,
+          reusedFromGitHub: reused,
+        });
+        await new Promise((r) => setTimeout(r, cooldownSeconds * 1000));
       }
-      uploaded++;
-      onProgress({
-        stage: "uploading",
-        done: uploaded,
-        total: toUpload.length,
-        currentFile: u.file.name,
-        reusedFromGitHub: reused,
-      });
+
+      try {
+        await uploadOneFile(u);
+        uploaded++;
+        consecutiveFailures = 0;
+        onProgress({ stage: "uploading", done: uploaded, total: toUpload.length, currentFile: u.file.name, reusedFromGitHub: reused });
+      } catch (e: any) {
+        // One file failing for good (after retries) shouldn't throw away everything
+        // else already in flight or already uploaded — keep this worker going and
+        // report the failure at the end instead.
+        consecutiveFailures++;
+        failedFiles.push(u.file.name);
+        onProgress({
+          stage: "uploading",
+          done: uploaded,
+          total: toUpload.length,
+          currentFile: `${u.file.name}: falló definitivamente (${e?.message ?? "error"})`,
+          reusedFromGitHub: reused,
+        });
+      }
     }
   }
   await Promise.all(Array.from({ length: UP_CONC }, () => uploadWorker()));
 
-  // 5. Write manifest
+  if (failedFiles.length > 0) {
+    throw new Error(
+      `${failedFiles.length} archivo(s) no se pudieron subir tras varios intentos: ${failedFiles.slice(0, 5).join(", ")}` +
+        (failedFiles.length > 5 ? "..." : "") +
+        `. El resto sí se subió — vuelve a lanzar la actualización, se reintentará solo lo que falta.`
+    );
+  }
+
+  // 5. Merge hashed adds/replacements with carried-forward entries, then write the manifest.
+  const allEntries = [...plan.unchanged, ...entries].sort((a, b) => a.path.localeCompare(b.path));
   onProgress({ stage: "manifest", done: 0, total: 1 });
+  const trimmedChangelog = changelog?.trim();
   const manifest: SnapshotManifest = {
     schemaVersion: 2,
     version: newVersion,
     publishedAt: new Date().toISOString(),
     objectsTag,
-    files: entries.sort((a, b) => a.path.localeCompare(b.path)),
+    files: allEntries,
+    ...(trimmedChangelog ? { changelog: trimmedChangelog } : {}),
   };
   const manifestPath = `modpacks/${modpackId}/manifest.json`;
   const existingManifest = await getFileContents(owner, repo, manifestPath, token);
@@ -402,15 +597,15 @@ export async function publishSnapshot(
     repo,
     manifestPath,
     JSON.stringify(manifest, null, 2),
-    `Publish ${modpackId} v${newVersion}`,
+    `Publish ${modpackId} v${newVersion}` + (trimmedChangelog ? `\n\n${trimmedChangelog}` : ""),
     token,
     existingManifest?.sha
   );
 
   // 6. Update modpacks.json (version, fileCount, totalSizeMb)
-  const totalBytes = entries.reduce((s, e) => s + e.size, 0);
+  const totalBytes = allEntries.reduce((s, e) => s + e.size, 0);
   const totalSizeMb = parseFloat((totalBytes / 1_048_576).toFixed(2));
-  const fileCount = entries.length;
+  const fileCount = allEntries.length;
   const modpacksFile = await getFileContents(owner, repo, "modpacks.json", token);
   if (!modpacksFile) {
     throw new Error(
@@ -439,7 +634,7 @@ export async function publishSnapshot(
   );
 
   onProgress({ stage: "done", done: 1, total: 1, reusedFromGitHub: reused });
-  return { uploaded: toUpload.length, reused, totalFiles: entries.length, totalBytes };
+  return { uploaded: toUpload.length, reused, totalFiles: allEntries.length, totalBytes };
 }
 
 export async function createModpack(
