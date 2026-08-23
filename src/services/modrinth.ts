@@ -279,6 +279,7 @@ export interface ModrinthSearchHit {
   description: string;
   iconUrl: string | null;
   downloads: number;
+  follows: number;
 }
 
 interface ModrinthSearchResponse {
@@ -288,8 +289,11 @@ interface ModrinthSearchResponse {
     description: string;
     icon_url: string | null;
     downloads: number;
+    follows: number;
   }>;
 }
+
+export type ModrinthSort = "relevance" | "downloads" | "follows" | "newest";
 
 const PROJECT_TYPE: Record<"mods" | "shaderpacks" | "resourcepacks", string> = {
   mods: "mod",
@@ -312,15 +316,18 @@ export async function searchProjects(
   loader: string,
   gameVersion: string,
   offset = 0,
-  limit = SEARCH_PAGE_SIZE
+  limit = SEARCH_PAGE_SIZE,
+  sort: ModrinthSort = "relevance",
+  genreCategory?: string | null
 ): Promise<ModrinthSearchHit[]> {
   try {
     const facets = [[`project_type:${PROJECT_TYPE[category]}`], [`versions:${gameVersion}`]];
     if (category === "mods") facets.push([`categories:${loader}`]);
+    if (genreCategory) facets.push([`categories:${genreCategory}`]);
     const params = new URLSearchParams({
       query,
       facets: JSON.stringify(facets),
-      index: query.trim() ? "relevance" : "downloads",
+      index: sort,
       offset: String(offset),
       limit: String(limit),
     });
@@ -333,7 +340,37 @@ export async function searchProjects(
       description: h.description,
       iconUrl: h.icon_url,
       downloads: h.downloads,
+      follows: h.follows,
     }));
+  } catch {
+    return [];
+  }
+}
+
+interface ModrinthCategoryTag {
+  name: string;
+  project_type: string;
+  header: string;
+}
+
+const categoryTagsCache = new Map<string, string[]>();
+
+/**
+ * The genre/theme category tags Modrinth offers for a project type (e.g.
+ * "adventure", "magic", "technology"...) — excludes the other tag groups the
+ * same endpoint returns (loaders, shader performance impact, pack resolutions).
+ */
+export async function fetchCategoryTags(category: "mods" | "shaderpacks" | "resourcepacks"): Promise<string[]> {
+  const projectType = PROJECT_TYPE[category];
+  const cached = categoryTagsCache.get(projectType);
+  if (cached) return cached;
+  try {
+    const res = await fetch(`${API}/tag/category`);
+    if (!res.ok) return [];
+    const tags: ModrinthCategoryTag[] = await res.json();
+    const names = tags.filter((t) => t.project_type === projectType && t.header === "categories").map((t) => t.name);
+    categoryTagsCache.set(projectType, names);
+    return names;
   } catch {
     return [];
   }

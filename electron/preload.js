@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   maximize: () => ipcRenderer.send("window-maximize"),
   close: () => ipcRenderer.send("window-close"),
   isMaximized: () => ipcRenderer.invoke("window:is-maximized"),
+  focusWindow: () => ipcRenderer.send("app:focus-window"),
   onMaximizedChange: (callback) => {
     const handler = (_, maximized) => callback(maximized);
     ipcRenderer.on("window-maximized-change", handler);
@@ -35,7 +36,19 @@ contextBridge.exposeInMainWorld("electronAPI", {
   minecraftAuth: (args) => ipcRenderer.invoke("ms:mc-auth", args),
   getMinecraftProfile: (args) => ipcRenderer.invoke("ms:mc-profile", args),
 
+  // Skin manager
+  getSkinProfile: (args) => ipcRenderer.invoke("mc:get-skin-profile", args),
+  changeSkin: (args) => ipcRenderer.invoke("mc:change-skin", args),
+  setCape: (args) => ipcRenderer.invoke("mc:set-cape", args),
+  skinLibraryList: () => ipcRenderer.invoke("mc:skin-library-list"),
+  skinLibrarySave: (args) => ipcRenderer.invoke("mc:skin-library-save", args),
+  skinLibraryDelete: (args) => ipcRenderer.invoke("mc:skin-library-delete", args),
+  fetchTextureB64: (args) => ipcRenderer.invoke("mc:fetch-texture-b64", args),
+
   // File system / settings
+  openInstanceFolder: (args) => ipcRenderer.invoke("mc:open-instance-folder", args),
+  purgeXrayFiles: (args) => ipcRenderer.invoke("mc:purge-xray-files", args),
+  listEmotes: (args) => ipcRenderer.invoke("mc:list-emotes", args),
   readSettings: () => ipcRenderer.invoke("fs:read-settings"),
   writeSettings: (settings) => ipcRenderer.invoke("fs:write-settings", settings),
   readAuth: () => ipcRenderer.invoke("fs:read-auth"),
@@ -48,6 +61,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // GitHub
   fetchModpacks: (args) => ipcRenderer.invoke("github:fetch-modpacks", args),
   createRelease: (args) => ipcRenderer.invoke("github:create-release", args),
+
+  // App info / error reporting
+  getAppVersion: () => ipcRenderer.invoke("app:get-version"),
+  onAppError: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("app:error", handler);
+    return () => ipcRenderer.removeListener("app:error", handler);
+  },
 
   // Auto-update
   checkForUpdate: () => ipcRenderer.invoke("update:check"),
@@ -74,5 +95,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     const handler = (_, data) => callback(data);
     ipcRenderer.on("java-install-progress", handler);
     return () => ipcRenderer.removeListener("java-install-progress", handler);
+  },
+  onPlaytimeSessionEnded: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("playtime:session-ended", handler);
+    return () => ipcRenderer.removeListener("playtime:session-ended", handler);
   },
 });

@@ -31,6 +31,7 @@ const emptyForm = (): NewModpackData => ({
   version: "1.0.0",
   imageUrl: "",
   bannerUrl: "",
+  antiXray: false,
 });
 
 export default function Admin() {

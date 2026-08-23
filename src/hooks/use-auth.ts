@@ -10,6 +10,10 @@ interface AuthState {
   mcToken: string | null;
   email: string | null;
   isRefreshing: boolean;
+  /** True once loadPersistedAuth has resolved at least once. Pages gate their
+   *  render/redirect logic on this so a returning user's session isn't lost
+   *  in a flash of the login screen while the check is still in flight. */
+  authChecked: boolean;
   setAuth: (data: AuthData) => Promise<void>;
   logout: () => Promise<void>;
   loadPersistedAuth: () => Promise<void>;
@@ -69,37 +73,42 @@ export const useAuth = create<AuthState>((set) => ({
   mcToken: null,
   email: null,
   isRefreshing: false,
+  authChecked: false,
 
   loadPersistedAuth: async () => {
-    const data = await readAuthData();
-    if (!data) return;
+    try {
+      const data = await readAuthData();
+      if (!data) return;
 
-    const refreshTokenStillValid =
-      data.msRefreshToken && data.msRefreshTokenExpiresAt > Date.now();
+      const refreshTokenStillValid =
+        data.msRefreshToken && data.msRefreshTokenExpiresAt > Date.now();
 
-    if (!mcTokenIsExpiredOrNearExpiry(data)) {
-      set(applyToState(data));
-      return;
-    }
+      if (!mcTokenIsExpiredOrNearExpiry(data)) {
+        set(applyToState(data));
+        return;
+      }
 
-    if (!refreshTokenStillValid) {
-      // Token expired and no way to refresh — force re-login.
-      await writeAuthData({ ...data, mcToken: "", mcTokenExpiresAt: 0 });
-      set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, email: null, isRefreshing: false });
-      return;
-    }
+      if (!refreshTokenStillValid) {
+        // Token expired and no way to refresh — force re-login.
+        await writeAuthData({ ...data, mcToken: "", mcTokenExpiresAt: 0 });
+        set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, email: null, isRefreshing: false });
+        return;
+      }
 
-    set({ isRefreshing: true });
-    const refreshed = await silentRefresh(data);
+      set({ isRefreshing: true });
+      const refreshed = await silentRefresh(data);
 
-    if (refreshed) {
-      await writeAuthData(refreshed);
-      set(applyToState(refreshed));
-    } else {
-      // Token expired and refresh failed — invalidate the session so the user
-      // is forced to log in again instead of launching with a stale token.
-      await writeAuthData({ ...data, mcToken: "", mcTokenExpiresAt: 0 });
-      set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, email: null, isRefreshing: false });
+      if (refreshed) {
+        await writeAuthData(refreshed);
+        set(applyToState(refreshed));
+      } else {
+        // Token expired and refresh failed — invalidate the session so the user
+        // is forced to log in again instead of launching with a stale token.
+        await writeAuthData({ ...data, mcToken: "", mcTokenExpiresAt: 0 });
+        set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, email: null, isRefreshing: false });
+      }
+    } finally {
+      set({ authChecked: true });
     }
   },
 

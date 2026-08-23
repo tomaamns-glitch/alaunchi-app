@@ -1,6 +1,8 @@
+import { useEffect } from "react";
 import { Switch, Route, Router as WouterRouter } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Loader2 } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
@@ -11,8 +13,29 @@ import AdminModpack from "@/pages/admin-modpack";
 import Settings from "@/pages/settings";
 import ModpackDetail from "@/pages/modpack-detail";
 import { Titlebar } from "@/components/titlebar";
+import { ErrorBoundary } from "@/components/error-boundary";
+import { useAuth } from "@/hooks/use-auth";
 
 const queryClient = new QueryClient();
+
+// Shown while the initial session check (reading the persisted Microsoft/MC
+// auth from disk) is in flight, so a returning user never sees a flash of the
+// login screen before landing back on the home page.
+function AppSplash() {
+  return (
+    <div className="h-full w-full flex flex-col items-center justify-center gap-4 bg-background">
+      <img
+        src="/logo.png"
+        alt="ALaunchi"
+        className="h-14 object-contain opacity-90"
+        onError={(e) => {
+          e.currentTarget.style.display = "none";
+        }}
+      />
+      <Loader2 className="h-5 w-5 animate-spin text-accent" />
+    </div>
+  );
+}
 
 function Router() {
   return (
@@ -29,6 +52,13 @@ function Router() {
 }
 
 function App() {
+  const authChecked = useAuth((s) => s.authChecked);
+  const loadPersistedAuth = useAuth((s) => s.loadPersistedAuth);
+
+  useEffect(() => {
+    loadPersistedAuth();
+  }, [loadPersistedAuth]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -36,7 +66,9 @@ function App() {
           <div className="h-screen flex flex-col overflow-hidden">
             <Titlebar />
             <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-              <Router />
+              <ErrorBoundary>
+                {authChecked ? <Router /> : <AppSplash />}
+              </ErrorBoundary>
             </div>
           </div>
         </WouterRouter>

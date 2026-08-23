@@ -99,3 +99,59 @@ export async function updateInstanceFile(
 export async function downloadInstanceFile(modpackId: string, path: string, url: string, sha1?: string): Promise<void> {
   if (isElectron) await eAPI.downloadInstanceFile({ modpackId, path, url, sha1 });
 }
+
+/** Opens an installed instance's folder in the OS file explorer. */
+export async function openInstanceFolder(modpackId: string): Promise<void> {
+  if (isElectron) await eAPI.openInstanceFolder({ modpackId });
+}
+
+export interface EmoteFile {
+  fileName: string;
+  displayName: string;
+  /** Base64 PNG thumbnail extracted from the .emotecraft file, if it embeds one. */
+  thumbnailBase64: string | null;
+}
+
+/** Lists the Emotecraft (.emotecraft) files in an installed instance's emotes/ folder. */
+export async function listEmotes(modpackId: string): Promise<EmoteFile[]> {
+  if (!isElectron) return [];
+  return eAPI.listEmotes({ modpackId });
+}
+
+/** Deletes any "xray"-named file from an installed instance's content folders.
+ *  Returns the relative paths actually removed, for a toast. */
+export async function purgeXrayFiles(modpackId: string): Promise<string[]> {
+  if (!isElectron) return [];
+  const result = await eAPI.purgeXrayFiles({ modpackId });
+  return result?.deletedFiles ?? [];
+}
+
+/** Raw per-instance metadata (installed version, playtime, etc.), keyed by modpack id. */
+export async function getInstalledModpacksMeta(): Promise<Record<string, any>> {
+  if (!isElectron) return {};
+  return eAPI.getInstalledModpacks();
+}
+
+/** Brings the window back to the front — used when a background presence
+ *  notification is clicked while the app is hidden in the tray. */
+export function focusWindow(): void {
+  if (isElectron) eAPI.focusWindow();
+}
+
+export async function getAppVersion(): Promise<string> {
+  if (!isElectron) return "";
+  return eAPI.getAppVersion();
+}
+
+/** Errors caught in the main process (it has no GitHub token, so it can't report them itself). */
+export function onAppError(callback: (data: { context: string; message: string; stack: string | null }) => void): () => void {
+  if (!isElectron) return () => {};
+  return eAPI.onAppError(callback);
+}
+
+/** Fired when the playtime watcher in the main process detects a tracked Minecraft
+ *  process has exited — the renderer's cue to mark itself offline in presence. */
+export function onPlaytimeSessionEnded(callback: (data: { modpackId: string }) => void): () => void {
+  if (!isElectron) return () => {};
+  return eAPI.onPlaytimeSessionEnded(callback);
+}

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, dialog, Tray, Menu, nativeImage } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs/promises");
@@ -9,9 +9,16 @@ const { spawn, exec } = require("child_process");
 const { promisify } = require("util");
 const crypto = require("crypto");
 const os = require("os");
+const dns = require("dns");
 const AdmZip = require("adm-zip");
 
 const execAsync = promisify(exec);
+
+// Prefer IPv4 for all outbound requests. On networks where IPv6 is advertised but
+// not actually routed (common with some ISP routers), Node's default resolution
+// order can hand https.request an IPv6 address that hangs until it times out
+// before ever trying IPv4 — every download/API call in this file inherits this.
+dns.setDefaultResultOrder("ipv4first");
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -20,8 +27,27 @@ const isDev = process.env.NODE_ENV === "development";
 // the app in a broken state. Log it instead — individual operations (downloads,
 // IPC handlers) already reject their own promises, so the caller in the renderer
 // gets a proper error toast rather than the whole app appearing to crash.
+//
+// Also forward it to the renderer so it can be reported (renderer holds the GitHub
+// token; main process never sees it — same reasoning as the texture/skin proxy).
+function forwardErrorToRenderer(context, err) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("app:error", {
+    context,
+    message: err?.message || String(err),
+    stack: err?.stack || null,
+  });
+}
+
 process.on("uncaughtException", (err) => {
   console.error("[uncaughtException]", err);
+  forwardErrorToRenderer("main:uncaughtException", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  console.error("[unhandledRejection]", err);
+  forwardErrorToRenderer("main:unhandledRejection", err);
 });
 
 // ─── CONFIGURACIÓN DEL LAUNCHER ────────────────────────────────────────────
@@ -51,6 +77,8 @@ const INSTANCES_DIR = path.join(APP_DATA_DIR, "instances");
 const CACHE_DIR = path.join(APP_DATA_DIR, "cache");
 const JAVA_DIR = path.join(APP_DATA_DIR, "java");
 const OBJECTS_DIR = path.join(APP_DATA_DIR, "objects");
+const SKIN_LIBRARY_DIR = path.join(APP_DATA_DIR, "skin-library");
+const SKIN_LIBRARY_INDEX = path.join(SKIN_LIBRARY_DIR, "index.json");
 
 async function ensureDirs() {
   await fs.mkdir(APP_DATA_DIR, { recursive: true });
@@ -58,6 +86,7 @@ async function ensureDirs() {
   await fs.mkdir(CACHE_DIR, { recursive: true });
   await fs.mkdir(JAVA_DIR, { recursive: true });
   await fs.mkdir(OBJECTS_DIR, { recursive: true });
+  await fs.mkdir(SKIN_LIBRARY_DIR, { recursive: true });
 }
 
 const HASH_RE = /^[a-f0-9]{64}$/;
@@ -260,6 +289,12 @@ function createWindow() {
   });
   ipcMain.on("window-close", () => win.close());
   ipcMain.handle("window:is-maximized", () => win.isMaximized());
+  ipcMain.handle("app:get-version", () => app.getVersion());
+  ipcMain.on("app:focus-window", () => {
+    if (win.isDestroyed()) return;
+    win.show();
+    win.focus();
+  });
 
   const sendMaximizedState = () => {
     if (!win.isDestroyed()) win.webContents.send("window-maximized-change", win.isMaximized());
@@ -267,13 +302,58 @@ function createWindow() {
   win.on("maximize", sendMaximizedState);
   win.on("unmaximize", sendMaximizedState);
 
+  // Closing the window (the custom titlebar's X, or Alt+F4) hides it instead of
+  // quitting — the game keeps running detached either way, but quitting also
+  // kills the playtime watcher and the presence websocket, so a session played
+  // with the launcher closed would go untracked. Only an explicit quit (tray
+  // menu, or the auto-updater's quitAndInstall) actually exits.
+  win.on("close", (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    win.hide();
+    if (!hasShownTrayHint) {
+      hasShownTrayHint = true;
+      tray?.displayBalloon({
+        title: "ALaunchi sigue abierto",
+        content: "Sigue en segundo plano para contar bien las horas jugadas. Para cerrarlo del todo, clic derecho en este icono.",
+      });
+    }
+  });
+
   return win;
+}
+
+let isQuitting = false;
+let hasShownTrayHint = false;
+let tray = null;
+
+app.on("before-quit", () => {
+  isQuitting = true;
+});
+
+function createTray(win) {
+  const icon = nativeImage.createFromPath(path.join(__dirname, "../public/logo.png")).resize({ width: 32, height: 32 });
+  tray = new Tray(icon);
+  tray.setToolTip("ALaunchi");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "Abrir ALaunchi", click: () => { win.show(); win.focus(); } },
+      { type: "separator" },
+      { label: "Cerrar", click: () => app.quit() },
+    ])
+  );
+  tray.on("click", () => {
+    if (win.isVisible()) win.hide();
+    else { win.show(); win.focus(); }
+  });
 }
 
 app.whenReady().then(async () => {
   await ensureDirs();
   mainWindow = createWindow();
   setupAutoUpdater(mainWindow);
+  createTray(mainWindow);
+  reconcileDanglingPlaytimeSessions();
   if (!isDev) {
     autoUpdater.checkForUpdates().catch((err) => console.error("Auto-update check failed:", err));
   }
@@ -367,6 +447,161 @@ function fetchJson(url, headers) {
       });
     }).on("error", reject);
   });
+}
+
+// General authenticated request (PUT/POST/DELETE) with an optional JSON body.
+// Used for the Mojang profile-mutation endpoints (skin/cape), which fetchJson's
+// GET-only shape can't cover. Resolves with the parsed JSON body regardless of
+// status code — callers check statusCode themselves since Mojang's error
+// payloads (e.g. "cape not owned") are useful to show the user, not just log.
+function httpRequestJson(url, { method = "GET", headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const bodyStr = body !== undefined ? JSON.stringify(body) : undefined;
+    const protocol = url.startsWith("https") ? https : http;
+    const req = protocol.request(
+      url,
+      {
+        method,
+        headers: {
+          "User-Agent": "ALaunchi/1.0",
+          ...(bodyStr ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(bodyStr) } : {}),
+          ...headers,
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => {
+          let parsed = null;
+          try { parsed = data ? JSON.parse(data) : null; } catch {}
+          resolve({ statusCode: res.statusCode ?? 0, body: parsed, raw: data });
+        });
+      }
+    );
+    req.on("error", reject);
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
+}
+
+// Uploads a PNG (as a multipart/form-data field named "file") plus a couple of
+// plain text fields, hand-rolled since Node's http module has no multipart
+// helper of its own. Used for the Mojang skin-upload endpoint.
+function uploadMultipart(url, { headers = {}, fields = {}, fileFieldName, fileBuffer, fileName }) {
+  return new Promise((resolve, reject) => {
+    const boundary = `----ALaunchiBoundary${crypto.randomBytes(16).toString("hex")}`;
+    const parts = [];
+    for (const [name, value] of Object.entries(fields)) {
+      parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
+    }
+    parts.push(Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="${fileFieldName}"; filename="${fileName}"\r\nContent-Type: image/png\r\n\r\n`
+    ));
+    parts.push(fileBuffer);
+    parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+    const bodyBuf = Buffer.concat(parts);
+
+    const protocol = url.startsWith("https") ? https : http;
+    const req = protocol.request(
+      url,
+      {
+        method: "POST",
+        headers: {
+          "User-Agent": "ALaunchi/1.0",
+          "Content-Type": `multipart/form-data; boundary=${boundary}`,
+          "Content-Length": bodyBuf.length,
+          ...headers,
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => {
+          let parsed = null;
+          try { parsed = data ? JSON.parse(data) : null; } catch {}
+          resolve({ statusCode: res.statusCode ?? 0, body: parsed, raw: data });
+        });
+      }
+    );
+    req.on("error", reject);
+    req.write(bodyBuf);
+    req.end();
+  });
+}
+
+// ─── PLAYTIME TRACKING ──────────────────────────────────────────────────────
+// Minecraft is spawned detached and unref'd (see mc:launch) so closing the
+// launcher never kills the game — which means we can't rely on a child.on("exit")
+// event, since that only fires while this process is still alive to hear it.
+// Instead we poll the pid and persist an in-progress session to disk, so a
+// session survives the launcher being closed and reopened while the game is
+// still running (reconciled at startup below).
+const activePlaytimeWatchers = new Map(); // modpackId -> intervalId
+
+function isPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function creditPlaytimeAndClearSession(modpackId, startedAt) {
+  const metaPath = path.join(INSTANCES_DIR, modpackId, "alaunchi-meta.json");
+  try {
+    const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
+    meta.totalPlaytimeMs = (meta.totalPlaytimeMs || 0) + Math.max(0, Date.now() - startedAt);
+    delete meta.activeSession;
+    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
+  } catch (e) {
+    console.warn(`[Playtime] No se pudo actualizar el tiempo jugado de ${modpackId}:`, e.message);
+  }
+  // Main process has no Firebase/GitHub credentials (renderer-only, by design) —
+  // just tell the renderer which modpack's session ended so it can mark itself
+  // offline in the presence database.
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("playtime:session-ended", { modpackId });
+  }
+}
+
+function watchProcessForPlaytime(modpackId, pid, startedAt) {
+  const existing = activePlaytimeWatchers.get(modpackId);
+  if (existing) clearInterval(existing);
+  const interval = setInterval(() => {
+    if (isPidAlive(pid)) return;
+    clearInterval(interval);
+    activePlaytimeWatchers.delete(modpackId);
+    creditPlaytimeAndClearSession(modpackId, startedAt);
+  }, 30_000);
+  activePlaytimeWatchers.set(modpackId, interval);
+}
+
+// On startup, pick back up any session left running by a previous launcher
+// process (closed or crashed mid-game) — resume watching it if the game is
+// still alive, or drop the stale marker if it isn't (its real end time is
+// unknowable at this point, so we don't guess — that session's tail just
+// goes uncounted rather than risking an inflated total).
+async function reconcileDanglingPlaytimeSessions() {
+  try {
+    const entries = await fs.readdir(INSTANCES_DIR, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const metaPath = path.join(INSTANCES_DIR, entry.name, "alaunchi-meta.json");
+      if (!fsSync.existsSync(metaPath)) continue;
+      try {
+        const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
+        if (!meta.activeSession) continue;
+        const { pid, startedAt } = meta.activeSession;
+        if (isPidAlive(pid)) {
+          watchProcessForPlaytime(entry.name, pid, startedAt);
+        } else {
+          delete meta.activeSession;
+          await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
+        }
+      } catch {}
+    }
+  } catch {}
 }
 
 ipcMain.handle("mc:get-installed-modpacks", async () => {
@@ -677,9 +912,11 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
 
   const metaPath = path.join(instanceDir, "alaunchi-meta.json");
   let oldFiles = [];
+  let removedOptionalPaths = new Set();
   try {
     const oldMeta = JSON.parse(await fs.readFile(metaPath, "utf8"));
     if (oldMeta.snapshot?.files) oldFiles = oldMeta.snapshot.files;
+    if (Array.isArray(oldMeta.removedOptionalPaths)) removedOptionalPaths = new Set(oldMeta.removedOptionalPaths);
   } catch {}
 
   const oldByPath = new Map(oldFiles.filter((f) => f && typeof f.path === "string").map((f) => [f.path, f]));
@@ -713,6 +950,13 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
         continue;
       }
     } catch {}
+    // The user deliberately deleted this optional file — don't restore it, unless
+    // the admin has since made it mandatory again in this manifest.
+    if (f.required === false && removedOptionalPaths.has(f.path)) {
+      done++;
+      sendProgress();
+      continue;
+    }
     if (f.size === 0 || f.hash === EMPTY_HASH) {
       emptyFiles.push({ entry: f, destPath });
     } else {
@@ -724,9 +968,14 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
   // Progress is advanced by the number of pending files that depend on each downloaded hash,
   // so the UI moves smoothly from 0 → 100 across both phases.
   const filesByHash = new Map();
+  const pathsByHash = new Map();
   for (const p of pending) {
-    if (!filesByHash.has(p.entry.hash)) filesByHash.set(p.entry.hash, 0);
+    if (!filesByHash.has(p.entry.hash)) {
+      filesByHash.set(p.entry.hash, 0);
+      pathsByHash.set(p.entry.hash, []);
+    }
     filesByHash.set(p.entry.hash, filesByHash.get(p.entry.hash) + 1);
+    pathsByHash.get(p.entry.hash).push(p.entry.path);
   }
   const uniqueHashes = Array.from(filesByHash.keys());
 
@@ -745,22 +994,33 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
   };
   sendVirtual();
 
+  // Failures don't abort the batch — a single missing object (typically one that
+  // never actually got uploaded during a prior publish) used to kill the whole
+  // install after downloading just one or two hashes' worth, hiding how many
+  // objects were actually missing. Instead, collect every failure and keep going,
+  // so a single pass reports the complete picture instead of one hash at a time.
   let hashIdx = 0;
   const CONCURRENCY = 6;
+  const failedHashes = []; // [{ hash, error }]
   async function downloadWorker() {
     while (true) {
       const i = hashIdx++;
       if (i >= uniqueHashes.length) return;
       const hash = uniqueHashes[i];
-      const assetUrl = assetByHash?.get(hash);
-      if (assetUrl) {
-        await ensureObject(hash, assetUrl, {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/octet-stream",
-          "User-Agent": "ALaunchi/1.0",
-        });
-      } else {
-        await ensureObject(hash, baseUrl + hash);
+      try {
+        const assetUrl = assetByHash?.get(hash);
+        if (assetUrl) {
+          await ensureObject(hash, assetUrl, {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/octet-stream",
+            "User-Agent": "ALaunchi/1.0",
+          });
+        } else {
+          await ensureObject(hash, baseUrl + hash);
+        }
+      } catch (e) {
+        failedHashes.push({ hash, error: e.message });
+        continue;
       }
       virtualDone += filesByHash.get(hash);
       sendVirtual();
@@ -768,12 +1028,28 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, () => downloadWorker()));
 
-  // Phase 2: place files from cache into instance dir.
+  const failedHashSet = new Set(failedHashes.map((f) => f.hash));
+
+  // Phase 2: place files from cache into instance dir (skip anything that failed above).
   for (const { entry, destPath } of pending) {
+    if (failedHashSet.has(entry.hash)) continue;
     await placeObject(entry.hash, destPath);
     done++;
     virtualDone += 1;
     sendVirtual();
+  }
+
+  if (failedHashes.length > 0) {
+    const lines = failedHashes.slice(0, 15).map(({ hash, error }) => {
+      const paths = pathsByHash.get(hash) || [];
+      const pathList = paths.slice(0, 3).join(", ") + (paths.length > 3 ? ` (+${paths.length - 3} más)` : "");
+      return `  ${hash.slice(0, 12)}… → ${pathList}: ${error}`;
+    });
+    throw new Error(
+      `${failedHashes.length} objeto(s) del manifiesto no se pudieron descargar — probablemente nunca se subieron al publicar. ` +
+        `Vuelve a lanzar la publicación de este modpack para rellenar los que faltan.\n${lines.join("\n")}` +
+        (failedHashes.length > 15 ? `\n  ...y ${failedHashes.length - 15} más` : "")
+    );
   }
 
   // Phase 2b: materialize empty files locally (never downloaded — GitHub rejects 0-byte assets).
@@ -804,6 +1080,7 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
     loaderType: modpack?.loaderType,
     installedAt: new Date().toISOString(),
     snapshot: manifest,
+    removedOptionalPaths: Array.from(removedOptionalPaths).filter((p) => newByPath.has(p)),
   };
   await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
 
@@ -844,6 +1121,16 @@ ipcMain.handle("mc:delete-instance-file", async (_, { modpackId, path: relPath }
   const instanceDir = path.join(INSTANCES_DIR, modpackId);
   const target = safeJoin(instanceDir, relPath);
   await fs.unlink(target);
+  // Remember this so a future update doesn't silently re-download a file the
+  // user deliberately removed, as long as it stays optional in the manifest.
+  const metaPath = path.join(instanceDir, "alaunchi-meta.json");
+  try {
+    const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
+    const removed = new Set(Array.isArray(meta.removedOptionalPaths) ? meta.removedOptionalPaths : []);
+    removed.add(relPath);
+    meta.removedOptionalPaths = Array.from(removed);
+    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
+  } catch {}
   return { success: true };
 });
 
@@ -1078,16 +1365,32 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   win?.webContents.send("launch-status", { modpackId, stage: "launching" });
 
   const requiredJavaMajor = versionJson.javaVersion?.majorVersion ?? 8;
-  let javaPath = await getJavaPath();
+  let javaPath = await getJavaPathForMajor(requiredJavaMajor);
   if (!javaPath) {
+    // Only reuse the system Java if it's an exact major match — old Forge (Java 8)
+    // launched under a newer system JRE (17/21) crashes or misbehaves, so a
+    // ">=" check here would silently pick a wrong-but-newer runtime.
     try {
       const { stdout, stderr } = await execAsync("java -version 2>&1");
       const m = (stdout || stderr).match(/version "(\d+)/);
       const systemMajor = parseInt(m?.[1] || "0");
-      if (systemMajor >= requiredJavaMajor) javaPath = "java";
-      else throw new Error(`versión insuficiente (${systemMajor} < ${requiredJavaMajor})`);
+      if (systemMajor === requiredJavaMajor) javaPath = "java";
+    } catch {}
+  }
+  if (!javaPath) {
+    win?.webContents.send("launch-status", { modpackId, stage: "installing_java", javaMajor: requiredJavaMajor, progress: 0 });
+    try {
+      javaPath = await installJavaMajor(requiredJavaMajor, (p) => {
+        win?.webContents.send("launch-status", {
+          modpackId,
+          stage: "installing_java",
+          javaMajor: requiredJavaMajor,
+          javaSubstage: p.stage,
+          progress: p.progress ?? 0,
+        });
+      });
     } catch (e) {
-      throw new Error(`Java ${requiredJavaMajor}+ requerido. Ve a Ajustes e instala Java primero. (${e.message})`);
+      throw new Error(`Java ${requiredJavaMajor} requerido y no se pudo instalar automáticamente: ${e.message}`);
     }
   }
 
@@ -1200,6 +1503,17 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
 
   if (child.exitCode === 0) {
     console.warn("[Launch] Java exited cleanly (code 0) — could be a quick crash, check log:", logFile);
+  }
+
+  const playtimeStartedAt = Date.now();
+  try {
+    const metaPath = path.join(instanceDir, "alaunchi-meta.json");
+    const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
+    meta.activeSession = { pid: child.pid, startedAt: playtimeStartedAt };
+    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
+    watchProcessForPlaytime(modpackId, child.pid, playtimeStartedAt);
+  } catch (e) {
+    console.warn("[Playtime] No se pudo iniciar el seguimiento de tiempo jugado:", e.message);
   }
 
   child.unref();
@@ -1349,7 +1663,17 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
     ? ["https://maven.neoforged.net/releases/", "https://libraries.minecraft.net/", "https://repo1.maven.org/maven2/"]
     : ["https://maven.minecraftforge.net/", "https://libraries.minecraft.net/", "https://repo1.maven.org/maven2/"];
 
-  for (const lib of (installProfile.libraries || [])) {
+  // Union of installProfile.libraries (install-time/processor deps, modern installers) and
+  // versionJson.libraries (the final launch classpath, checked further down). Old-format
+  // installers (pre-1.13 Forge) don't have a top-level install_profile.json#libraries at
+  // all — everything the game needs at launch lives only in versionJson.libraries — so
+  // downloading just the first list silently fetched nothing for them.
+  const libsToFetch = [...(installProfile.libraries || []), ...(versionJson.libraries || [])];
+  const seenLibKeys = new Set();
+  for (const lib of libsToFetch) {
+    const key = lib.name || lib.downloads?.artifact?.path;
+    if (!key || seenLibKeys.has(key)) continue;
+    seenLibKeys.add(key);
     await resolveModloaderLibrary(lib, libsDir, mavenBases, null).catch((e) =>
       console.warn(`[${loaderType}] Librería no descargable:`, lib.name || "", e.message)
     );
@@ -1389,7 +1713,24 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
   }
 
   sendStatus?.("Ejecutando procesadores (solo primera vez)...");
-  const javaExe = await getJavaPath() || "java";
+  // Processors run under the loader's own required Java major, which can differ
+  // from whatever else is already cached — resolve/download it the same way the
+  // final launch does instead of assuming a globally-installed JRE.
+  const loaderJavaMajor = versionJson.javaVersion?.majorVersion ?? 21;
+  let javaExe = await getJavaPathForMajor(loaderJavaMajor);
+  if (!javaExe) {
+    try {
+      const { stdout, stderr } = await execAsync("java -version 2>&1");
+      const m = (stdout || stderr).match(/version "(\d+)/);
+      if (parseInt(m?.[1] || "0") === loaderJavaMajor) javaExe = "java";
+    } catch {}
+  }
+  if (!javaExe) {
+    sendStatus?.(`Descargando Java ${loaderJavaMajor} (necesario para instalar ${loaderType})...`);
+    javaExe = await installJavaMajor(loaderJavaMajor, (p) => {
+      if (p.stage === "downloading") sendStatus?.(`Descargando Java ${loaderJavaMajor}... ${p.progress}%`);
+    });
+  }
 
   const data = installProfile.data || {};
   // NeoForge processors (DownloadMojmaps, ChainMappings, JarSplitter, BinaryPatcher, Fart)
@@ -1582,14 +1923,29 @@ async function resolveModloaderLibrary(lib, librariesDir, mavenBases, installLib
     const libPath = path.join(librariesDir, relPath);
     await fs.mkdir(path.dirname(libPath), { recursive: true });
     if (!fsSync.existsSync(libPath)) {
+      let lastErr = null;
       for (const base of mavenBases) {
-        try {
-          await downloadFile(base + relPath, libPath, () => {});
-          if (fsSync.existsSync(libPath)) break;
-        } catch {
-          if (fsSync.existsSync(libPath)) fsSync.unlinkSync(libPath);
+        // A couple of quick retries before giving up on this base — CDN edges
+        // (e.g. Mojang's Azure Front Door libraries.minecraft.net) occasionally
+        // hit a transient connect timeout that clears up a second later, and
+        // that shouldn't be indistinguishable from the library genuinely 404ing.
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            await downloadFile(base + relPath, libPath, () => {});
+            if (fsSync.existsSync(libPath)) { lastErr = null; break; }
+          } catch (e) {
+            lastErr = e;
+            if (fsSync.existsSync(libPath)) fsSync.unlinkSync(libPath);
+            if (attempt < 3) await new Promise((r) => setTimeout(r, 800 * attempt));
+          }
         }
+        if (fsSync.existsSync(libPath)) break;
       }
+      // Every base failing used to be silent — the only symptom was a generic
+      // "N files missing" error much later with no clue why. Log the real reason
+      // from the last attempt so a 404 (library genuinely gone) is distinguishable
+      // from a timeout (network) at a glance.
+      if (lastErr) console.warn(`[resolveModloaderLibrary] No se pudo descargar ${relPath}: ${lastErr.message}`);
     }
     return fsSync.existsSync(libPath) ? libPath : null;
   }
@@ -1687,40 +2043,49 @@ function buildLaunchArgs(versionJson, opts, loaderProfile = null) {
   ];
 }
 
-async function getJavaPath() {
-  const homeFile = path.join(JAVA_DIR, ".java-home");
-  if (fsSync.existsSync(homeFile)) {
-    const jreDir = (await fs.readFile(homeFile, "utf8")).trim();
-    const bin = path.join(jreDir, "bin", process.platform === "win32" ? "java.exe" : "java");
-    if (fsSync.existsSync(bin)) return bin;
+function javaBinFor(jreDir) {
+  return path.join(jreDir, "bin", process.platform === "win32" ? "java.exe" : "java");
+}
+
+// Each Minecraft/loader combo can demand a different Java major version (old Forge
+// wants 8, modern NeoForge wants 21, etc.), so we keep one JRE per major version
+// side by side under JAVA_DIR/<major> instead of a single global install.
+async function getJavaPathForMajor(major) {
+  const jreDir = path.join(JAVA_DIR, String(major));
+  const bin = javaBinFor(jreDir);
+  if (fsSync.existsSync(bin)) return bin;
+
+  // One-time migration: older ALaunchi versions installed a single JRE (always
+  // major 21) behind JAVA_DIR/.java-home. Adopt it into the new per-major layout
+  // instead of silently re-downloading a JRE the user already has on disk.
+  if (major === 21) {
+    const legacyHomeFile = path.join(JAVA_DIR, ".java-home");
+    if (fsSync.existsSync(legacyHomeFile)) {
+      try {
+        const legacyDir = (await fs.readFile(legacyHomeFile, "utf8")).trim();
+        if (legacyDir && fsSync.existsSync(javaBinFor(legacyDir))) {
+          await fs.rename(legacyDir, jreDir);
+          await fs.unlink(legacyHomeFile).catch(() => {});
+          return javaBinFor(jreDir);
+        }
+      } catch {}
+    }
   }
   return null;
 }
 
-ipcMain.handle("mc:check-java", async () => {
-  const customPath = await getJavaPath();
-  if (customPath) return { available: true, version: "bundled", path: customPath };
-  try {
-    const { stdout, stderr } = await execAsync("java -version 2>&1");
-    return { available: true, version: (stdout || stderr).split("\n")[0].trim() };
-  } catch {
-    return { available: false };
-  }
-});
-
-ipcMain.handle("mc:install-java", async (event) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
+async function installJavaMajor(major, onProgress) {
   const platform = process.platform;
   const arch = process.arch;
   const adoptiumOS = platform === "win32" ? "windows" : platform === "darwin" ? "mac" : "linux";
   const adoptiumArch = arch === "arm64" ? "aarch64" : "x64";
 
-  win?.webContents.send("java-install-progress", { stage: "fetching", progress: 0 });
+  onProgress?.({ stage: "fetching", progress: 0 });
 
   const releases = await fetchJson(
-    `https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=${adoptiumArch}&image_type=jre&os=${adoptiumOS}&vendor=eclipse`
+    `https://api.adoptium.net/v3/assets/latest/${major}/hotspot?architecture=${adoptiumArch}&image_type=jre&os=${adoptiumOS}&vendor=eclipse`
   );
-  if (!releases || releases.length === 0) throw new Error("No se encontró JRE 21 en Adoptium");
+  if (!releases || releases.length === 0) throw new Error(`No se encontró JRE ${major} en Adoptium`);
 
   const pkg = releases[0].binary.package;
   const downloadUrl = pkg.link;
@@ -1728,32 +2093,57 @@ ipcMain.handle("mc:install-java", async (event) => {
   const isZip = filename.endsWith(".zip");
   const downloadPath = path.join(JAVA_DIR, filename);
 
-  win?.webContents.send("java-install-progress", { stage: "downloading", progress: 0 });
-  await downloadFile(downloadUrl, downloadPath, (p) => {
-    win?.webContents.send("java-install-progress", { stage: "downloading", progress: p });
-  });
+  onProgress?.({ stage: "downloading", progress: 0 });
+  await downloadFile(downloadUrl, downloadPath, (p) => onProgress?.({ stage: "downloading", progress: p }));
 
-  win?.webContents.send("java-install-progress", { stage: "extracting", progress: 0 });
-
+  onProgress?.({ stage: "extracting", progress: 0 });
+  const extractDir = path.join(JAVA_DIR, `.extract-${major}-${Date.now()}`);
+  await fs.mkdir(extractDir, { recursive: true });
   if (isZip) {
     await execAsync(
-      `powershell -NoProfile -Command "Expand-Archive -Force -Path '${downloadPath}' -DestinationPath '${JAVA_DIR}'"`
+      `powershell -NoProfile -Command "Expand-Archive -Force -Path '${downloadPath}' -DestinationPath '${extractDir}'"`
     );
   } else {
-    await execAsync(`tar -xzf "${downloadPath}" -C "${JAVA_DIR}"`);
+    await execAsync(`tar -xzf "${downloadPath}" -C "${extractDir}"`);
   }
 
-  const entries = await fs.readdir(JAVA_DIR, { withFileTypes: true });
+  const entries = await fs.readdir(extractDir, { withFileTypes: true });
   const jreFolder = entries.find(
     (e) => e.isDirectory() && (e.name.startsWith("jdk") || e.name.startsWith("jre"))
   );
   if (!jreFolder) throw new Error("No se encontró la carpeta del JRE extraído");
 
-  const jrePath = path.join(JAVA_DIR, jreFolder.name);
-  await fs.writeFile(path.join(JAVA_DIR, ".java-home"), jrePath);
+  const finalDir = path.join(JAVA_DIR, String(major));
+  await fs.rm(finalDir, { recursive: true, force: true }).catch(() => {});
+  await fs.rename(path.join(extractDir, jreFolder.name), finalDir);
+  await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
   await fs.unlink(downloadPath).catch(() => {});
 
-  win?.webContents.send("java-install-progress", { stage: "done", progress: 100 });
+  onProgress?.({ stage: "done", progress: 100 });
+  return javaBinFor(finalDir);
+}
+
+ipcMain.handle("mc:check-java", async (event, args) => {
+  const major = args?.majorVersion ?? 21;
+  const customPath = await getJavaPathForMajor(major);
+  if (customPath) return { available: true, version: "bundled", path: customPath };
+  try {
+    const { stdout, stderr } = await execAsync("java -version 2>&1");
+    const m = (stdout || stderr).match(/version "(\d+)/);
+    const systemMajor = parseInt(m?.[1] || "0");
+    if (systemMajor === major) return { available: true, version: (stdout || stderr).split("\n")[0].trim() };
+    return { available: false };
+  } catch {
+    return { available: false };
+  }
+});
+
+ipcMain.handle("mc:install-java", async (event, args) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const major = args?.majorVersion ?? 21;
+  const jrePath = await installJavaMajor(major, (p) =>
+    win?.webContents.send("java-install-progress", p)
+  );
   return { success: true, jrePath };
 });
 
@@ -1995,6 +2385,111 @@ ipcMain.handle("ms:mc-profile", async (_, { mcToken }) => {
   });
 });
 
+// --- Skin manager: change skin/cape on the real Mojang account, plus a local
+// library of saved skins (independent of what's currently equipped). ---
+
+ipcMain.handle("mc:get-skin-profile", async (_, { mcToken }) => {
+  const res = await httpRequestJson("https://api.minecraftservices.com/minecraft/profile", {
+    headers: { Authorization: `Bearer ${mcToken}` },
+  });
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    throw new Error(res.body?.errorMessage || res.body?.error || `Mojang devolvió HTTP ${res.statusCode}`);
+  }
+  return { skins: res.body?.skins ?? [], capes: res.body?.capes ?? [] };
+});
+
+ipcMain.handle("mc:change-skin", async (_, { mcToken, variant, fileBase64 }) => {
+  const fileBuffer = Buffer.from(fileBase64, "base64");
+  const res = await uploadMultipart("https://api.minecraftservices.com/minecraft/profile/skins", {
+    headers: { Authorization: `Bearer ${mcToken}` },
+    fields: { variant: variant === "slim" ? "slim" : "classic" },
+    fileFieldName: "file",
+    fileBuffer,
+    fileName: "skin.png",
+  });
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    console.error("[mc:change-skin] Mojang rechazó la skin:", res.statusCode, res.raw?.slice(0, 300));
+    throw new Error(res.body?.errorMessage || res.body?.error || `Mojang rechazó la skin (HTTP ${res.statusCode}). ¿Es un PNG de 64x64?`);
+  }
+  return { skins: res.body?.skins ?? [], capes: res.body?.capes ?? [] };
+});
+
+ipcMain.handle("mc:set-cape", async (_, { mcToken, capeId }) => {
+  const url = "https://api.minecraftservices.com/minecraft/profile/capes/active";
+  const res = capeId
+    ? await httpRequestJson(url, { method: "PUT", headers: { Authorization: `Bearer ${mcToken}` }, body: { capeId } })
+    : await httpRequestJson(url, { method: "DELETE", headers: { Authorization: `Bearer ${mcToken}` } });
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    throw new Error(res.body?.errorMessage || res.body?.error || `Mojang rechazó el cambio de capa (HTTP ${res.statusCode}).`);
+  }
+  return { skins: res.body?.skins ?? [], capes: res.body?.capes ?? [] };
+});
+
+async function readSkinLibraryIndex() {
+  try { return JSON.parse(await fs.readFile(SKIN_LIBRARY_INDEX, "utf8")); }
+  catch { return []; }
+}
+
+ipcMain.handle("mc:skin-library-list", async () => {
+  const index = await readSkinLibraryIndex();
+  const entries = [];
+  for (const entry of index) {
+    try {
+      const fileBuffer = await fs.readFile(path.join(SKIN_LIBRARY_DIR, `${entry.id}.png`));
+      entries.push({ ...entry, fileBase64: fileBuffer.toString("base64") });
+    } catch {
+      // Skin file went missing on disk — skip it rather than crash the list.
+    }
+  }
+  return entries;
+});
+
+ipcMain.handle("mc:skin-library-save", async (_, { name, variant, fileBase64 }) => {
+  const id = crypto.randomUUID();
+  const fileBuffer = Buffer.from(fileBase64, "base64");
+  await fs.writeFile(path.join(SKIN_LIBRARY_DIR, `${id}.png`), fileBuffer);
+  const index = await readSkinLibraryIndex();
+  const entry = { id, name: name || "Skin sin nombre", variant: variant === "slim" ? "slim" : "classic", addedAt: new Date().toISOString() };
+  index.push(entry);
+  await fs.writeFile(SKIN_LIBRARY_INDEX, JSON.stringify(index, null, 2));
+  return { ...entry, fileBase64 };
+});
+
+ipcMain.handle("mc:skin-library-delete", async (_, { id }) => {
+  const index = await readSkinLibraryIndex();
+  const next = index.filter((e) => e.id !== id);
+  await fs.writeFile(SKIN_LIBRARY_INDEX, JSON.stringify(next, null, 2));
+  await fs.unlink(path.join(SKIN_LIBRARY_DIR, `${id}.png`)).catch(() => {});
+  return { success: true };
+});
+
+// Fetches an arbitrary texture URL (skin/cape) server-side and hands it back as
+// base64 so the renderer can build a data: URL. Textures.minecraft.net doesn't
+// send CORS headers, so loading it directly into a WebGL texture from the
+// renderer would fail — CORS is a browser-only restriction, so a plain Node
+// request here sidesteps it entirely. Restricted to Mojang's own texture host.
+const ALLOWED_TEXTURE_HOSTS = new Set(["textures.minecraft.net"]);
+ipcMain.handle("mc:fetch-texture-b64", async (_, { url }) => {
+  const parsed = new URL(url);
+  if (!ALLOWED_TEXTURE_HOSTS.has(parsed.hostname)) {
+    throw new Error(`Host de textura no permitido: ${parsed.hostname}`);
+  }
+  // Mojang's profile API hands back texture URLs with an http: scheme even
+  // though the host only serves https; force it since the host is already
+  // restricted to the trusted allowlist above.
+  parsed.protocol = "https:";
+  return new Promise((resolve, reject) => {
+    https.get(parsed, { headers: { "User-Agent": "ALaunchi/1.0" } }, (res) => {
+      if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+        return reject(new Error(`HTTP ${res.statusCode} descargando textura`));
+      }
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => resolve({ base64: Buffer.concat(chunks).toString("base64") }));
+    }).on("error", reject);
+  });
+});
+
 ipcMain.handle("fs:read-settings", async () => {
   try { return JSON.parse(await fs.readFile(path.join(APP_DATA_DIR, "settings.json"), "utf8")); }
   catch { return {}; }
@@ -2038,6 +2533,73 @@ ipcMain.handle("fs:choose-data-dir", async () => {
 ipcMain.handle("fs:open-data-dir", async () => {
   await shell.openPath(APP_DATA_DIR);
   return { success: true };
+});
+
+ipcMain.handle("mc:open-instance-folder", async (_, { modpackId }) => {
+  await shell.openPath(path.join(INSTANCES_DIR, modpackId));
+  return { success: true };
+});
+
+// Content folders scanned for "xray"-named files when a modpack has antiXray
+// enabled. Flat scan only — these are single-level folders in every instance.
+const ANTIXRAY_CONTENT_DIRS = ["mods", "shaderpacks", "resourcepacks"];
+
+ipcMain.handle("mc:purge-xray-files", async (_, { modpackId }) => {
+  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const deletedFiles = [];
+  for (const dir of ANTIXRAY_CONTENT_DIRS) {
+    const full = path.join(instanceDir, dir);
+    let entries;
+    try {
+      entries = await fs.readdir(full, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.toLowerCase().includes("xray")) continue;
+      try {
+        await fs.unlink(path.join(full, entry.name));
+        deletedFiles.push(`${dir}/${entry.name}`);
+      } catch (e) {
+        console.warn(`[AntiXray] No se pudo borrar ${dir}/${entry.name}:`, e.message);
+      }
+    }
+  }
+  return { deletedFiles };
+});
+
+// .emotecraft files are a custom binary container (name/author/keyframe data,
+// then a PNG thumbnail tacked on at the end) — the keyframe layout isn't
+// documented, but the PNG is trivially found by its magic bytes regardless,
+// so we can pull a preview thumbnail without decoding the animation itself.
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+ipcMain.handle("mc:list-emotes", async (_, { modpackId }) => {
+  const emotesDir = path.join(INSTANCES_DIR, modpackId, "emotes");
+  let entries;
+  try {
+    entries = await fs.readdir(emotesDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const results = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".emotecraft")) continue;
+    let thumbnailBase64 = null;
+    try {
+      const buf = await fs.readFile(path.join(emotesDir, entry.name));
+      const idx = buf.indexOf(PNG_MAGIC);
+      if (idx !== -1) thumbnailBase64 = buf.subarray(idx).toString("base64");
+    } catch (e) {
+      console.warn(`[Emotes] No se pudo leer ${entry.name}:`, e.message);
+    }
+    results.push({
+      fileName: entry.name,
+      displayName: entry.name.replace(/\.emotecraft$/i, "").trim(),
+      thumbnailBase64,
+    });
+  }
+  return results;
 });
 
 ipcMain.handle("github:fetch-modpacks", async (_, { repoUrl }) => {
