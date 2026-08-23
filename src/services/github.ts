@@ -14,6 +14,8 @@ export interface Modpack {
   updateAvailable: boolean;
   fileCount: number;
   totalSizeMb: number;
+  /** When on, clients filter/delete anything with "xray" in the filename for this pack. */
+  antiXray?: boolean;
 }
 
 export interface NewModpackData {
@@ -25,6 +27,7 @@ export interface NewModpackData {
   version: string;
   imageUrl: string;
   bannerUrl: string;
+  antiXray?: boolean;
 }
 
 export interface SnapshotEntry {
@@ -33,6 +36,25 @@ export interface SnapshotEntry {
   size: number;
   /** SHA-1 of the file, used to look it up on Modrinth (their API only indexes sha1/sha512). */
   sha1?: string;
+  /** false = the user can delete it from their instance. Absent/true = mandatory. */
+  required?: boolean;
+}
+
+export interface ChangelogEntry {
+  version: string;
+  publishedAt: string;
+  changelog: string;
+  /** Short headline shown in the update announcement and the history list —
+   *  absent on entries published before this field existed. */
+  title?: string;
+}
+
+export interface OptionalGroup {
+  id: string;
+  name: string;
+  description: string;
+  /** Paths of optional files (required === false) that belong to this group. */
+  paths: string[];
 }
 
 export interface SnapshotManifest {
@@ -42,6 +64,15 @@ export interface SnapshotManifest {
   objectsTag: string;
   files: SnapshotEntry[];
   changelog?: string;
+  /** Headline for the current version's changelog — shown in the update
+   *  announcement and as the row label in the history list. */
+  changelogTitle?: string;
+  /** Every past publish's own changelog, oldest first — skips publishes that left
+   *  the changelog blank. Powers the "ver actualizaciones anteriores" button. */
+  changelogHistory?: ChangelogEntry[];
+  /** Groupings of optional content (name/description + which files). Not consumed
+   *  anywhere yet — data model laid down ahead of the feature that will use it. */
+  optionalGroups?: OptionalGroup[];
 }
 
 export interface ParsedRepo {
@@ -275,8 +306,11 @@ export function snapshotBaseUrl(repoUrl: string, manifest: SnapshotManifest): st
   return `https://github.com/${parsed.owner}/${parsed.repo}/releases/download/${manifest.objectsTag}/`;
 }
 
-const SYSTEM_FILE_NAMES = new Set([".ds_store", "thumbs.db", "desktop.ini", ".gitkeep"]);
-const EXCLUDED_DIRS = new Set(["__macosx", ".git"]);
+const SYSTEM_FILE_NAMES = new Set([".ds_store", "thumbs.db", "desktop.ini", ".gitkeep", ".curseclient"]);
+// logs/ and crash-reports/ are per-play-session runtime output, not modpack content —
+// dragging in a whole instance folder (as opposed to hand-picking mods/config/etc.)
+// would otherwise ship someone's old crash logs to every player.
+const EXCLUDED_DIRS = new Set(["__macosx", ".git", "logs", "crash-reports"]);
 
 export function shouldIncludeFile(relativePath: string, fileName: string): boolean {
   if (SYSTEM_FILE_NAMES.has(fileName.toLowerCase())) return false;
@@ -287,6 +321,7 @@ export function shouldIncludeFile(relativePath: string, fileName: string): boole
 export interface WalkedFile {
   file: File;
   relativePath: string;
+  required?: boolean;
 }
 
 async function sha256(buf: ArrayBuffer): Promise<string> {
@@ -333,6 +368,8 @@ export async function publishModpackUpdate(
   plan: ModpackUpdatePlan,
   newVersion: string,
   changelog: string | undefined,
+  changelogTitle: string | undefined,
+  optionalGroups: OptionalGroup[] | undefined,
   onProgress: (p: PublishProgress) => void
 ): Promise<{ uploaded: number; reused: number; totalFiles: number; totalBytes: number }> {
   const parsed = parseRepo(repoUrl);
@@ -356,7 +393,7 @@ export async function publishModpackUpdate(
       const w = files[i];
       const buf = await w.file.arrayBuffer();
       const [hash, hash1] = await Promise.all([sha256(buf), sha1(buf)]);
-      entries[i] = { path: w.relativePath, hash, size: w.file.size, sha1: hash1 };
+      entries[i] = { path: w.relativePath, hash, size: w.file.size, sha1: hash1, required: w.required !== false };
       hashed++;
       onProgress({
         stage: "hashing",
@@ -437,11 +474,31 @@ export async function publishModpackUpdate(
     await Promise.all(Array.from({ length: LIST_CONC }, () => listWorker()));
   }
 
-  // 4. Dedupe by hash; upload only what's missing.
   // GitHub Releases rejects 0-byte assets with 422, and a zero-byte file has nothing to
   // transfer anyway — skip the upload entirely. The client reconstructs empty files from
   // the manifest (size:0) without needing to download anything.
   const EMPTY_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+  // 3.5. Verify carried-forward ("unchanged") entries actually still exist on GitHub.
+  // They're never re-uploaded here — we only have their old hash/path, not their bytes —
+  // so if one went missing (e.g. from an upload that silently failed under an older,
+  // less careful publish path) every future publish would otherwise keep carrying it
+  // forward as "fine" forever, since nothing ever re-checks it. Catch that now instead
+  // of letting installers discover it one 404 at a time.
+  const missingUnchanged = plan.unchanged.filter(
+    (e) => e.size > 0 && e.hash !== EMPTY_HASH && !existingHashes.has(e.hash)
+  );
+  if (missingUnchanged.length > 0) {
+    throw new Error(
+      `${missingUnchanged.length} archivo(s) ya publicados no tienen su objeto en GitHub y no se pueden ` +
+        `reparar solos (este editor no tiene sus bytes, solo el hash antiguo). Vuelve a añadirlos arrastrando ` +
+        `el archivo de nuevo, o elimínalos, antes de publicar:\n` +
+        missingUnchanged.slice(0, 20).map((e) => `  ${e.path}`).join("\n") +
+        (missingUnchanged.length > 20 ? `\n  ...y ${missingUnchanged.length - 20} más` : "")
+    );
+  }
+
+  // 4. Dedupe by hash; upload only what's missing.
   const uniqueByHash = new Map<string, File>();
   files.forEach((w, i) => {
     const e = entries[i];
@@ -582,16 +639,30 @@ export async function publishModpackUpdate(
   const allEntries = [...plan.unchanged, ...entries].sort((a, b) => a.path.localeCompare(b.path));
   onProgress({ stage: "manifest", done: 0, total: 1 });
   const trimmedChangelog = changelog?.trim();
+  const trimmedTitle = changelogTitle?.trim();
+  const publishedAt = new Date().toISOString();
+  const manifestPath = `modpacks/${modpackId}/manifest.json`;
+  const existingManifest = await getFileContents(owner, repo, manifestPath, token);
+  let priorHistory: ChangelogEntry[] = [];
+  if (existingManifest) {
+    try {
+      priorHistory = (JSON.parse(existingManifest.content) as SnapshotManifest).changelogHistory || [];
+    } catch {}
+  }
+  const changelogHistory = trimmedChangelog
+    ? [...priorHistory, { version: newVersion, publishedAt, changelog: trimmedChangelog, ...(trimmedTitle ? { title: trimmedTitle } : {}) }]
+    : priorHistory;
   const manifest: SnapshotManifest = {
     schemaVersion: 2,
     version: newVersion,
-    publishedAt: new Date().toISOString(),
+    publishedAt,
     objectsTag,
     files: allEntries,
     ...(trimmedChangelog ? { changelog: trimmedChangelog } : {}),
+    ...(trimmedTitle ? { changelogTitle: trimmedTitle } : {}),
+    ...(changelogHistory.length > 0 ? { changelogHistory } : {}),
+    ...(optionalGroups && optionalGroups.length > 0 ? { optionalGroups } : {}),
   };
-  const manifestPath = `modpacks/${modpackId}/manifest.json`;
-  const existingManifest = await getFileContents(owner, repo, manifestPath, token);
   await putFileContents(
     owner,
     repo,
@@ -699,6 +770,94 @@ export async function createModpack(
     JSON.stringify(emptyManifest, null, 2),
     `Init manifest for ${data.id}`,
     token
+  );
+}
+
+export interface ErrorReport {
+  context: string;
+  message: string;
+  stack?: string;
+  appVersion?: string;
+  platform?: string;
+}
+
+// Windows/Unix home-dir paths show up in stack traces (node_modules paths, temp
+// files) and carry the real OS username — strip it before anything leaves the
+// machine, even though the destination is a private repo only we can read.
+function sanitizePaths(text: string): string {
+  return text
+    .replace(/([A-Za-z]:\\Users\\)[^\\]+/gi, "$1<usuario>")
+    .replace(/(\/home\/)[^/]+/g, "$1<usuario>")
+    .replace(/(\/Users\/)[^/]+/g, "$1<usuario>");
+}
+
+/**
+ * Best-effort crash report: opens a GitHub Issue in the modpacks repo. Never throws —
+ * a broken reporter must not turn one crash into a second, more confusing one.
+ */
+export async function reportError(repoUrl: string, token: string, report: ErrorReport): Promise<void> {
+  const parsed = parseRepo(repoUrl);
+  if (!parsed || !token) return;
+  const { owner, repo } = parsed;
+
+  const title = `[auto] ${report.context}: ${sanitizePaths(report.message)}`.slice(0, 200);
+  const body = [
+    `**Contexto:** ${report.context}`,
+    report.appVersion ? `**Versión:** ${report.appVersion}` : null,
+    report.platform ? `**Plataforma:** ${report.platform}` : null,
+    "",
+    "```",
+    sanitizePaths(report.stack || report.message),
+    "```",
+  ]
+    .filter((line) => line !== null)
+    .join("\n");
+
+  try {
+    await ghApiFetch(`/repos/${owner}/${repo}/issues`, token, {
+      method: "POST",
+      body: JSON.stringify({ title, body, labels: ["auto-reporte"] }),
+    });
+  } catch (e) {
+    console.warn("[reportError] No se pudo crear el issue de reporte:", e);
+  }
+}
+
+/** Patches an existing catalog entry (name/description/images/antiXray) — takes
+ *  effect immediately, independent of the version-publish cycle in admin-modpack.tsx. */
+export async function updateModpackMetadata(
+  token: string,
+  repoUrl: string,
+  modpackId: string,
+  updates: Partial<Pick<Modpack, "name" | "description" | "imageUrl" | "bannerUrl" | "antiXray">>
+): Promise<void> {
+  const parsed = parseRepo(repoUrl);
+  if (!parsed) throw new Error("URL de repositorio no válida.");
+  if (!token) throw new Error("Necesitas un token de GitHub con permiso 'repo' en Ajustes.");
+
+  const { owner, repo } = parsed;
+  const modpacksFile = await getFileContents(owner, repo, "modpacks.json", token);
+  if (!modpacksFile) throw new Error("No se encontró modpacks.json en el repositorio.");
+
+  let allPacks: any[];
+  try {
+    allPacks = JSON.parse(modpacksFile.content);
+  } catch (e: any) {
+    throw new Error(`modpacks.json contiene JSON inválido: ${e?.message ?? e}`);
+  }
+  if (!allPacks.find((p: any) => p.id === modpackId)) {
+    throw new Error(`No existe un modpack con el ID "${modpackId}".`);
+  }
+  const updated = allPacks.map((p: any) => (p.id === modpackId ? { ...p, ...updates } : p));
+
+  await putFileContents(
+    owner,
+    repo,
+    "modpacks.json",
+    JSON.stringify(updated, null, 2),
+    `Update ${modpackId} metadata`,
+    token,
+    modpacksFile.sha
   );
 }
 

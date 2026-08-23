@@ -48,17 +48,13 @@ type StepState =
   | "error";
 
 export default function Login() {
-  const { isAuthenticated, setAuth, loadPersistedAuth } = useAuth();
+  const { isAuthenticated, setAuth } = useAuth();
   const [, setLocation] = useLocation();
   const [stepState, setStepState] = useState<StepState>("idle");
   const [userCode, setUserCode] = useState("");
   const [verificationUri, setVerificationUri] = useState("");
   const [countdown, setCountdown] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
-
-  useEffect(() => {
-    loadPersistedAuth();
-  }, [loadPersistedAuth]);
 
   useEffect(() => {
     if (isAuthenticated) setLocation("/");

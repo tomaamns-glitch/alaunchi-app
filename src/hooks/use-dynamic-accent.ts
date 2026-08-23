@@ -52,7 +52,17 @@ export function useDynamicAccent(imageUrl: string | undefined | null) {
         const h = lerpHue(start.h, target.h, eased);
         const s = lerp(start.s, target.s, eased);
         const l = lerp(start.l, target.l, eased);
-        root.style.setProperty("--accent", `${h.toFixed(1)} ${s.toFixed(1)}% ${l.toFixed(1)}%`);
+        const hsl = `${h.toFixed(1)} ${s.toFixed(1)}% ${l.toFixed(1)}%`;
+        root.style.setProperty("--accent", hsl);
+        // --primary-border and --ring default to a static orange (matching the
+        // *default* accent) — without retinting them too, any accent-colored
+        // button's border/focus ring clashes the moment the accent is retinted
+        // away from orange (e.g. a purple modpack banner on an orange border).
+        // Unlike --accent/--ring (raw "H S% L%" triples, wrapped in hsl() at the
+        // point of use), --primary-border's CSS variable holds a complete color
+        // function already, so it needs the hsl() wrapper applied here instead.
+        root.style.setProperty("--primary-border", `hsl(${hsl})`);
+        root.style.setProperty("--ring", hsl);
         currentRef.current = { h, s, l };
         if (t < 1) frameRef.current = requestAnimationFrame(step);
       };
@@ -71,7 +81,10 @@ export function useDynamicAccent(imageUrl: string | undefined | null) {
   useEffect(() => {
     return () => {
       if (frameRef.current) cancelAnimationFrame(frameRef.current);
-      document.documentElement.style.removeProperty("--accent");
+      const root = document.documentElement;
+      root.style.removeProperty("--accent");
+      root.style.removeProperty("--primary-border");
+      root.style.removeProperty("--ring");
     };
   }, []);
 }

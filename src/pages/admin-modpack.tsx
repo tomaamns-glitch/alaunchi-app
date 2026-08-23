@@ -5,8 +5,9 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -19,19 +20,25 @@ import {
   RotateCcw,
   RefreshCw,
   Loader2,
-  FilePlus,
+  Lock,
+  Unlock,
+  Plus,
+  Save,
 } from "lucide-react";
 import {
   fetchSnapshot,
   publishModpackUpdate,
+  updateModpackMetadata,
   shouldIncludeFile,
   type SnapshotEntry,
+  type OptionalGroup,
   type WalkedFile,
   type PublishProgress,
 } from "@/services/github";
 import { getGithubRepo } from "@/lib/app-config";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { formatBytes } from "@/lib/format";
+import { ChangelogEditor } from "@/components/changelog-editor";
 
 // Minecraft instance top-level folders. When the picked/dropped folder's own name
 // matches one of these, it IS the destination folder (e.g. dragging in "shaderpacks"
@@ -56,6 +63,15 @@ interface StagedAdd {
   path: string;
   file: File;
   editable: boolean;
+  required: boolean;
+}
+
+interface SettingsForm {
+  name: string;
+  description: string;
+  imageUrl: string;
+  bannerUrl: string;
+  antiXray: boolean;
 }
 
 type RowStatus = "unchanged" | "added" | "replaced" | "removed";
@@ -67,6 +83,7 @@ interface Row {
   status: RowStatus;
   addId?: string;
   editable?: boolean;
+  required: boolean;
 }
 
 interface FolderEntry {
@@ -150,14 +167,31 @@ export default function AdminModpack() {
   const [existing, setExisting] = useState<SnapshotEntry[]>([]);
   const [removedPaths, setRemovedPaths] = useState<Set<string>>(new Set());
   const [stagedReplacements, setStagedReplacements] = useState<Map<string, File>>(new Map());
+  const [requiredOverrides, setRequiredOverrides] = useState<Map<string, boolean>>(new Map());
   const [stagedAdds, setStagedAdds] = useState<StagedAdd[]>([]);
   const [currentFolder, setCurrentFolder] = useState<string[]>([]);
   const [dragActive, setDragActive] = useState(false);
 
   const [version, setVersion] = useState("");
+  const [changelogTitle, setChangelogTitle] = useState("");
   const [changelog, setChangelog] = useState("");
   const [publishing, setPublishing] = useState(false);
   const [publishProgress, setPublishProgress] = useState<PublishProgress | null>(null);
+
+  const [activeTab, setActiveTab] = useState<"files" | "content" | "changelog" | "settings">("files");
+  const [optionalGroups, setOptionalGroups] = useState<OptionalGroup[]>([]);
+  const [initialOptionalGroups, setInitialOptionalGroups] = useState<OptionalGroup[]>([]);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupDescription, setNewGroupDescription] = useState("");
+
+  const [settingsForm, setSettingsForm] = useState<SettingsForm>({
+    name: "",
+    description: "",
+    imageUrl: "",
+    bannerUrl: "",
+    antiXray: false,
+  });
+  const [settingsSaving, setSettingsSaving] = useState(false);
 
   const replaceTargetPath = useRef<string | null>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
@@ -178,13 +212,23 @@ export default function AdminModpack() {
     setRemovedPaths(new Set());
     setStagedReplacements(new Map());
     setStagedAdds([]);
+    setChangelogTitle("");
     setChangelog("");
     setCurrentFolder([]);
+    setSettingsForm({
+      name: pack.name,
+      description: pack.description,
+      imageUrl: pack.imageUrl,
+      bannerUrl: pack.bannerUrl,
+      antiXray: pack.antiXray ?? false,
+    });
     const repoUrl = getGithubRepo();
     const token = localStorage.getItem("githubToken") ?? "";
     fetchSnapshot(repoUrl, id, token || undefined).then((manifest) => {
       if (cancelled) return;
       setExisting(manifest?.files ?? []);
+      setOptionalGroups(manifest?.optionalGroups ?? []);
+      setInitialOptionalGroups(manifest?.optionalGroups ?? []);
       setLoadingManifest(false);
     });
     const parts = pack.version.split(".").map((n) => parseInt(n, 10));
@@ -198,27 +242,40 @@ export default function AdminModpack() {
   }, [id, pack?.id]);
 
   const existingPaths = useMemo(() => new Set(existing.map((e) => e.path)), [existing]);
+  const existingRequiredByPath = useMemo(
+    () => new Map(existing.map((e) => [e.path, e.required !== false])),
+    [existing]
+  );
 
   const rows: Row[] = useMemo(() => {
     const out: Row[] = [];
     for (const e of existing) {
+      const required = requiredOverrides.get(e.path) ?? (e.required !== false);
       if (removedPaths.has(e.path)) {
-        out.push({ key: e.path, path: e.path, size: e.size, status: "removed" });
+        out.push({ key: e.path, path: e.path, size: e.size, status: "removed", required });
       } else if (stagedReplacements.has(e.path)) {
-        out.push({ key: e.path, path: e.path, size: stagedReplacements.get(e.path)!.size, status: "replaced" });
+        out.push({ key: e.path, path: e.path, size: stagedReplacements.get(e.path)!.size, status: "replaced", required });
       } else {
-        out.push({ key: e.path, path: e.path, size: e.size, status: "unchanged" });
+        out.push({ key: e.path, path: e.path, size: e.size, status: "unchanged", required });
       }
     }
     for (const a of stagedAdds) {
-      out.push({ key: a.id, path: a.path, size: a.file.size, status: "added", addId: a.id, editable: a.editable });
+      out.push({ key: a.id, path: a.path, size: a.file.size, status: "added", addId: a.id, editable: a.editable, required: a.required });
     }
     return out.sort((x, y) => x.path.localeCompare(y.path));
-  }, [existing, removedPaths, stagedReplacements, stagedAdds]);
+  }, [existing, removedPaths, stagedReplacements, stagedAdds, requiredOverrides]);
 
   const currentLevel = useMemo(() => buildLevel(rows, currentFolder), [rows, currentFolder]);
 
-  const hasChanges = removedPaths.size > 0 || stagedReplacements.size > 0 || stagedAdds.length > 0;
+  const groupsDirty = JSON.stringify(optionalGroups) !== JSON.stringify(initialOptionalGroups);
+  const hasChanges =
+    removedPaths.size > 0 ||
+    stagedReplacements.size > 0 ||
+    stagedAdds.length > 0 ||
+    requiredOverrides.size > 0 ||
+    groupsDirty;
+  const optionalCount = rows.filter((r) => r.status !== "removed" && !r.required).length;
+  const optionalRows = rows.filter((r) => r.status !== "removed" && !r.required);
 
   // Stages a walked folder's files: existing paths become replacements, new paths become adds.
   const stageFolderFiles = (walked: WalkedFile[]) => {
@@ -242,7 +299,7 @@ export default function AdminModpack() {
     setStagedAdds((prev) => {
       const additions = walked
         .filter((w) => !existingPaths.has(w.relativePath))
-        .map((w) => ({ id: crypto.randomUUID(), path: w.relativePath, file: w.file, editable: false }));
+        .map((w) => ({ id: crypto.randomUUID(), path: w.relativePath, file: w.file, editable: false, required: true }));
       addedCount = additions.length;
       return [...prev, ...additions];
     });
@@ -285,7 +342,7 @@ export default function AdminModpack() {
         setStagedReplacements((prev) => new Map(prev).set(defaultPath, file));
         continue;
       }
-      additions.push({ id: crypto.randomUUID(), path: defaultPath, file, editable: true });
+      additions.push({ id: crypto.randomUUID(), path: defaultPath, file, editable: true, required: true });
     }
     if (additions.length > 0) setStagedAdds((prev) => [...prev, ...additions]);
   };
@@ -343,6 +400,26 @@ export default function AdminModpack() {
     replaceTargetPath.current = null;
   };
 
+  // Bulk-remove every row currently nested under a folder — the per-file trash icon
+  // makes clearing out something like a whole logs/ folder painfully one-at-a-time.
+  const handleRemoveFolder = (folderPath: string) => {
+    const prefix = `${folderPath}/`;
+    const nested = rows.filter((r) => r.path.startsWith(prefix));
+    const addIds = new Set(nested.filter((r) => r.status === "added").map((r) => r.addId!));
+    const existingPathsToRemove = nested.filter((r) => r.status !== "added").map((r) => r.path);
+    setStagedAdds((prev) => prev.filter((a) => !addIds.has(a.id)));
+    setRemovedPaths((prev) => {
+      const next = new Set(prev);
+      existingPathsToRemove.forEach((p) => next.add(p));
+      return next;
+    });
+    setStagedReplacements((prev) => {
+      const next = new Map(prev);
+      existingPathsToRemove.forEach((p) => next.delete(p));
+      return next;
+    });
+  };
+
   const handleRemoveExisting = (path: string) => {
     setRemovedPaths((prev) => new Set(prev).add(path));
     setStagedReplacements((prev) => {
@@ -377,6 +454,62 @@ export default function AdminModpack() {
     setStagedAdds((prev) => prev.map((a) => (a.id === addId ? { ...a, path: newPath } : a)));
   };
 
+  const handleToggleRequired = (path: string, current: boolean) => {
+    setRequiredOverrides((prev) => new Map(prev).set(path, !current));
+  };
+
+  const handleToggleAddRequired = (addId: string) => {
+    setStagedAdds((prev) => prev.map((a) => (a.id === addId ? { ...a, required: !a.required } : a)));
+  };
+
+  const handleCreateGroup = () => {
+    if (!newGroupName.trim()) return;
+    setOptionalGroups((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), name: newGroupName.trim(), description: newGroupDescription.trim(), paths: [] },
+    ]);
+    setNewGroupName("");
+    setNewGroupDescription("");
+  };
+
+  const handleDeleteGroup = (groupId: string) => {
+    setOptionalGroups((prev) => prev.filter((g) => g.id !== groupId));
+  };
+
+  const handleRenameGroup = (groupId: string, updates: Partial<Pick<OptionalGroup, "name" | "description">>) => {
+    setOptionalGroups((prev) => prev.map((g) => (g.id === groupId ? { ...g, ...updates } : g)));
+  };
+
+  const handleToggleGroupPath = (groupId: string, path: string) => {
+    setOptionalGroups((prev) =>
+      prev.map((g) =>
+        g.id === groupId
+          ? { ...g, paths: g.paths.includes(path) ? g.paths.filter((p) => p !== path) : [...g.paths, path] }
+          : g
+      )
+    );
+  };
+
+  const handleSaveSettings = async () => {
+    if (!id) return;
+    const token = localStorage.getItem("githubToken") ?? "";
+    const repoUrl = getGithubRepo();
+    if (!token) {
+      toast.error("Necesitas un token de GitHub en Ajustes antes de guardar.");
+      return;
+    }
+    setSettingsSaving(true);
+    try {
+      await updateModpackMetadata(token, repoUrl, id, settingsForm);
+      toast.success("Ajustes guardados.");
+      loadModpacks();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Error al guardar los ajustes.");
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
   const stageLabel: Record<PublishProgress["stage"], string> = {
     hashing: "Calculando hashes (SHA-256)",
     uploading: "Subiendo archivos nuevos a GitHub",
@@ -406,14 +539,27 @@ export default function AdminModpack() {
       toast.error("Configura la URL del repositorio en Ajustes.");
       return;
     }
-    const unchanged = existing.filter((e) => !removedPaths.has(e.path) && !stagedReplacements.has(e.path));
+    const unchanged = existing
+      .filter((e) => !removedPaths.has(e.path) && !stagedReplacements.has(e.path))
+      .map((e) => {
+        const req = requiredOverrides.get(e.path);
+        return req === undefined ? e : { ...e, required: req };
+      });
     const files: WalkedFile[] = [
-      ...Array.from(stagedReplacements.entries()).map(([path, file]) => ({ file, relativePath: path })),
-      ...stagedAdds.map((a) => ({ file: a.file, relativePath: a.path })),
+      ...Array.from(stagedReplacements.entries()).map(([path, file]) => ({
+        file,
+        relativePath: path,
+        required: requiredOverrides.get(path) ?? existingRequiredByPath.get(path) ?? true,
+      })),
+      ...stagedAdds.map((a) => ({ file: a.file, relativePath: a.path, required: a.required })),
     ];
     setPublishing(true);
     setPublishProgress({ stage: "hashing", done: 0, total: files.length });
     try {
+      const validOptionalPaths = new Set(optionalRows.map((r) => r.path));
+      const cleanedGroups = optionalGroups
+        .map((g) => ({ ...g, paths: g.paths.filter((p) => validOptionalPaths.has(p)) }))
+        .filter((g) => g.name.trim());
       const result = await publishModpackUpdate(
         token,
         repoUrl,
@@ -421,6 +567,8 @@ export default function AdminModpack() {
         { unchanged, files },
         version.trim(),
         changelog,
+        changelogTitle,
+        cleanedGroups,
         (p) => setPublishProgress(p)
       );
       toast.success(
@@ -487,40 +635,17 @@ export default function AdminModpack() {
 
       <main className="flex-1 flex gap-6 p-6 max-w-7xl mx-auto w-full min-h-0">
         <div className="flex-1 min-w-0 flex flex-col gap-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            <label className="relative">
-              <Button asChild className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold cursor-pointer">
-                <span><UploadCloud className="mr-2 h-4 w-4" /> Añadir carpeta</span>
-              </Button>
-              <input
-                type="file"
-                className="absolute inset-0 opacity-0 cursor-pointer"
-                {...({ webkitdirectory: "", directory: "", multiple: true } as any)}
-                onChange={(e) => {
-                  if (e.target.files && e.target.files.length > 0) onFolderSelected(e.target.files);
-                  e.target.value = "";
-                }}
-                disabled={publishing}
-              />
-            </label>
-            <label className="relative">
-              <Button asChild variant="outline" className="cursor-pointer">
-                <span><FilePlus className="mr-2 h-4 w-4" /> Añadir archivos sueltos</span>
-              </Button>
-              <input
-                type="file"
-                multiple
-                className="absolute inset-0 opacity-0 cursor-pointer"
-                onChange={(e) => {
-                  if (e.target.files && e.target.files.length > 0) onLooseFilesSelected(e.target.files);
-                  e.target.value = "";
-                }}
-                disabled={publishing}
-              />
-            </label>
-            <span className="text-[11px] text-muted-foreground">o arrastra archivos/carpetas aquí abajo</span>
-          </div>
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)} className="flex-1 min-h-0 flex flex-col gap-3">
+            <TabsList className="self-start">
+              <TabsTrigger value="files">Archivos</TabsTrigger>
+              <TabsTrigger value="content" disabled={optionalCount === 0} title={optionalCount === 0 ? "Marca algún archivo como opcional primero" : undefined}>
+                Contenido adicional
+              </TabsTrigger>
+              <TabsTrigger value="changelog">ChangeLog</TabsTrigger>
+              <TabsTrigger value="settings">Ajustes</TabsTrigger>
+            </TabsList>
 
+            <TabsContent value="files" className="flex-1 min-h-0 flex flex-col gap-3 mt-0">
           <div className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap">
             <button
               type="button"
@@ -569,20 +694,36 @@ export default function AdminModpack() {
               <div className="flex flex-col gap-1.5">
                 {currentLevel.map((entry) =>
                   entry.kind === "folder" ? (
-                    <button
+                    <div
                       key={`dir:${entry.name}`}
-                      type="button"
-                      onClick={() => setCurrentFolder([...currentFolder, entry.name])}
-                      className="flex items-center gap-3 px-3 py-2 text-xs rounded-md w-full bg-card/50 hover:bg-card/80 transition-colors text-left"
+                      className="flex items-center gap-3 px-3 py-2 text-xs rounded-md w-full bg-card/50 hover:bg-card/80 transition-colors"
                     >
-                      <Folder className="h-3.5 w-3.5 shrink-0 text-accent" />
-                      <span className="truncate flex-1 min-w-0 font-mono text-gray-100">{entry.name}/</span>
-                      {entry.changeCount > 0 && (
-                        <span className="text-[10px] font-semibold text-accent shrink-0">{entry.changeCount} cambio{entry.changeCount !== 1 ? "s" : ""}</span>
-                      )}
-                      <span className="opacity-50 shrink-0 font-mono">{entry.fileCount} archivo{entry.fileCount !== 1 ? "s" : ""}</span>
-                      <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-50" />
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => setCurrentFolder([...currentFolder, entry.name])}
+                        className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                      >
+                        <Folder className="h-3.5 w-3.5 shrink-0 text-accent" />
+                        <span className="truncate flex-1 min-w-0 font-mono text-gray-100">{entry.name}/</span>
+                        {entry.changeCount > 0 && (
+                          <span className="text-[10px] font-semibold text-accent shrink-0">{entry.changeCount} cambio{entry.changeCount !== 1 ? "s" : ""}</span>
+                        )}
+                        <span className="opacity-50 shrink-0 font-mono">{entry.fileCount} archivo{entry.fileCount !== 1 ? "s" : ""}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveFolder([...currentFolder, entry.name].join("/"))}
+                        disabled={publishing}
+                        title="Eliminar carpeta completa"
+                        className="h-6 w-6 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50 shrink-0"
+                      >
+                        <Trash className="h-3.5 w-3.5" />
+                      </button>
+                      <ChevronRight
+                        className="h-3.5 w-3.5 shrink-0 opacity-50 cursor-pointer"
+                        onClick={() => setCurrentFolder([...currentFolder, entry.name])}
+                      />
+                    </div>
                   ) : (
                     (() => {
                       const row = entry.row;
@@ -605,6 +746,25 @@ export default function AdminModpack() {
                           )}
                           <span className="opacity-50 shrink-0 font-mono">{formatBytes(row.size)}</span>
                           <div className="flex items-center gap-1 shrink-0">
+                            {row.status !== "removed" && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  row.status === "added"
+                                    ? handleToggleAddRequired(row.addId!)
+                                    : handleToggleRequired(row.path, row.required)
+                                }
+                                disabled={publishing}
+                                title={row.required ? "Obligatorio — clic para marcar como opcional" : "Opcional — clic para marcar como obligatorio"}
+                                className={`h-6 w-6 flex items-center justify-center rounded-full transition-colors disabled:opacity-50 ${
+                                  row.required
+                                    ? "text-muted-foreground hover:text-accent hover:bg-accent/10"
+                                    : "text-amber-300 hover:bg-amber-500/10"
+                                }`}
+                              >
+                                {row.required ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+                              </button>
+                            )}
                             {row.status === "unchanged" && (
                               <>
                                 <button
@@ -669,6 +829,174 @@ export default function AdminModpack() {
               </div>
             )}
           </div>
+            </TabsContent>
+
+            <TabsContent value="content" className="flex-1 min-h-0 overflow-y-auto mt-0">
+              <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 space-y-4">
+                <div className="flex items-end gap-2 flex-wrap">
+                  <div className="flex-1 min-w-[10rem] space-y-1.5">
+                    <Label className="text-gray-200">Nombre del grupo</Label>
+                    <Input
+                      value={newGroupName}
+                      onChange={(e) => setNewGroupName(e.target.value)}
+                      className="bg-background/50 border-white/10 text-white"
+                      placeholder="ej: Shaders ligeros"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-[10rem] space-y-1.5">
+                    <Label className="text-gray-200">Descripción</Label>
+                    <Input
+                      value={newGroupDescription}
+                      onChange={(e) => setNewGroupDescription(e.target.value)}
+                      className="bg-background/50 border-white/10 text-white"
+                      placeholder="Opcional"
+                    />
+                  </div>
+                  <Button
+                    onClick={handleCreateGroup}
+                    disabled={!newGroupName.trim()}
+                    className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold shrink-0"
+                  >
+                    <Plus className="mr-2 h-4 w-4" /> Crear grupo
+                  </Button>
+                </div>
+
+                {optionalGroups.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    Todavía no hay grupos. Crea uno arriba y asígnale archivos opcionales.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {optionalGroups.map((group) => (
+                      <div key={group.id} className="border border-white/10 rounded-md p-3 space-y-2 bg-card/30">
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={group.name}
+                            onChange={(e) => handleRenameGroup(group.id, { name: e.target.value })}
+                            className="h-8 bg-background/50 border-white/10 text-white font-semibold"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteGroup(group.id)}
+                            title="Eliminar grupo"
+                            className="h-8 w-8 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
+                          >
+                            <Trash className="h-4 w-4" />
+                          </button>
+                        </div>
+                        <Input
+                          value={group.description}
+                          onChange={(e) => handleRenameGroup(group.id, { description: e.target.value })}
+                          className="h-8 bg-background/50 border-white/10 text-gray-300 text-xs"
+                          placeholder="Descripción"
+                        />
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {optionalRows.length === 0 ? (
+                            <p className="text-xs text-muted-foreground">No hay archivos opcionales.</p>
+                          ) : (
+                            optionalRows.map((row) => {
+                              const inGroup = group.paths.includes(row.path);
+                              return (
+                                <button
+                                  type="button"
+                                  key={row.path}
+                                  onClick={() => handleToggleGroupPath(group.id, row.path)}
+                                  className={`text-[11px] font-mono px-2 py-1 rounded-full border transition-colors ${
+                                    inGroup
+                                      ? "bg-accent/20 border-accent/40 text-accent"
+                                      : "bg-white/5 border-white/10 text-muted-foreground hover:text-white"
+                                  }`}
+                                >
+                                  {row.path}
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="changelog" className="flex-1 min-h-0 overflow-y-auto mt-0">
+              <ChangelogEditor value={changelog} onChange={setChangelog} disabled={publishing} />
+            </TabsContent>
+
+            <TabsContent value="settings" className="flex-1 min-h-0 overflow-y-auto mt-0">
+              <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 space-y-4 max-w-xl">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-gray-200">Nombre</Label>
+                    <Input
+                      value={settingsForm.name}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, name: e.target.value })}
+                      className="bg-background/50 border-white/10 text-white"
+                      disabled={settingsSaving}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-gray-200">ID</Label>
+                    <Input value={pack.id} disabled className="bg-background/30 border-white/10 text-muted-foreground font-mono" />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-gray-200">Descripción</Label>
+                  <Input
+                    value={settingsForm.description}
+                    onChange={(e) => setSettingsForm({ ...settingsForm, description: e.target.value })}
+                    className="bg-background/50 border-white/10 text-white"
+                    disabled={settingsSaving}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-gray-200">URL de logo</Label>
+                    <Input
+                      value={settingsForm.imageUrl}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, imageUrl: e.target.value })}
+                      className="bg-background/50 border-white/10 text-white"
+                      disabled={settingsSaving}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-gray-200">URL de banner</Label>
+                    <Input
+                      value={settingsForm.bannerUrl}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, bannerUrl: e.target.value })}
+                      className="bg-background/50 border-white/10 text-white"
+                      disabled={settingsSaving}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 border-t border-white/5 pt-4">
+                  <div>
+                    <Label className="text-gray-200">Seguridad antiXray</Label>
+                    <p className="text-xs text-muted-foreground max-w-sm mt-0.5">
+                      Elimina automáticamente, en el cliente de cada jugador, cualquier archivo de mods/shaders/resourcepacks
+                      con "xray" en el nombre, y lo filtra también al buscar contenido para añadir.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settingsForm.antiXray}
+                    onCheckedChange={(v) => setSettingsForm({ ...settingsForm, antiXray: v })}
+                    disabled={settingsSaving}
+                  />
+                </div>
+
+                <Button
+                  onClick={handleSaveSettings}
+                  disabled={settingsSaving}
+                  className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold"
+                >
+                  {settingsSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                  {settingsSaving ? "Guardando..." : "Guardar ajustes"}
+                </Button>
+              </div>
+            </TabsContent>
+          </Tabs>
         </div>
 
         <aside className="w-80 shrink-0 flex flex-col gap-4">
@@ -684,20 +1012,24 @@ export default function AdminModpack() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-gray-200">Cambios</Label>
-              <Textarea
-                value={changelog}
-                onChange={(e) => setChangelog(e.target.value)}
-                className="bg-background/50 border-white/10 text-white min-h-24 resize-none"
-                placeholder="Qué cambió en esta versión..."
+              <Label className="text-gray-200">Título de la actualización</Label>
+              <Input
+                value={changelogTitle}
+                onChange={(e) => setChangelogTitle(e.target.value)}
+                className="bg-background/50 border-white/10 text-white"
+                placeholder="ej: Optimización de rendimiento"
                 disabled={publishing}
               />
             </div>
+            <p className="text-[11px] text-muted-foreground -mt-1">
+              El texto de la pestaña "ChangeLog" se publica como notas de esta versión.
+            </p>
 
             <div className="text-xs text-muted-foreground space-y-0.5 pt-1 border-t border-white/5">
               <p>{stagedAdds.length} añadido{stagedAdds.length !== 1 ? "s" : ""}</p>
               <p>{stagedReplacements.size} reemplazado{stagedReplacements.size !== 1 ? "s" : ""}</p>
               <p>{removedPaths.size} eliminado{removedPaths.size !== 1 ? "s" : ""}</p>
+              <p>{optionalCount} marcado{optionalCount !== 1 ? "s" : ""} como opcional</p>
             </div>
 
             {publishProgress && (
@@ -727,7 +1059,7 @@ export default function AdminModpack() {
             </Button>
             {!hasChanges && !publishing && (
               <p className="text-[11px] text-muted-foreground text-center">
-                Añade, reemplaza o elimina algún archivo para poder publicar.
+                Añade, reemplaza o elimina algún archivo, o edita los grupos de contenido adicional, para poder publicar.
               </p>
             )}
           </div>

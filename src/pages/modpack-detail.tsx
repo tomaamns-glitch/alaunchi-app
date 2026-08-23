@@ -23,6 +23,11 @@ import {
   Download,
   Lock,
   RefreshCw,
+  Play,
+  Heart,
+  MoreVertical,
+  FolderOpen,
+  Smile,
 } from "lucide-react";
 import { SnapshotEntry, fetchSnapshot } from "@/services/github";
 import {
@@ -32,27 +37,39 @@ import {
   getRequiredDependencies,
   listVersions,
   searchProjects,
+  fetchCategoryTags,
   SEARCH_PAGE_SIZE,
   type ModrinthMatch,
   type ModrinthUpdate,
   type ModrinthProjectDetail,
   type ModrinthSearchHit,
   type ModrinthDependency,
+  type ModrinthSort,
 } from "@/services/modrinth";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import rehypeSanitize from "rehype-sanitize";
+import { HTML_SANITIZE_SCHEMA } from "@/lib/markdown-schema";
 import {
   listInstanceFiles,
   deleteInstanceFile,
   updateInstanceFile,
   downloadInstanceFile,
+  getInstalledModpacksMeta,
+  openInstanceFolder,
+  listEmotes,
   type InstanceFile,
+  type EmoteFile,
 } from "@/services/electron";
-import { translateToSpanish } from "@/services/translate";
+import { translateHtmlAwareToSpanish } from "@/services/translate";
+import { useLaunchModpack } from "@/hooks/use-launch-modpack";
+import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
 import { getGithubRepo } from "@/lib/app-config";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, formatPlaytime } from "@/lib/format";
 import { toast } from "sonner";
 import { SiModrinth } from "react-icons/si";
 
@@ -66,22 +83,8 @@ const CATEGORY_META: Record<Category, { label: string; icon: typeof Package }> =
 };
 
 // Mod descriptions on Modrinth often embed raw HTML (social-button rows, centered
-// banners) — rehype-raw needs an explicit schema to keep it, and mod authors rely
-// on inline `style`/`align` for that layout, which the default sanitize schema strips.
-const MARKDOWN_SANITIZE_SCHEMA = {
-  ...defaultSchema,
-  attributes: {
-    ...defaultSchema.attributes,
-    "*": [...(defaultSchema.attributes?.["*"] ?? []), "style", "align"],
-  },
-};
+// banners) — HTML_SANITIZE_SCHEMA keeps the inline style/align they rely on.
 
-// A machine translator has no notion of markup — fed raw HTML it will happily
-// translate attribute names/values too (style="..." becomes estilo="...") and
-// break the markup. Skip auto-translation for descriptions that embed HTML.
-function containsHtml(text: string): boolean {
-  return /<[a-z][^>]*>/i.test(text);
-}
 
 // Stability color scale for a version's release channel — green is the most
 // stable (release), red the least (alpha) — with a single-letter badge.
@@ -90,6 +93,14 @@ const VERSION_TYPE_META: Record<"release" | "beta" | "alpha", { letter: string; 
   beta: { letter: "B", className: "bg-amber-500/15 text-amber-400 border-amber-500/30" },
   alpha: { letter: "A", className: "bg-red-500/15 text-red-400 border-red-500/30" },
 };
+
+/** Hides X-ray-named content from the add-content search when the pack has
+ *  antiXray enabled — matches "xray" as a substring, case-insensitive, so
+ *  "yumpXray" is caught too, not just an exact "xray" name. */
+function filterAntiXray<T extends { title: string }>(hits: T[], antiXray: boolean | undefined): T[] {
+  if (!antiXray) return hits;
+  return hits.filter((h) => !h.title.toLowerCase().includes("xray"));
+}
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" });
@@ -145,6 +156,8 @@ export default function ModpackDetail() {
   const { modpacks, loadModpacks } = useModpacks();
 
   const pack = modpacks.find((p) => p.id === id);
+  const { launching: playLaunching, launch: playLaunch } = useLaunchModpack(pack);
+  useDynamicAccent(pack?.bannerUrl || pack?.imageUrl);
 
   const [loading, setLoading] = useState(false);
   const [content, setContent] = useState<Record<Category, SnapshotEntry[]> | null>(null);
@@ -154,6 +167,56 @@ export default function ModpackDetail() {
   const [sortAsc, setSortAsc] = useState(true);
   const [showInstalledFirst, setShowInstalledFirst] = useState(false);
   const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
+  const [totalPlaytimeMs, setTotalPlaytimeMs] = useState(0);
+
+  // Sticky header stack: banner+header (top), category tabs + install button
+  // (sticks right under the top layer), and the Nombre/Instalados sort row
+  // (sticks right under that). Heights are measured live — the banner is
+  // responsive and the header card's text can wrap to more than one line.
+  const [headerH, setHeaderH] = useState(0);
+  const [tabsH, setTabsH] = useState(0);
+  const headerGroupRef = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return;
+    const update = () => setHeaderH(node.getBoundingClientRect().height);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, []);
+  const tabsElRef = useRef<HTMLDivElement | null>(null);
+  const tabsRowRef = useCallback((node: HTMLDivElement | null) => {
+    tabsElRef.current = node;
+    if (!node) return;
+    const update = () => setTabsH(node.getBoundingClientRect().height);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, []);
+  const sortRowElRef = useRef<HTMLDivElement | null>(null);
+
+  // Whether the tabs row / sort row are currently pinned flush against the layer
+  // above them — used to swap their touching corners from rounded to square so two
+  // independently-rounded boxes meeting edge-to-edge don't form a pinched "V" seam.
+  const [tabsStuck, setTabsStuck] = useState(false);
+  const [sortRowStuck, setSortRowStuck] = useState(false);
+  useEffect(() => {
+    const check = () => {
+      if (tabsElRef.current) {
+        setTabsStuck(tabsElRef.current.getBoundingClientRect().top <= headerH + 0.5);
+      }
+      if (sortRowElRef.current) {
+        setSortRowStuck(sortRowElRef.current.getBoundingClientRect().top <= headerH + tabsH + 0.5);
+      }
+    };
+    check();
+    window.addEventListener("scroll", check, { capture: true, passive: true });
+    window.addEventListener("resize", check);
+    return () => {
+      window.removeEventListener("scroll", check, { capture: true });
+      window.removeEventListener("resize", check);
+    };
+  }, [headerH, tabsH]);
 
   // Mod detail view (opened by clicking a row's icon/name).
   const [selectedModPath, setSelectedModPath] = useState<string | null>(null);
@@ -179,6 +242,39 @@ export default function ModpackDetail() {
   const [loadingMore, setLoadingMore] = useState(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
+  const [sortBy, setSortBy] = useState<ModrinthSort>("downloads");
+  const [genreFilter, setGenreFilter] = useState<string | null>(null);
+  const [availableGenres, setAvailableGenres] = useState<string[]>([]);
+
+  // Emotecraft emotes — a separate, read-only tab alongside mods/shaders/resourcepacks,
+  // only shown when that mod is present in the published manifest.
+  const [emotesOpen, setEmotesOpen] = useState(false);
+  const [emotes, setEmotes] = useState<EmoteFile[]>([]);
+  const [emotesLoading, setEmotesLoading] = useState(false);
+  const [selectedEmote, setSelectedEmote] = useState<EmoteFile | null>(null);
+  const emotecraftInstalled = (content?.mods ?? []).some((f) => f.path.toLowerCase().includes("emotecraft"));
+
+  useEffect(() => {
+    if (!emotesOpen || !id) return;
+    let cancelled = false;
+    setEmotesLoading(true);
+    listEmotes(id)
+      .then((result) => {
+        if (cancelled) return;
+        setEmotes(result);
+        setEmotesLoading(false);
+      })
+      .catch((e: any) => {
+        if (cancelled) return;
+        setEmotes([]);
+        setEmotesLoading(false);
+        toast.error(e?.message || "No se pudo leer la carpeta de emotes.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [emotesOpen, id]);
+
   const openMod = (path: string) => {
     setPanelDirection(1);
     setSelectedModPath(path);
@@ -192,6 +288,24 @@ export default function ModpackDetail() {
     if (modpacks.length === 0) loadModpacks();
   }, []);
 
+  // Refetched on window focus too, so coming back from playing (alt-tab, or the
+  // launcher regaining focus) shows the just-finished session without needing
+  // to leave and re-enter this page.
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    const refresh = async () => {
+      const meta = await getInstalledModpacksMeta();
+      if (!cancelled) setTotalPlaytimeMs(meta[id]?.totalPlaytimeMs || 0);
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refresh);
+    };
+  }, [id]);
+
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
@@ -200,6 +314,8 @@ export default function ModpackDetail() {
     setUpdates(new Map());
     setOptionalContent(EMPTY_CATEGORIES);
     setSelectedModPath(null);
+    setEmotesOpen(false);
+    setEmotes([]);
 
     (async () => {
       const repoUrl = getGithubRepo();
@@ -279,13 +395,15 @@ export default function ModpackDetail() {
 
   // Auto-translates the long-form description to Spanish once it loads; falls back
   // to the original silently if translation fails (unofficial keyless endpoint).
+  // HTML-aware: tags (badge images, <br>, <details>...) are left untouched, only
+  // the text between them gets translated.
   useEffect(() => {
     setShowOriginalDescription(false);
     setTranslatedDescription(null);
     const text = projectDetail?.body;
-    if (!text || !text.trim() || containsHtml(text)) return;
+    if (!text || !text.trim()) return;
     let cancelled = false;
-    translateToSpanish(text).then((translated) => {
+    translateHtmlAwareToSpanish(text).then((translated) => {
       if (!cancelled) setTranslatedDescription(translated);
     });
     return () => {
@@ -314,8 +432,19 @@ export default function ModpackDetail() {
     };
   }, [modVersions, selectedModPath, modrinthMatches]);
 
+  // Genre category chips (adventure, magic, technology...) offered for whichever
+  // category tab is active — reset the chosen filter when the tab changes since
+  // the tag list is different per project type.
+  useEffect(() => {
+    if (!searchMode) return;
+    fetchCategoryTags(activeCategory).then(setAvailableGenres);
+  }, [searchMode, activeCategory]);
+  useEffect(() => {
+    setGenreFilter(null);
+  }, [activeCategory]);
+
   // Browse (empty query) or search Modrinth for the active category, debounced while typing.
-  // Resets pagination — this is always page one of a fresh query/category.
+  // Resets pagination — this is always page one of a fresh query/category/sort/filter.
   useEffect(() => {
     if (!searchMode || !pack) return;
     let cancelled = false;
@@ -324,11 +453,12 @@ export default function ModpackDetail() {
     setHasMoreResults(true);
     const delay = searchQuery.trim() ? 350 : 0;
     const timer = setTimeout(() => {
-      searchProjects(activeCategory, searchQuery, pack.loaderType, pack.minecraftVersion, 0).then((hits) => {
+      searchProjects(activeCategory, searchQuery, pack.loaderType, pack.minecraftVersion, 0, SEARCH_PAGE_SIZE, sortBy, genreFilter).then((rawHits) => {
         if (cancelled) return;
+        const hits = filterAntiXray(rawHits, pack.antiXray);
         if (searchQuery.trim()) setSearchResults(hits);
         else setPopularResults(hits);
-        setHasMoreResults(hits.length === SEARCH_PAGE_SIZE);
+        setHasMoreResults(rawHits.length === SEARCH_PAGE_SIZE);
         setSearchLoading(false);
       });
     }, delay);
@@ -336,7 +466,7 @@ export default function ModpackDetail() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [searchMode, searchQuery, activeCategory, pack?.loaderType, pack?.minecraftVersion]);
+  }, [searchMode, searchQuery, activeCategory, pack?.loaderType, pack?.minecraftVersion, sortBy, genreFilter]);
 
   // Fetches the next page of results and appends it — Modrinth's catalog is much
   // larger than one page, so browsing/searching keeps loading instead of capping at 20.
@@ -344,14 +474,15 @@ export default function ModpackDetail() {
     if (!pack || loadingMore || searchLoading || !hasMoreResults) return;
     const nextOffset = resultsOffset + SEARCH_PAGE_SIZE;
     setLoadingMore(true);
-    searchProjects(activeCategory, searchQuery, pack.loaderType, pack.minecraftVersion, nextOffset).then((hits) => {
+    searchProjects(activeCategory, searchQuery, pack.loaderType, pack.minecraftVersion, nextOffset, SEARCH_PAGE_SIZE, sortBy, genreFilter).then((rawHits) => {
+      const hits = filterAntiXray(rawHits, pack.antiXray);
       if (searchQuery.trim()) setSearchResults((prev) => [...prev, ...hits]);
       else setPopularResults((prev) => [...prev, ...hits]);
       setResultsOffset(nextOffset);
-      setHasMoreResults(hits.length === SEARCH_PAGE_SIZE);
+      setHasMoreResults(rawHits.length === SEARCH_PAGE_SIZE);
       setLoadingMore(false);
     });
-  }, [pack, loadingMore, searchLoading, hasMoreResults, resultsOffset, activeCategory, searchQuery]);
+  }, [pack, loadingMore, searchLoading, hasMoreResults, resultsOffset, activeCategory, searchQuery, sortBy, genreFilter]);
 
   // Auto-loads more results as the sentinel at the bottom of the list scrolls into view.
   useEffect(() => {
@@ -454,6 +585,7 @@ export default function ModpackDetail() {
     try {
       await deleteInstanceFile(pack.id, path);
       setOptionalContent((prev) => ({ ...prev, [c]: prev[c].filter((f) => f.path !== path) }));
+      setContent((prev) => (prev ? { ...prev, [c]: prev[c].filter((f) => f.path !== path) } : prev));
       if (selectedModPath === path) closeMod();
       toast.success(`${fileName(path)} eliminado.`);
     } catch (e: any) {
@@ -486,7 +618,7 @@ export default function ModpackDetail() {
     : (Object.keys(CATEGORY_META) as Category[]).filter((c) => (content?.[c]?.length ?? 0) > 0);
 
   const rowsFor = (c: Category): ContentRow[] => [
-    ...(content?.[c] ?? []).map((f): ContentRow => ({ path: f.path, size: f.size, mandatory: true })),
+    ...(content?.[c] ?? []).map((f): ContentRow => ({ path: f.path, size: f.size, mandatory: f.required !== false })),
     ...optionalContent[c].map((f): ContentRow => ({ path: f.path, size: f.size, mandatory: false })),
   ];
 
@@ -520,18 +652,23 @@ export default function ModpackDetail() {
 
   return (
     <div className="min-h-full bg-background text-foreground">
-      <div className="relative h-32 md:h-40 bg-black/50 overflow-hidden">
-        {pack.bannerUrl || pack.imageUrl ? (
-          <img src={pack.bannerUrl || pack.imageUrl} alt={pack.name} className="w-full h-full object-cover" />
-        ) : (
-          <div className="w-full h-full bg-gradient-to-br from-accent/20 to-black" />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/30 to-transparent" />
-      </div>
+      <div ref={headerGroupRef} className="sticky top-0 z-30 bg-background">
+        <div className="relative h-32 md:h-40 bg-black/50 overflow-hidden">
+          {pack.bannerUrl || pack.imageUrl ? (
+            <img src={pack.bannerUrl || pack.imageUrl} alt={pack.name} className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full bg-gradient-to-br from-accent/20 to-black" />
+          )}
+          <div className="absolute inset-0 bg-[linear-gradient(to_top,hsl(var(--background)/0.9)_0%,hsl(var(--background)/0.5)_18%,hsl(var(--background)/0.15)_40%,transparent_65%)]" />
+        </div>
 
-      <div className="max-w-7xl mx-auto w-full">
-        <div className="px-4 -mt-14 relative z-10">
-          <div className="flex items-center justify-between gap-4 max-w-full bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4">
+        <div className="max-w-5xl mx-auto w-full">
+        <div className="px-4 pb-2 -mt-16 relative z-10">
+          <div
+            className={`flex items-center justify-between gap-4 mr-auto bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 ${
+              !selectedModPath && !searchMode ? "max-w-2xl" : "max-w-full"
+            }`}
+          >
             {selectedModPath && selectedMatch ? (
                 <motion.div
                   key="mod-header"
@@ -633,6 +770,7 @@ export default function ModpackDetail() {
                       <h2 className="text-3xl font-bold text-white truncate">{pack.name}</h2>
                       <span className="text-sm font-normal text-muted-foreground shrink-0">{pack.version}v</span>
                     </div>
+                    <p className="text-sm text-gray-300 max-w-3xl">{pack.description}</p>
                     <div className="flex flex-wrap gap-2">
                       <Badge variant="secondary">{pack.minecraftVersion}</Badge>
                       <Badge variant="secondary" className="uppercase">{pack.loaderType}</Badge>
@@ -671,13 +809,68 @@ export default function ModpackDetail() {
                 )}
               </div>
             )}
+            {!selectedModPath && !searchMode && pack.installed && (
+              <div className="flex items-center gap-2 shrink-0">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="shrink-0 text-gray-400 hover:text-white"
+                      aria-label="Más opciones"
+                    >
+                      <MoreVertical className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      onClick={async () => {
+                        try {
+                          await openInstanceFolder(pack.id);
+                        } catch (e: any) {
+                          toast.error(e?.message || "No se pudo abrir la carpeta.");
+                        }
+                      }}
+                    >
+                      <FolderOpen className="mr-2 h-4 w-4" />
+                      Abrir carpeta
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <div className="flex flex-col items-center gap-1 shrink-0">
+                  <Button
+                    onClick={playLaunch}
+                    disabled={playLaunching}
+                    className="shrink-0 bg-accent hover:bg-accent/90 text-accent-foreground border-transparent font-bold gap-1.5"
+                  >
+                    {playLaunching ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Play className="h-4 w-4 fill-current" />
+                    )}
+                    {playLaunching ? "" : pack.updateAvailable ? "ACTUALIZAR Y JUGAR" : "JUGAR"}
+                  </Button>
+                  {totalPlaytimeMs > 0 && (
+                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                      {formatPlaytime(totalPlaytimeMs)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
+        </div>
+      </div>
 
-        <div className={`px-4 pb-8 space-y-4 ${searchMode ? "" : "pt-4"}`}>
-          {!selectedModPath && !searchMode && <p className="text-base text-gray-300 max-w-3xl">{pack.description}</p>}
-
-          <div className={`${searchMode ? "" : "mt-4"} bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 overflow-hidden`}>
+      <div className="max-w-5xl mx-auto w-full">
+        <div className="px-4 pt-3 pb-8">
+          <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4">
+            {/* No overflow-hidden here: it would become the nearest "scrolling" ancestor for
+                the sticky tab bars below, so they'd stick to the top of this card (which
+                itself scrolls away) instead of the true scroll viewport. The sweep-transition's
+                tiny horizontal offset doesn't need clipping — the page already has
+                overflow-x-hidden. */}
             <AnimatePresence mode="wait" initial={false} custom={panelDirection}>
               <motion.div
                 key={selectedModPath ? "mod" : "pack"}
@@ -730,7 +923,7 @@ export default function ModpackDetail() {
                     <div className="prose prose-sm prose-invert max-w-none prose-img:rounded-md prose-a:text-accent">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
-                        rehypePlugins={[rehypeRaw, [rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA]]}
+                        rehypePlugins={[rehypeRaw, [rehypeSanitize, HTML_SANITIZE_SCHEMA]]}
                       >
                         {(showOriginalDescription ? projectDetail.body : translatedDescription ?? projectDetail.body)}
                       </ReactMarkdown>
@@ -875,9 +1068,27 @@ export default function ModpackDetail() {
                 <p className="text-sm">Sin manifiesto publicado todavía.</p>
               </div>
             ) : (
-              <Tabs value={effectiveCategory} onValueChange={(v) => setActiveCategory(v as Category)}>
+              <Tabs
+                value={effectiveCategory}
+                onValueChange={(v) => {
+                  setEmotesOpen(false);
+                  setActiveCategory(v as Category);
+                }}
+              >
                 {!searchMode && (
-                  <div className="flex items-center justify-between gap-2 flex-wrap mb-4">
+                  <div
+                    ref={tabsRowRef}
+                    style={{ top: headerH }}
+                    className={`sticky z-20 flex items-center justify-between gap-2 flex-wrap mb-4 bg-gray-500/10 backdrop-blur-md border border-white/10 p-3 ${
+                      tabsStuck && sortRowStuck
+                        ? "rounded-none"
+                        : tabsStuck
+                        ? "rounded-b-md"
+                        : sortRowStuck
+                        ? "rounded-t-md"
+                        : "rounded-md"
+                    }`}
+                  >
                     <TabsList className="bg-card/50 border border-white/5">
                       {categories.map((c) => {
                         const Icon = CATEGORY_META[c].icon;
@@ -885,6 +1096,7 @@ export default function ModpackDetail() {
                           <TabsTrigger
                             key={c}
                             value={c}
+                            onClick={() => setEmotesOpen(false)}
                             className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5"
                           >
                             <Icon className="h-3.5 w-3.5" />
@@ -893,8 +1105,22 @@ export default function ModpackDetail() {
                           </TabsTrigger>
                         );
                       })}
+                      {emotecraftInstalled && (
+                        <button
+                          type="button"
+                          onClick={() => setEmotesOpen(true)}
+                          className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium gap-1.5 transition-all ${
+                            emotesOpen
+                              ? "bg-accent text-accent-foreground shadow"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          <Smile className="h-3.5 w-3.5" />
+                          Emotes
+                        </button>
+                      )}
                     </TabsList>
-                    {pack.installed && (
+                    {pack.installed && !emotesOpen && (
                       <Button
                         size="sm"
                         onClick={() => setSearchMode(true)}
@@ -911,7 +1137,51 @@ export default function ModpackDetail() {
                   (() => {
                     const results = searchQuery.trim() ? searchResults : popularResults;
                     const CategoryIcon = CATEGORY_META[effectiveCategory].icon;
-                    return searchLoading ? (
+                    return (
+                    <>
+                    <div className="flex items-center gap-2 flex-wrap mb-3">
+                      <Select value={sortBy} onValueChange={(v) => setSortBy(v as ModrinthSort)}>
+                        <SelectTrigger className="h-8 w-[168px] bg-card/50 border-white/10 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="downloads">Más descargas</SelectItem>
+                          <SelectItem value="follows">Más me gusta</SelectItem>
+                          <SelectItem value="relevance">Relevancia</SelectItem>
+                          <SelectItem value="newest">Más reciente</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {availableGenres.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => setGenreFilter(null)}
+                            className={`px-2.5 py-1 rounded-full text-[11px] capitalize border transition-colors ${
+                              genreFilter === null
+                                ? "bg-accent text-accent-foreground border-transparent"
+                                : "bg-white/5 text-muted-foreground border-white/10 hover:bg-white/10"
+                            }`}
+                          >
+                            Todas
+                          </button>
+                          {availableGenres.map((genre) => (
+                            <button
+                              key={genre}
+                              type="button"
+                              onClick={() => setGenreFilter(genre === genreFilter ? null : genre)}
+                              className={`px-2.5 py-1 rounded-full text-[11px] capitalize border transition-colors ${
+                                genreFilter === genre
+                                  ? "bg-accent text-accent-foreground border-transparent"
+                                  : "bg-white/5 text-muted-foreground border-white/10 hover:bg-white/10"
+                              }`}
+                            >
+                              {genre}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {searchLoading ? (
                       <div className="flex items-center justify-center py-16 text-muted-foreground">
                         <Loader2 className="h-5 w-5 animate-spin mr-2" /> Buscando...
                       </div>
@@ -956,35 +1226,41 @@ export default function ModpackDetail() {
                                 </div>
                                 <div className="flex items-center gap-3 shrink-0">
                                   <span className="text-[10px] text-muted-foreground whitespace-nowrap flex items-center gap-0.5">
-                                    {hit.downloads.toLocaleString()}
-                                    <ArrowDown className="h-2.5 w-2.5" />
+                                    {hit.follows.toLocaleString()}
+                                    <Heart className="h-2.5 w-2.5" />
                                   </span>
-                                  <Button
-                                    size="sm"
-                                    onClick={() => {
-                                      if (!actionable) return;
-                                      if (installed && update) handleInstallVersion(activeCategory, installed.path, update, hit);
-                                      else handleInstallFromSearch(hit);
-                                    }}
-                                    disabled={busy || !actionable}
-                                    className={`h-8 px-3 text-xs font-bold ${
-                                      actionable
-                                        ? "bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30"
-                                        : "bg-white/5 text-muted-foreground"
-                                    }`}
-                                  >
-                                    {busy ? (
-                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                    ) : locked ? (
-                                      <><Lock className="h-3.5 w-3.5 mr-1" />Instalado</>
-                                    ) : upToDate ? (
-                                      <><Check className="h-3.5 w-3.5 mr-1" />Instalado</>
-                                    ) : update ? (
-                                      <><RefreshCw className="h-3.5 w-3.5 mr-1" />Actualizar</>
-                                    ) : (
-                                      <><Download className="h-3.5 w-3.5 mr-1" />Instalar</>
-                                    )}
-                                  </Button>
+                                  <div className="flex flex-col items-center gap-1">
+                                    <Button
+                                      size="sm"
+                                      onClick={() => {
+                                        if (!actionable) return;
+                                        if (installed && update) handleInstallVersion(activeCategory, installed.path, update, hit);
+                                        else handleInstallFromSearch(hit);
+                                      }}
+                                      disabled={busy || !actionable}
+                                      className={`h-8 px-3 text-xs font-bold ${
+                                        actionable
+                                          ? "bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30"
+                                          : "bg-white/5 text-muted-foreground"
+                                      }`}
+                                    >
+                                      {busy ? (
+                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                      ) : locked ? (
+                                        <><Lock className="h-3.5 w-3.5 mr-1" />Instalado</>
+                                      ) : upToDate ? (
+                                        <><Check className="h-3.5 w-3.5 mr-1" />Instalado</>
+                                      ) : update ? (
+                                        <><RefreshCw className="h-3.5 w-3.5 mr-1" />Actualizar</>
+                                      ) : (
+                                        <><Download className="h-3.5 w-3.5 mr-1" />Instalar</>
+                                      )}
+                                    </Button>
+                                    <span className="text-[10px] text-muted-foreground whitespace-nowrap flex items-center gap-0.5">
+                                      {hit.downloads.toLocaleString()}
+                                      <ArrowDown className="h-2.5 w-2.5" />
+                                    </span>
+                                  </div>
                                 </div>
                               </div>
                             );
@@ -996,13 +1272,58 @@ export default function ModpackDetail() {
                           </div>
                         )}
                       </div>
+                    )}
+                    </>
                     );
                   })()
+                ) : emotesOpen ? (
+                  emotesLoading ? (
+                    <div className="flex items-center justify-center py-16 text-muted-foreground">
+                      <Loader2 className="h-5 w-5 animate-spin mr-2" /> Cargando emotes...
+                    </div>
+                  ) : emotes.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+                      <Smile className="h-6 w-6" />
+                      <p className="text-sm">No hay emotes en la carpeta "emotes" de esta instancia.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-4 gap-3">
+                      {emotes.map((emote) => (
+                        <button
+                          type="button"
+                          key={emote.fileName}
+                          onClick={() => setSelectedEmote(emote)}
+                          className="flex flex-col items-center gap-2 p-3 rounded-md bg-gray-500/10 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-colors text-left"
+                        >
+                          <div className="h-16 w-16 rounded bg-black/30 overflow-hidden flex items-center justify-center shrink-0">
+                            {emote.thumbnailBase64 ? (
+                              <img
+                                src={`data:image/png;base64,${emote.thumbnailBase64}`}
+                                alt={emote.displayName}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <Smile className="h-6 w-6 text-muted-foreground" />
+                            )}
+                          </div>
+                          <span className="text-xs text-gray-200 text-center truncate w-full" title={emote.displayName}>
+                            {emote.displayName}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )
                 ) : (
                 categories.map((c) => (
                   <TabsContent key={c} value={c} className="mt-4">
-                    <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-3">
-                      <div className="flex items-center justify-between px-2 py-1">
+                    <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md">
+                      <div
+                        ref={sortRowElRef}
+                        style={{ top: headerH + tabsH }}
+                        className={`sticky z-10 flex items-center justify-between px-3 py-2 bg-gray-500/10 backdrop-blur-md border-b border-white/10 ${
+                          sortRowStuck ? "" : "rounded-t-md"
+                        }`}
+                      >
                         <button
                           onClick={() => setSortAsc((v) => !v)}
                           className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-muted-foreground hover:text-white transition-colors"
@@ -1022,7 +1343,7 @@ export default function ModpackDetail() {
                           Instalados
                         </button>
                       </div>
-                      <div className="flex flex-col gap-1.5">
+                      <div className="flex flex-col gap-1.5 p-3 pt-1.5">
                         {rowsFor(c)
                           .sort((a, b) => {
                             if (showInstalledFirst) {
@@ -1112,6 +1433,28 @@ export default function ModpackDetail() {
           </div>
         </div>
       </div>
+
+      <Dialog open={!!selectedEmote} onOpenChange={(open) => !open && setSelectedEmote(null)}>
+        <DialogContent className="bg-card border-white/10 text-foreground sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-white">{selectedEmote?.displayName}</DialogTitle>
+          </DialogHeader>
+          <div className="flex items-center justify-center bg-black/30 rounded-md p-6">
+            {selectedEmote?.thumbnailBase64 ? (
+              <img
+                src={`data:image/png;base64,${selectedEmote.thumbnailBase64}`}
+                alt={selectedEmote.displayName}
+                className="max-h-[50vh] object-contain"
+              />
+            ) : (
+              <Smile className="h-16 w-16 text-muted-foreground" />
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground text-center">
+            Vista previa estática — la reproducción animada todavía no está disponible.
+          </p>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

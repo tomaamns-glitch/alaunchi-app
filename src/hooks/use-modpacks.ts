@@ -1,6 +1,8 @@
 import { create } from "zustand";
+import { toast } from "sonner";
 import { Modpack, fetchModpacks } from "../services/github";
 import { getGithubRepo } from "../lib/app-config";
+import { purgeXrayFiles } from "../services/electron";
 
 const eAPI = (window as any).electronAPI;
 const isElectron = !!eAPI;
@@ -28,6 +30,22 @@ async function getInstalledState(): Promise<Record<string, InstalledState>> {
     return raw ? JSON.parse(raw) : {};
   } catch {
     return {};
+  }
+}
+
+// Runs on every load (so it always sees the freshest antiXray flag from the
+// catalog, not a value cached from install/update time) — best-effort, never
+// blocks or fails the modpack list load.
+function sweepXrayContent(modpacks: Modpack[]) {
+  for (const mp of modpacks) {
+    if (!mp.installed || !mp.antiXray) continue;
+    purgeXrayFiles(mp.id)
+      .then((deleted) => {
+        if (deleted.length > 0) {
+          toast.warning(`${mp.name}: se eliminaron ${deleted.length} archivo(s) con nombre sospechoso de X-ray.`);
+        }
+      })
+      .catch(() => {});
   }
 }
 
@@ -85,6 +103,7 @@ export const useModpacks = create<ModpackState>((set, get) => ({
       });
 
       set({ modpacks: merged, loading: false });
+      sweepXrayContent(merged);
     } catch (e: any) {
       set({ loading: false, error: e?.message ?? "Error al cargar modpacks" });
     }
