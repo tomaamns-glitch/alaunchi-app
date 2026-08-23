@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { toast } from "sonner";
-import { ArrowLeft, Save, LogOut, Cpu, FolderOpen, FolderCog, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Save, LogOut, Cpu, FolderOpen, FolderCog, ShieldCheck, Github } from "lucide-react";
 import { readSettings, writeSettings, isElectron, getDataDir, chooseDataDir, openDataDir } from "@/services/electron";
 
 export default function Settings() {
@@ -29,10 +29,10 @@ export default function Settings() {
   useEffect(() => {
     readSettings().then((s) => { if (s.maxMemoryMb) setMaxMemoryMb(s.maxMemoryMb); });
     getDataDir().then((d) => { if (d) { setDataDir(d.dataDir); setDataDirCustom(d.isCustom); } });
+    setRepoUrl(localStorage.getItem("githubRepo") || "");
+    setToken(localStorage.getItem("githubToken") || "");
     if (isAdmin) {
       setAzureClientId(localStorage.getItem("azureClientId") || "");
-      setRepoUrl(localStorage.getItem("githubRepo") || "");
-      setToken(localStorage.getItem("githubToken") || "");
     }
   }, [isAdmin]);
 
@@ -55,10 +55,14 @@ export default function Settings() {
     }
   };
 
-  const handleSaveAdmin = () => {
-    localStorage.setItem("azureClientId", azureClientId);
+  const handleSaveRepo = () => {
     localStorage.setItem("githubRepo", repoUrl);
     localStorage.setItem("githubToken", token);
+    toast.success("Repositorio guardado");
+  };
+
+  const handleSaveAdmin = () => {
+    localStorage.setItem("azureClientId", azureClientId);
     toast.success("Configuración privada guardada");
   };
 
@@ -151,6 +155,53 @@ export default function Settings() {
           </Card>
         )}
 
+        {isElectron && (
+          <Card className="bg-card/50 border-white/5">
+            <CardHeader>
+              <CardTitle className="text-white flex items-center gap-2">
+                <Github className="h-5 w-5 text-amber-400" /> Repositorio de modpacks
+              </CardTitle>
+              <CardDescription>
+                De dónde ALaunchi lee el catálogo de modpacks. Si tu repositorio es privado,
+                necesitas también un token de GitHub con permiso de lectura para poder verlo y
+                descargar contenido.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-2">
+                <Label htmlFor="repo">Repositorio de modpacks</Label>
+                <Input
+                  id="repo"
+                  value={repoUrl}
+                  onChange={(e) => setRepoUrl(e.target.value)}
+                  className="bg-background/50 border-white/10 text-white"
+                  placeholder="usuario/modpacks-repo"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="token">Token GitHub</Label>
+                <Input
+                  id="token"
+                  type="password"
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  className="bg-background/50 border-white/10 text-white"
+                  placeholder="ghp_..."
+                />
+                <p className="text-xs text-muted-foreground">
+                  Solo hace falta si el repositorio es privado. Déjalo vacío si es público.
+                  Se guarda únicamente en este dispositivo, nunca se comparte.
+                </p>
+              </div>
+
+              <Button onClick={handleSaveRepo} className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold w-full">
+                <Save className="mr-2 h-4 w-4" /> Guardar repositorio
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         {isAdmin && (
           <Card className="bg-card/50 border-amber-500/20 border">
             <CardHeader>
@@ -175,33 +226,6 @@ export default function Settings() {
                 />
                 <p className="text-xs text-muted-foreground">
                   Déjalo vacío para usar el valor por defecto embebido en la app.
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="repo">Repositorio de modpacks</Label>
-                <Input
-                  id="repo"
-                  value={repoUrl}
-                  onChange={(e) => setRepoUrl(e.target.value)}
-                  className="bg-background/50 border-white/10 text-white"
-                  placeholder="usuario/modpacks-repo"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="token">Token GitHub</Label>
-                <Input
-                  id="token"
-                  type="password"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  className="bg-background/50 border-white/10 text-white"
-                  placeholder="ghp_..."
-                />
-                <p className="text-xs text-muted-foreground">
-                  Necesario para publicar modpacks desde el panel de admin, y para leer el
-                  repositorio si es privado.
                 </p>
               </div>
 
