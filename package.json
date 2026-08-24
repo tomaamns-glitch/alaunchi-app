@@ -1,6 +1,6 @@
 {
   "name": "alaunchi",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "ALaunchi - Minecraft Modpack Launcher",
   "private": true,
   "type": "module",
