@@ -13,7 +13,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Package,
-  MessageCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { installSnapshot, launchMinecraft } from "@/services/electron";
@@ -30,7 +29,11 @@ import { ChangelogHistoryButton } from "@/components/changelog-history-button";
 import { ChangelogViewerDialog } from "@/components/changelog-viewer-dialog";
 import { PresenceButton } from "@/components/presence-button";
 import { ChatWindow } from "@/components/chat-window";
-import { getGithubRepo } from "@/lib/app-config";
+import { ChatBubbleRow } from "@/components/chat-bubble-row";
+import { useChatHeads } from "@/hooks/use-chat-heads";
+import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
+import { reportCaughtError } from "@/services/error-reporter";
+import { usePlayerHeadUrl } from "@/hooks/use-player-head";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
 
@@ -93,7 +96,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
     if (!pack.updateAvailable) return;
     let cancelled = false;
     const repoUrl = getGithubRepo();
-    const token = localStorage.getItem("githubToken") ?? "";
+    const token = getModpacksToken();
     fetchSnapshot(repoUrl, pack.id, token || undefined).then((manifest) => {
       if (!cancelled) setUpdateManifest(manifest);
     });
@@ -183,25 +186,30 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
     setStatus(mode);
     setProgress(0);
     setStageLabel("Obteniendo manifiesto...");
-    const repoUrl = getGithubRepo();
-    const token = localStorage.getItem("githubToken") ?? "";
-    const manifest = await fetchSnapshot(repoUrl, pack.id, token || undefined);
-    if (!manifest) throw new Error("No hay manifiesto publicado para este modpack todavía.");
+    try {
+      const repoUrl = getGithubRepo();
+      const token = getModpacksToken();
+      const manifest = await fetchSnapshot(repoUrl, pack.id, token || undefined);
+      if (!manifest) throw new Error("No hay manifiesto publicado para este modpack todavía.");
 
-    if (mode === "updating") setStageLabel("Descargando...");
+      if (mode === "updating") setStageLabel("Descargando...");
 
-    const baseUrl = snapshotBaseUrl(repoUrl, manifest);
-    await installSnapshot(pack.id, manifest, baseUrl, {
-      name: pack.name,
-      minecraftVersion: pack.minecraftVersion,
-      loaderType: pack.loaderType,
-    }, token || undefined);
-    updateModpackStatus(pack.id, {
-      installed: true,
-      installedVersion: manifest.version,
-      updateAvailable: false,
-    });
-    return manifest;
+      const baseUrl = snapshotBaseUrl(repoUrl, manifest);
+      await installSnapshot(pack.id, manifest, baseUrl, {
+        name: pack.name,
+        minecraftVersion: pack.minecraftVersion,
+        loaderType: pack.loaderType,
+      }, token || undefined);
+      updateModpackStatus(pack.id, {
+        installed: true,
+        installedVersion: manifest.version,
+        updateAvailable: false,
+      });
+      return manifest;
+    } catch (e) {
+      reportCaughtError(`modpack:${mode}:${pack.id}`, e);
+      throw e;
+    }
   };
 
   const handleInstall = async () => {
@@ -421,10 +429,11 @@ export default function Home() {
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks, loading } = useModpacks();
   const isAdmin = useIsAdmin();
+  const myHeadUrl = usePlayerHeadUrl(uuid);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   // Skin panel and presence popup are mutually exclusive — opening one closes the other.
-  const [activePopup, setActivePopup] = useState<"profile" | "presence" | "chat" | null>(null);
+  const [activePopup, setActivePopup] = useState<"profile" | "presence" | null>(null);
   const profileOpen = activePopup === "profile";
   const setProfileOpen = (next: boolean | ((prev: boolean) => boolean)) => {
     setActivePopup((prev) => {
@@ -445,6 +454,11 @@ export default function Home() {
 
   // Registers you in the shared player directory (chat's "who can I message")
   // once per session, as soon as we know who's logged in.
+  useEffect(() => {
+    if (!uuid) return;
+    useChatHeads.getState().init(uuid);
+  }, [uuid]);
+
   useEffect(() => {
     if (!uuid || !username) return;
     touchUserDirectory(uuid, username).catch(() => {});
@@ -797,7 +811,7 @@ export default function Home() {
                 className="relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors"
               >
                 <Avatar className="h-6 w-6 border border-white/10">
-                  {uuid && <AvatarImage src={`https://mc-heads.net/avatar/${uuid}/48`} alt={username ?? ""} />}
+                  {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} />}
                   <AvatarFallback className="bg-accent/20 text-accent text-xs font-bold">
                     {username?.charAt(0)?.toUpperCase() ?? "?"}
                   </AvatarFallback>
@@ -814,25 +828,12 @@ export default function Home() {
               onOpenChange={(next) => setActivePopup(next ? "presence" : null)}
             />
             {uuid && (
-              <button
-                type="button"
-                onClick={() => setActivePopup(activePopup === "chat" ? null : "chat")}
-                aria-label="Chat"
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors"
-              >
-                <MessageCircle className="h-4 w-4 text-gray-300" />
-              </button>
+              <div className="relative">
+                <ChatBubbleRow />
+                <ChatWindow myUuid={uuid} myUsername={username ?? ""} currentPackId={currentPack.id} />
+              </div>
             )}
           </div>
-
-          {uuid && (
-            <ChatWindow
-              myUuid={uuid}
-              myUsername={username ?? ""}
-              open={activePopup === "chat"}
-              onClose={() => setActivePopup(null)}
-            />
-          )}
 
           <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2">
             <ModpackActionBar key={currentPack.id} pack={currentPack} />

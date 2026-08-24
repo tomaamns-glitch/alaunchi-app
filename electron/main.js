@@ -549,19 +549,21 @@ function isPidAlive(pid) {
 
 async function creditPlaytimeAndClearSession(modpackId, startedAt) {
   const metaPath = path.join(INSTANCES_DIR, modpackId, "alaunchi-meta.json");
+  let totalPlaytimeMs = 0;
   try {
     const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
     meta.totalPlaytimeMs = (meta.totalPlaytimeMs || 0) + Math.max(0, Date.now() - startedAt);
+    totalPlaytimeMs = meta.totalPlaytimeMs;
     delete meta.activeSession;
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
   } catch (e) {
     console.warn(`[Playtime] No se pudo actualizar el tiempo jugado de ${modpackId}:`, e.message);
   }
   // Main process has no Firebase/GitHub credentials (renderer-only, by design) —
-  // just tell the renderer which modpack's session ended so it can mark itself
-  // offline in the presence database.
+  // just tell the renderer which modpack's session ended (and the fresh total)
+  // so it can mark itself offline and publish the new playtime to presence.
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send("playtime:session-ended", { modpackId });
+    mainWindow.webContents.send("playtime:session-ended", { modpackId, totalPlaytimeMs });
   }
 }
 
@@ -2461,6 +2463,39 @@ ipcMain.handle("mc:skin-library-delete", async (_, { id }) => {
   await fs.writeFile(SKIN_LIBRARY_INDEX, JSON.stringify(next, null, 2));
   await fs.unlink(path.join(SKIN_LIBRARY_DIR, `${id}.png`)).catch(() => {});
   return { success: true };
+});
+
+// Resolves any player's currently-equipped skin URL via Mojang's public session
+// server — no auth needed, works for any UUID (not just the signed-in account).
+// Used to render head icons (own avatar, presence list) instead of third-party
+// mirrors like mc-heads.net, which cache stale renders (skin changes don't show
+// up right away) and have been seen silently falling back to the default Steve
+// skin on lookup failure — see the Crafatar incident noted in CLAUDE.md.
+ipcMain.handle("mc:get-skin-url", async (_, { uuid }) => {
+  try {
+    const clean = String(uuid).replace(/-/g, "");
+    const profile = await fetchJson(`https://sessionserver.mojang.com/session/minecraft/profile/${clean}`);
+    const texturesProp = profile?.properties?.find((p) => p.name === "textures");
+    if (!texturesProp) return { skinUrl: null, variant: null };
+    const decoded = JSON.parse(Buffer.from(texturesProp.value, "base64").toString("utf8"));
+    const skin = decoded?.textures?.SKIN;
+    if (!skin?.url) return { skinUrl: null, variant: null };
+    return { skinUrl: skin.url, variant: skin.metadata?.model === "slim" ? "SLIM" : "CLASSIC" };
+  } catch {
+    return { skinUrl: null, variant: null };
+  }
+});
+
+// Resolves a Minecraft username to its UUID via Mojang's public API — used by
+// the skin showcase (apply/save a curated player's current skin without them
+// needing to be signed in, or us needing their token).
+ipcMain.handle("mc:get-uuid-for-username", async (_, { username }) => {
+  try {
+    const profile = await fetchJson(`https://api.mojang.com/users/profiles/minecraft/${encodeURIComponent(username)}`);
+    return { uuid: profile?.id ?? null };
+  } catch {
+    return { uuid: null };
+  }
 });
 
 // Fetches an arbitrary texture URL (skin/cape) server-side and hands it back as

@@ -155,16 +155,16 @@ export default function Settings() {
           </Card>
         )}
 
-        {isElectron && (
+        {isElectron && isAdmin && (
           <Card className="bg-card/50 border-white/5">
             <CardHeader>
               <CardTitle className="text-white flex items-center gap-2">
-                <Github className="h-5 w-5 text-amber-400" /> Repositorio de modpacks
+                <Github className="h-5 w-5 text-amber-400" /> Repositorio de modpacks (admin)
               </CardTitle>
               <CardDescription>
-                De dónde ALaunchi lee el catálogo de modpacks. Si tu repositorio es privado,
-                necesitas también un token de GitHub con permiso de lectura para poder verlo y
-                descargar contenido.
+                Tu token de administrador, con permiso de escritura, para publicar y editar
+                modpacks desde el panel de admin. Los jugadores normales no necesitan configurar
+                nada aquí — la app ya trae acceso de lectura integrado.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -180,18 +180,18 @@ export default function Settings() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="token">Token GitHub</Label>
+                <Label htmlFor="token">Token GitHub (admin)</Label>
                 <Input
                   id="token"
                   type="password"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
                   className="bg-background/50 border-white/10 text-white"
-                  placeholder="ghp_..."
+                  placeholder="github_pat_..."
                 />
                 <p className="text-xs text-muted-foreground">
-                  Solo hace falta si el repositorio es privado. Déjalo vacío si es público.
-                  Se guarda únicamente en este dispositivo, nunca se comparte.
+                  Necesario para publicar, editar o borrar modpacks. Se guarda únicamente en este
+                  dispositivo, nunca se comparte.
                 </p>
               </div>
 

@@ -151,7 +151,7 @@ export function onAppError(callback: (data: { context: string; message: string; 
 
 /** Fired when the playtime watcher in the main process detects a tracked Minecraft
  *  process has exited — the renderer's cue to mark itself offline in presence. */
-export function onPlaytimeSessionEnded(callback: (data: { modpackId: string }) => void): () => void {
+export function onPlaytimeSessionEnded(callback: (data: { modpackId: string; totalPlaytimeMs: number }) => void): () => void {
   if (!isElectron) return () => {};
   return eAPI.onPlaytimeSessionEnded(callback);
 }

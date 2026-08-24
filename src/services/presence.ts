@@ -1,4 +1,4 @@
-import { ref, set, onValue, onDisconnect, serverTimestamp, off, type Unsubscribe } from "firebase/database";
+import { ref, set, update, onValue, onDisconnect, serverTimestamp, off, type Unsubscribe } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 
 export interface PresenceEntry {
@@ -6,6 +6,9 @@ export interface PresenceEntry {
   online: boolean;
   /** Server-assigned ms timestamp of the last known state change. */
   lastSeen: number;
+  /** Total time played on this modpack — only present once a session has ended
+   *  at least once; see updatePlaytime. */
+  playtimeMs?: number;
 }
 
 /** Marks a player online for a modpack, and arms a server-side fallback (via
@@ -23,6 +26,13 @@ export async function markOnline(modpackId: string, uuid: string, username: stri
 export async function markOffline(modpackId: string, uuid: string, username: string): Promise<void> {
   const presenceRef = ref(rtdb, `presence/${modpackId}/${uuid}`);
   await set(presenceRef, { username, online: false, lastSeen: serverTimestamp() });
+}
+
+/** Publishes this player's local total playtime for one modpack so others can
+ *  see it (e.g. in the chat header) — a partial merge, so it never clobbers
+ *  online/lastSeen written elsewhere. */
+export async function updatePlaytime(modpackId: string, uuid: string, playtimeMs: number): Promise<void> {
+  await update(ref(rtdb, `presence/${modpackId}/${uuid}`), { playtimeMs });
 }
 
 /** Live-subscribes to every player's presence for one modpack. Returns an

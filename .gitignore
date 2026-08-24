@@ -4,6 +4,12 @@ release/
 *.log
 .DS_Store
 
+# Embedded read-only/crash-report tokens for the packaged build — real values
+# live only in the local .env, never committed (this source repo is public).
+.env
+.env.*
+!.env.example
+
 # Stray Minecraft runtime data — a game launch used this folder as its working
 # directory instead of an isolated instance dir; none of this is app source.
 /config/

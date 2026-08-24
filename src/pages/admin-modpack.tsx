@@ -35,7 +35,7 @@ import {
   type WalkedFile,
   type PublishProgress,
 } from "@/services/github";
-import { getGithubRepo } from "@/lib/app-config";
+import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { formatBytes } from "@/lib/format";
 import { ChangelogEditor } from "@/components/changelog-editor";
@@ -223,7 +223,7 @@ export default function AdminModpack() {
       antiXray: pack.antiXray ?? false,
     });
     const repoUrl = getGithubRepo();
-    const token = localStorage.getItem("githubToken") ?? "";
+    const token = getModpacksToken();
     fetchSnapshot(repoUrl, id, token || undefined).then((manifest) => {
       if (cancelled) return;
       setExisting(manifest?.files ?? []);

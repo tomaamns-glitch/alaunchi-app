@@ -1,4 +1,4 @@
-import { ref, set, push, onValue, serverTimestamp, off, type Unsubscribe } from "firebase/database";
+import { ref, set, update, push, onValue, runTransaction, serverTimestamp, off, type Unsubscribe } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 
 export interface ChatMessage {
@@ -12,6 +12,7 @@ export interface ChatIndexEntry {
   otherUsername: string;
   lastMessage: string;
   lastTimestamp: number;
+  unreadCount?: number;
 }
 
 export interface KnownUser {
@@ -85,11 +86,20 @@ export async function sendMessage(
       otherUsername,
       lastMessage: trimmed,
       lastTimestamp: timestamp,
+      unreadCount: 0,
     }),
-    set(ref(rtdb, `chatIndex/${otherUuid}/${myUuid}`), {
+    // Transaction (not set) on the recipient's side — a plain set would clobber
+    // whatever unreadCount was already sitting there from earlier messages.
+    runTransaction(ref(rtdb, `chatIndex/${otherUuid}/${myUuid}`), (current) => ({
       otherUsername: myUsername,
       lastMessage: trimmed,
       lastTimestamp: timestamp,
-    }),
+      unreadCount: (current?.unreadCount || 0) + 1,
+    })),
   ]);
+}
+
+/** Clears unread count for one conversation — call when the user opens it. */
+export async function markConversationRead(myUuid: string, otherUuid: string): Promise<void> {
+  await update(ref(rtdb, `chatIndex/${myUuid}/${otherUuid}`), { unreadCount: 0 });
 }
