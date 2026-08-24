@@ -22,6 +22,23 @@ dns.setDefaultResultOrder("ipv4first");
 
 const isDev = process.env.NODE_ENV === "development";
 
+// Single instance: launching the app (shortcut, taskbar icon) while it's
+// already running — even just in the tray — must never spawn a second copy.
+// The second launch quits itself immediately and hands its args over to the
+// first, whose "second-instance" handler below brings its existing window
+// forward instead.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
+
+app.on("second-instance", () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
+
 // Safety net: an uncaught error in the main process would otherwise show Electron's
 // default "A JavaScript error occurred in the main process" dialog and can leave
 // the app in a broken state. Log it instead — individual operations (downloads,
@@ -1200,6 +1217,15 @@ ipcMain.handle("mc:update-instance-file", async (_, { modpackId, oldPath, newPat
     await fs.unlink(oldTarget).catch(() => {});
   }
   return { success: true, newPath };
+});
+
+// Reads a file already inside an instance as base64 — used to share content
+// (mods/shaders/textures/emotes) in chat, uploading the sender's own local copy.
+ipcMain.handle("mc:read-instance-file", async (_, { modpackId, path: relPath }) => {
+  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const target = safeJoin(instanceDir, relPath);
+  const buf = await fs.readFile(target);
+  return { base64: buf.toString("base64") };
 });
 
 ipcMain.handle("mc:download-instance-file", async (_, { modpackId, path: relPath, url, sha1 }) => {
@@ -2664,17 +2690,20 @@ ipcMain.handle("mc:list-emotes", async (_, { modpackId }) => {
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".emotecraft")) continue;
     let thumbnailBase64 = null;
+    const filePath = path.join(emotesDir, entry.name);
     try {
-      const buf = await fs.readFile(path.join(emotesDir, entry.name));
+      const buf = await fs.readFile(filePath);
       const idx = buf.indexOf(PNG_MAGIC);
       if (idx !== -1) thumbnailBase64 = buf.subarray(idx).toString("base64");
     } catch (e) {
       console.warn(`[Emotes] No se pudo leer ${entry.name}:`, e.message);
     }
+    const sha1 = await hashFileSha1(filePath).catch(() => null);
     results.push({
       fileName: entry.name,
       displayName: entry.name.replace(/\.emotecraft$/i, "").trim(),
       thumbnailBase64,
+      sha1,
     });
   }
   return results;

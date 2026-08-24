@@ -1,5 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getDatabase } from "firebase/database";
+import { getStorage } from "firebase/storage";
 
 // Public web config — Firebase's own model is that this is safe to ship in the
 // client (unlike the GitHub token). Real access control lives in the Realtime
@@ -16,3 +17,4 @@ const firebaseConfig = {
 
 const firebaseApp = initializeApp(firebaseConfig);
 export const rtdb = getDatabase(firebaseApp);
+export const storage = getStorage(firebaseApp);

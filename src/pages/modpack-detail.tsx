@@ -38,6 +38,10 @@ import {
   listVersions,
   searchProjects,
   fetchCategoryTags,
+  categoryOf,
+  categorize,
+  fileName,
+  guessTitle,
   SEARCH_PAGE_SIZE,
   type ModrinthMatch,
   type ModrinthUpdate,
@@ -45,6 +49,7 @@ import {
   type ModrinthSearchHit,
   type ModrinthDependency,
   type ModrinthSort,
+  type InstallableCategory,
 } from "@/services/modrinth";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -73,7 +78,7 @@ import { formatBytes, formatPlaytime } from "@/lib/format";
 import { toast } from "sonner";
 import { SiModrinth } from "react-icons/si";
 
-type Category = "mods" | "shaderpacks" | "resourcepacks";
+type Category = InstallableCategory;
 type ModDetailTab = "description" | "gallery" | "versions" | "dependencies";
 
 const CATEGORY_META: Record<Category, { label: string; icon: typeof Package }> = {
@@ -104,36 +109,6 @@ function filterAntiXray<T extends { title: string }>(hits: T[], antiXray: boolea
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" });
-}
-
-function categoryOf(path: string): Category | null {
-  const top = path.split("/")[0]?.toLowerCase();
-  if (top === "mods") return "mods";
-  if (top === "shaderpacks" || top === "shaders") return "shaderpacks";
-  if (top === "resourcepacks") return "resourcepacks";
-  return null;
-}
-
-function categorize<T extends { path: string }>(files: T[]): Record<Category, T[]> {
-  const out: Record<Category, T[]> = { mods: [], shaderpacks: [], resourcepacks: [] };
-  for (const f of files) {
-    const cat = categoryOf(f.path);
-    if (cat) out[cat].push(f);
-  }
-  return out;
-}
-
-function fileName(path: string): string {
-  return path.split("/").pop() || path;
-}
-
-/** Best-effort mod name from a filename: everything before the first "-" or "_", capitalized. */
-function guessTitle(filename: string): string {
-  const base = filename.replace(/\.[^.]+$/, "");
-  const stop = base.search(/[-_]/);
-  const raw = (stop === -1 ? base : base.slice(0, stop)).trim();
-  if (!raw) return filename;
-  return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
 const sweepVariants = {

@@ -49,6 +49,7 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
   },
 
   openChat: (uuid) => {
+    useHeaderOverlay.getState().close();
     const { myUuid, pinnedUuids } = get();
     const nextPinned = new Set(pinnedUuids);
     nextPinned.add(uuid);
@@ -64,6 +65,27 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
     nextPinned.delete(uuid);
     set({ pinnedUuids: nextPinned, openUuid: openUuid === uuid ? null : openUuid });
   },
+}));
+
+export type HeaderOverlay = "profile" | "presence" | "presence-all" | null;
+
+interface HeaderOverlayState {
+  active: HeaderOverlay;
+  open: (kind: Exclude<HeaderOverlay, null>) => void;
+  close: () => void;
+}
+
+// Colocated with useChatHeads (rather than its own file) specifically to avoid
+// a circular import: opening the skins/players/"todos" panel has to minimize
+// an open chat, and opening a chat has to close whichever of these is open —
+// each store calls the other's getState() directly.
+export const useHeaderOverlay = create<HeaderOverlayState>((set) => ({
+  active: null,
+  open: (kind) => {
+    useChatHeads.getState().minimizeChat();
+    set({ active: kind });
+  },
+  close: () => set({ active: null }),
 }));
 
 /** Bubbles shown next to the players button: anything pinned (opened at least

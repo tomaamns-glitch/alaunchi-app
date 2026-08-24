@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   deleteInstanceFile: (args) => ipcRenderer.invoke("mc:delete-instance-file", args),
   updateInstanceFile: (args) => ipcRenderer.invoke("mc:update-instance-file", args),
   downloadInstanceFile: (args) => ipcRenderer.invoke("mc:download-instance-file", args),
+  readInstanceFile: (args) => ipcRenderer.invoke("mc:read-instance-file", args),
   launchMinecraft: (args) => ipcRenderer.invoke("mc:launch", args),
   checkJava: () => ipcRenderer.invoke("mc:check-java"),
   installJava: () => ipcRenderer.invoke("mc:install-java"),

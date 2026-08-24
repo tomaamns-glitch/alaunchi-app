@@ -1,8 +1,6 @@
-import { formatDistanceToNow } from "date-fns";
-import { es } from "date-fns/locale";
-import { MessageCircle } from "lucide-react";
 import type { PresenceEntry } from "@/services/presence";
 import { getNicknames } from "@/lib/nicknames";
+import { formatCompactAgo } from "@/lib/format";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
 import { useChatHeads } from "@/hooks/use-chat-heads";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
@@ -13,8 +11,8 @@ interface PresenceListProps {
 }
 
 /** Row list shared by the home screen's presence popup and the "Todos" dialog —
- *  online status, "hace X" for recent-but-offline players, and a button to
- *  start a chat with them (opens as a bubble next to the players button; alias
+ *  online status, "hace X" for recent-but-offline players. Clicking someone's
+ *  name opens a chat with them (bubble next to the players button; alias
  *  editing lives in the chat header now, not here). */
 export function PresenceList({ players, myUuid }: PresenceListProps) {
   const nicknames = getNicknames();
@@ -35,27 +33,21 @@ export function PresenceList({ players, myUuid }: PresenceListProps) {
           <div key={uuid} className="flex items-center gap-2 text-sm min-h-[26px]">
             <PlayerAvatar uuid={uuid} username={entry.username} online={entry.online} />
 
-            <span className="text-white truncate">{label}</span>
-            {nickname && !isMe && (
-              <span className="text-xs text-muted-foreground truncate">({entry.username})</span>
-            )}
-            <span className="text-xs text-muted-foreground ml-auto shrink-0">
-              {entry.online
-                ? "En línea"
-                : entry.lastSeen
-                  ? `Hace ${formatDistanceToNow(entry.lastSeen, { locale: es })}`
-                  : ""}
-            </span>
-            {!isMe && (
+            {isMe ? (
+              <span className="text-white truncate">{label}</span>
+            ) : (
               <button
                 type="button"
                 onClick={() => openChat(uuid)}
-                className="text-muted-foreground hover:text-accent shrink-0"
-                aria-label={`Chat con ${nickname || entry.username}`}
+                className="text-white hover:text-accent truncate text-left transition-colors"
+                aria-label={`Chat con ${label}`}
               >
-                <MessageCircle className="h-3.5 w-3.5" />
+                {label}
               </button>
             )}
+            <span className="text-xs text-muted-foreground ml-auto shrink-0">
+              {entry.online ? "En línea" : entry.lastSeen ? `Hace ${formatCompactAgo(entry.lastSeen)}` : ""}
+            </span>
           </div>
         );
       })}
