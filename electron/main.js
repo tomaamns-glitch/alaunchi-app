@@ -207,35 +207,37 @@ function safeJoin(base, rel) {
 
 let mainWindow = null;
 
-function setupAutoUpdater(win) {
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = false;
-
-  const send = (channel, data) => {
-    if (!win.isDestroyed()) win.webContents.send(channel, data);
-  };
-
-  autoUpdater.on("checking-for-update", () => send("update-status", { state: "checking" }));
-  autoUpdater.on("update-available", (info) =>
-    send("update-status", { state: "available", version: info.version })
-  );
-  autoUpdater.on("update-not-available", () => send("update-status", { state: "not-available" }));
-  autoUpdater.on("download-progress", (progress) =>
-    send("update-status", { state: "downloading", percent: progress.percent })
-  );
-  autoUpdater.on("update-downloaded", (info) =>
-    send("update-status", { state: "downloaded", version: info.version })
-  );
-  autoUpdater.on("error", (err) =>
-    send("update-status", { state: "error", message: err?.message || String(err) })
-  );
-
-  ipcMain.handle("update:check", () => {
-    if (isDev) return { skipped: true };
-    return autoUpdater.checkForUpdates();
+// Small frameless window shown at cold-start while we check for (and, if found,
+// silently install) an update — replaces the old opt-in "new version available"
+// banner + NSIS progress UI entirely. Only used for a real launch: restoring
+// from the tray/dock just re-shows the existing (already-loaded) main window,
+// so this never reappears once the app is actually up.
+function createSplashWindow() {
+  const win = new BrowserWindow({
+    width: 420,
+    height: 460,
+    frame: false,
+    resizable: false,
+    movable: true,
+    backgroundColor: "#0d0d0d",
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, "splash-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
   });
-  ipcMain.handle("update:download", () => autoUpdater.downloadUpdate());
-  ipcMain.handle("update:install", () => autoUpdater.quitAndInstall());
+  win.once("ready-to-show", () => win.show());
+  win.loadFile(path.join(__dirname, "splash.html"));
+  return win;
+}
+
+// public/ isn't part of the packaged build (only dist/ and electron/ are —
+// see electron-builder.yml), but Vite copies public/* into dist/ at build
+// time, so the packaged icon has to come from there instead.
+function appIconPath() {
+  return path.join(__dirname, isDev ? "../public/logo.png" : "../dist/logo.png");
 }
 
 function createWindow() {
@@ -254,7 +256,7 @@ function createWindow() {
       webSecurity: !isDev,
       sandbox: false,
     },
-    icon: path.join(__dirname, "../public/logo.png"),
+    icon: appIconPath(),
     show: false,
   });
 
@@ -332,7 +334,7 @@ app.on("before-quit", () => {
 });
 
 function createTray(win) {
-  const icon = nativeImage.createFromPath(path.join(__dirname, "../public/logo.png")).resize({ width: 32, height: 32 });
+  const icon = nativeImage.createFromPath(appIconPath()).resize({ width: 32, height: 32 });
   tray = new Tray(icon);
   tray.setToolTip("ALaunchi");
   tray.setContextMenu(
@@ -350,16 +352,57 @@ function createTray(win) {
 
 app.whenReady().then(async () => {
   await ensureDirs();
-  mainWindow = createWindow();
-  setupAutoUpdater(mainWindow);
-  createTray(mainWindow);
   reconcileDanglingPlaytimeSessions();
-  if (!isDev) {
-    autoUpdater.checkForUpdates().catch((err) => console.error("Auto-update check failed:", err));
+
+  const launchMain = () => {
+    mainWindow = createWindow();
+    createTray(mainWindow);
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
+    });
+  };
+
+  // Dev mode has no packaged installer to update, and constantly popping the
+  // splash on every `npm run electron:dev` restart would just be noise.
+  if (isDev) {
+    launchMain();
+    return;
   }
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
+  const splash = createSplashWindow();
+  const sendSplashState = (data) => {
+    if (!splash.isDestroyed()) splash.webContents.send("splash:state", data);
+  };
+
+  let launched = false;
+  const proceedToMain = () => {
+    if (launched) return;
+    launched = true;
+    launchMain();
+    mainWindow.once("ready-to-show", () => {
+      if (!splash.isDestroyed()) splash.close();
+    });
+  };
+
+  // Forced, silent update: no banner, no confirmation — if a newer version
+  // exists, download it (splash switches to "Actualizando..."), then install
+  // and relaunch automatically (isSilent, isForceRunAfter) before the player
+  // ever reaches the main window. Any failure along the way just falls back
+  // to launching the current version rather than blocking forever.
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.on("update-available", () => sendSplashState({ state: "updating" }));
+  autoUpdater.on("download-progress", (progress) => sendSplashState({ state: "updating", percent: progress.percent }));
+  autoUpdater.on("update-downloaded", () => autoUpdater.quitAndInstall(true, true));
+  autoUpdater.on("update-not-available", proceedToMain);
+  autoUpdater.on("error", (err) => {
+    console.error("Auto-update failed:", err);
+    proceedToMain();
+  });
+
+  autoUpdater.checkForUpdates().catch((err) => {
+    console.error("Auto-update check failed:", err);
+    proceedToMain();
   });
 });
 

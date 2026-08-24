@@ -422,8 +422,6 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
 type JavaStatus = "checking" | "ok" | "missing";
 type JavaInstallStage = "idle" | "fetching" | "downloading" | "extracting" | "done";
 
-type UpdateState = "idle" | "checking" | "available" | "downloading" | "downloaded" | "error";
-
 export default function Home() {
   const { isAuthenticated, username, uuid } = useAuth();
   const [, setLocation] = useLocation();
@@ -447,10 +445,6 @@ export default function Home() {
   const [javaInstalling, setJavaInstalling] = useState(false);
   const [javaStage, setJavaStage] = useState<JavaInstallStage>("idle");
   const [javaProgress, setJavaProgress] = useState(0);
-
-  const [updateState, setUpdateState] = useState<UpdateState>("idle");
-  const [updateVersion, setUpdateVersion] = useState("");
-  const [updatePercent, setUpdatePercent] = useState(0);
 
   // Registers you in the shared player directory (chat's "who can I message")
   // once per session, as soon as we know who's logged in.
@@ -490,44 +484,6 @@ export default function Home() {
     });
     return off;
   }, []);
-
-  useEffect(() => {
-    if (!api?.onUpdateStatus) return;
-    const off = api.onUpdateStatus((data: any) => {
-      if (data.state === "available") {
-        setUpdateVersion(data.version ?? "");
-        setUpdateState("available");
-      } else if (data.state === "downloading") {
-        setUpdateState("downloading");
-        setUpdatePercent(data.percent ?? 0);
-      } else if (data.state === "downloaded") {
-        setUpdateVersion(data.version ?? updateVersion);
-        setUpdateState("downloaded");
-      } else if (data.state === "error") {
-        setUpdateState("idle");
-      } else if (data.state === "not-available") {
-        setUpdateState("idle");
-      }
-    });
-    api.checkForUpdate?.();
-    return off;
-  }, []);
-
-  const handleDownloadUpdate = async () => {
-    if (!api) return;
-    setUpdateState("downloading");
-    setUpdatePercent(0);
-    try {
-      await api.downloadUpdate();
-    } catch (e: any) {
-      toast.error("Error descargando la actualización: " + (e?.message || "desconocido"));
-      setUpdateState("available");
-    }
-  };
-
-  const handleInstallUpdate = () => {
-    api?.installUpdate?.();
-  };
 
   const checkJava = useCallback(async () => {
     if (!api) return;
@@ -591,53 +547,6 @@ export default function Home() {
 
   return (
     <div className="min-h-full bg-background text-foreground flex flex-col">
-
-      <AnimatePresence>
-        {(updateState === "available" || updateState === "downloading" || updateState === "downloaded") && (
-          <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="bg-accent/10 border-b border-accent/30 px-6 py-3 flex items-center justify-between gap-4 shrink-0"
-          >
-            <div className="flex items-center gap-3">
-              <Sparkles className="h-4 w-4 text-accent shrink-0" />
-              <span className="text-sm text-accent-foreground/90">
-                {updateState === "downloaded"
-                  ? `Actualización ${updateVersion} lista para instalar.`
-                  : `Nueva versión ${updateVersion} disponible.`}
-              </span>
-            </div>
-            {updateState === "available" && (
-              <Button
-                size="sm"
-                onClick={handleDownloadUpdate}
-                className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold shrink-0"
-              >
-                <Download className="mr-2 h-3.5 w-3.5" />
-                Descargar actualización
-              </Button>
-            )}
-            {updateState === "downloading" && (
-              <div className="flex items-center gap-3 min-w-[180px]">
-                <Loader2 className="h-4 w-4 animate-spin text-accent shrink-0" />
-                <Progress value={updatePercent} className="h-1.5 flex-1" />
-                <span className="text-xs text-accent tabular-nums shrink-0">{Math.round(updatePercent)}%</span>
-              </div>
-            )}
-            {updateState === "downloaded" && (
-              <Button
-                size="sm"
-                onClick={handleInstallUpdate}
-                className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold shrink-0"
-              >
-                <RefreshCw className="mr-2 h-3.5 w-3.5" />
-                Reiniciar y actualizar
-              </Button>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       <AnimatePresence>
         {javaStatus === "missing" && (

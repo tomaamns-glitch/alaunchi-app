@@ -21,5 +21,11 @@ export default defineConfig({
     port: 5173,
     host: "127.0.0.1",
     strictPort: true,
+    // electron-builder writes its output straight into release/ (unpacked app,
+    // installer, etc.) — without this, its file writes look like source changes
+    // and Vite spams full-page reloads for the whole duration of a build.
+    watch: {
+      ignored: ["**/release/**"],
+    },
   },
 });
