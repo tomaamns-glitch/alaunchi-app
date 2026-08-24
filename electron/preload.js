@@ -72,16 +72,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("app:error", handler);
   },
 
-  // Auto-update
-  checkForUpdate: () => ipcRenderer.invoke("update:check"),
-  downloadUpdate: () => ipcRenderer.invoke("update:download"),
-  installUpdate: () => ipcRenderer.invoke("update:install"),
-  onUpdateStatus: (callback) => {
-    const handler = (_, data) => callback(data);
-    ipcRenderer.on("update-status", handler);
-    return () => ipcRenderer.removeListener("update-status", handler);
-  },
-
   // Events from main process
   onInstallProgress: (callback) => {
     const handler = (_, data) => callback(data);
