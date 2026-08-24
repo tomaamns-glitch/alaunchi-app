@@ -7,6 +7,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { focusWindow } from "@/services/electron";
 import { PresenceList } from "@/components/presence-list";
 import { PresenceAllDialog } from "@/components/presence-all-dialog";
+import { useHeaderOverlay } from "@/hooks/use-chat-heads";
 
 interface PresenceButtonProps {
   modpackId: string;
@@ -41,7 +42,9 @@ function formatAnnouncement(onlineOthers: [string, PresenceEntry][], nicknames: 
 export function PresenceButton({ modpackId, packName, open, onOpenChange }: PresenceButtonProps) {
   const myUuid = useAuth((s) => s.uuid);
   const [entries, setEntries] = useState<Record<string, PresenceEntry>>({});
-  const [showAll, setShowAll] = useState(false);
+  const showAll = useHeaderOverlay((s) => s.active === "presence-all");
+  const openOverlay = useHeaderOverlay((s) => s.open);
+  const closeOverlay = useHeaderOverlay((s) => s.close);
   const [announcement, setAnnouncement] = useState<string | null>(null);
   const announcedForRef = useRef<string | null>(null);
   // null = no snapshot seen yet for the current modpackId, so the *next* diff
@@ -124,7 +127,7 @@ export function PresenceButton({ modpackId, packName, open, onOpenChange }: Pres
                 type="button"
                 onClick={() => {
                   onOpenChange(false);
-                  setShowAll(true);
+                  openOverlay("presence-all");
                 }}
                 className="text-xs font-semibold text-accent hover:text-accent/80"
               >
@@ -137,7 +140,7 @@ export function PresenceButton({ modpackId, packName, open, onOpenChange }: Pres
       </AnimatePresence>
 
       {showAll && (
-        <PresenceAllDialog players={sortAllPresence(entries)} myUuid={myUuid} onClose={() => setShowAll(false)} />
+        <PresenceAllDialog players={sortAllPresence(entries)} myUuid={myUuid} onClose={closeOverlay} />
       )}
 
       <button

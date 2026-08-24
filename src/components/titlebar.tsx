@@ -38,17 +38,7 @@ export function Titlebar() {
         >
           {onModpackDetail ? <ArrowLeft className="h-4 w-4" /> : <Home className="h-4 w-4" />}
         </button>
-        <img
-          src="/logo.png"
-          alt="ALaunchi"
-          className="h-6 object-contain"
-          onError={(e) => {
-            e.currentTarget.style.display = "none";
-            const sibling = e.currentTarget.nextElementSibling as HTMLElement | null;
-            sibling?.classList.remove("hidden");
-          }}
-        />
-        <span className="hidden font-bold tracking-tight text-white text-sm">
+        <span className="font-bold tracking-tight text-white text-sm">
           <span className="text-accent">AL</span>aunchi
         </span>
       </div>

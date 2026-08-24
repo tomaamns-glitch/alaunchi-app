@@ -1,11 +1,13 @@
 import { ref, set, update, push, onValue, runTransaction, serverTimestamp, off, type Unsubscribe } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
+import type { SharedContent } from "./content-share";
 
 export interface ChatMessage {
   senderUuid: string;
   senderUsername: string;
   text: string;
   timestamp: number;
+  content?: SharedContent;
 }
 
 export interface ChatIndexEntry {
@@ -59,9 +61,48 @@ export function subscribeMessages(
   return () => off(messagesRef, "value", handler);
 }
 
-/** Sends a message and updates both participants' conversation index — the
+/** Pushes a message and updates both participants' conversation index — the
  *  sender's directly, the recipient's with the sender's real username so their
- *  sidebar shows who it's from even before they've set a nickname for you. */
+ *  sidebar shows who it's from even before they've set a nickname for you.
+ *  Shared by sendMessage and sendSharedContent, which only differ in the
+ *  message body and what shows as the index preview. */
+async function pushMessageAndUpdateIndex(
+  myUuid: string,
+  myUsername: string,
+  otherUuid: string,
+  otherUsername: string,
+  body: { text: string; content?: SharedContent },
+  indexPreview: string
+): Promise<void> {
+  const conversationId = getConversationId(myUuid, otherUuid);
+  const timestamp = Date.now();
+
+  await push(ref(rtdb, `chats/${conversationId}/messages`), {
+    senderUuid: myUuid,
+    senderUsername: myUsername,
+    text: body.text,
+    ...(body.content ? { content: body.content } : {}),
+    timestamp: serverTimestamp(),
+  });
+
+  await Promise.all([
+    set(ref(rtdb, `chatIndex/${myUuid}/${otherUuid}`), {
+      otherUsername,
+      lastMessage: indexPreview,
+      lastTimestamp: timestamp,
+      unreadCount: 0,
+    }),
+    // Transaction (not set) on the recipient's side — a plain set would clobber
+    // whatever unreadCount was already sitting there from earlier messages.
+    runTransaction(ref(rtdb, `chatIndex/${otherUuid}/${myUuid}`), (current) => ({
+      otherUsername: myUsername,
+      lastMessage: indexPreview,
+      lastTimestamp: timestamp,
+      unreadCount: (current?.unreadCount || 0) + 1,
+    })),
+  ]);
+}
+
 export async function sendMessage(
   myUuid: string,
   myUsername: string,
@@ -71,32 +112,27 @@ export async function sendMessage(
 ): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) return;
-  const conversationId = getConversationId(myUuid, otherUuid);
-  const timestamp = Date.now();
+  await pushMessageAndUpdateIndex(myUuid, myUsername, otherUuid, otherUsername, { text: trimmed }, trimmed);
+}
 
-  await push(ref(rtdb, `chats/${conversationId}/messages`), {
-    senderUuid: myUuid,
-    senderUsername: myUsername,
-    text: trimmed,
-    timestamp: serverTimestamp(),
-  });
-
-  await Promise.all([
-    set(ref(rtdb, `chatIndex/${myUuid}/${otherUuid}`), {
-      otherUsername,
-      lastMessage: trimmed,
-      lastTimestamp: timestamp,
-      unreadCount: 0,
-    }),
-    // Transaction (not set) on the recipient's side — a plain set would clobber
-    // whatever unreadCount was already sitting there from earlier messages.
-    runTransaction(ref(rtdb, `chatIndex/${otherUuid}/${myUuid}`), (current) => ({
-      otherUsername: myUsername,
-      lastMessage: trimmed,
-      lastTimestamp: timestamp,
-      unreadCount: (current?.unreadCount || 0) + 1,
-    })),
-  ]);
+/** Shares a piece of local content (mod/shader/texture pack/emote) as a
+ *  message — the recipient sees a card with a Descargar button instead of
+ *  plain text. */
+export async function sendSharedContent(
+  myUuid: string,
+  myUsername: string,
+  otherUuid: string,
+  otherUsername: string,
+  content: SharedContent
+): Promise<void> {
+  await pushMessageAndUpdateIndex(
+    myUuid,
+    myUsername,
+    otherUuid,
+    otherUsername,
+    { text: "", content },
+    `📎 ${content.displayName}`
+  );
 }
 
 /** Clears unread count for one conversation — call when the user opens it. */

@@ -30,7 +30,7 @@ import { ChangelogViewerDialog } from "@/components/changelog-viewer-dialog";
 import { PresenceButton } from "@/components/presence-button";
 import { ChatWindow } from "@/components/chat-window";
 import { ChatBubbleRow } from "@/components/chat-bubble-row";
-import { useChatHeads } from "@/hooks/use-chat-heads";
+import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
 import { reportCaughtError } from "@/services/error-reporter";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
@@ -430,15 +430,17 @@ export default function Home() {
   const myHeadUrl = usePlayerHeadUrl(uuid);
 
   const [currentIndex, setCurrentIndex] = useState(0);
-  // Skin panel and presence popup are mutually exclusive — opening one closes the other.
-  const [activePopup, setActivePopup] = useState<"profile" | "presence" | null>(null);
+  // Skin panel, players popup, "todos" dialog, and an open chat are all
+  // mutually exclusive — see useHeaderOverlay/useChatHeads for the coordination.
+  const activePopup = useHeaderOverlay((s) => s.active);
+  const openOverlay = useHeaderOverlay((s) => s.open);
+  const closeOverlay = useHeaderOverlay((s) => s.close);
   const profileOpen = activePopup === "profile";
   const setProfileOpen = (next: boolean | ((prev: boolean) => boolean)) => {
-    setActivePopup((prev) => {
-      const wasOpen = prev === "profile";
-      const nextOpen = typeof next === "function" ? next(wasOpen) : next;
-      return nextOpen ? "profile" : null;
-    });
+    const wasOpen = profileOpen;
+    const nextOpen = typeof next === "function" ? next(wasOpen) : next;
+    if (nextOpen) openOverlay("profile");
+    else closeOverlay();
   };
 
   const [javaStatus, setJavaStatus] = useState<JavaStatus>("checking");
@@ -719,9 +721,9 @@ export default function Home() {
                 onClick={() => setProfileOpen((v) => !v)}
                 className="relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors"
               >
-                <Avatar className="h-6 w-6 border border-white/10">
-                  {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} />}
-                  <AvatarFallback className="bg-accent/20 text-accent text-xs font-bold">
+                <Avatar className="h-6 w-6 rounded-md border border-white/10">
+                  {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-md" />}
+                  <AvatarFallback className="rounded-md bg-accent/20 text-accent text-xs font-bold">
                     {username?.charAt(0)?.toUpperCase() ?? "?"}
                   </AvatarFallback>
                 </Avatar>
@@ -734,7 +736,7 @@ export default function Home() {
               modpackId={currentPack.id}
               packName={currentPack.name}
               open={activePopup === "presence"}
-              onOpenChange={(next) => setActivePopup(next ? "presence" : null)}
+              onOpenChange={(next) => (next ? openOverlay("presence") : closeOverlay())}
             />
             {uuid && (
               <div className="relative">

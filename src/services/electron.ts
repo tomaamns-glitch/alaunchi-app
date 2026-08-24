@@ -100,6 +100,14 @@ export async function downloadInstanceFile(modpackId: string, path: string, url:
   if (isElectron) await eAPI.downloadInstanceFile({ modpackId, path, url, sha1 });
 }
 
+/** Reads a file already inside an instance as base64 — used to upload the
+ *  sender's own copy when sharing content in chat. */
+export async function readInstanceFile(modpackId: string, path: string): Promise<string> {
+  if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
+  const { base64 } = await eAPI.readInstanceFile({ modpackId, path });
+  return base64;
+}
+
 /** Opens an installed instance's folder in the OS file explorer. */
 export async function openInstanceFolder(modpackId: string): Promise<void> {
   if (isElectron) await eAPI.openInstanceFolder({ modpackId });
@@ -110,6 +118,7 @@ export interface EmoteFile {
   displayName: string;
   /** Base64 PNG thumbnail extracted from the .emotecraft file, if it embeds one. */
   thumbnailBase64: string | null;
+  sha1: string | null;
 }
 
 /** Lists the Emotecraft (.emotecraft) files in an installed instance's emotes/ folder. */

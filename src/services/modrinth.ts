@@ -130,6 +130,40 @@ export async function identifyModrinthFiles(entries: HashableFile[]): Promise<Ma
   return result;
 }
 
+export type InstallableCategory = "mods" | "shaderpacks" | "resourcepacks";
+
+/** Which installable category a manifest/instance file path belongs to, from
+ *  its top-level folder — null for anything outside mods/shaderpacks/resourcepacks. */
+export function categoryOf(path: string): InstallableCategory | null {
+  const top = path.split("/")[0]?.toLowerCase();
+  if (top === "mods") return "mods";
+  if (top === "shaderpacks" || top === "shaders") return "shaderpacks";
+  if (top === "resourcepacks") return "resourcepacks";
+  return null;
+}
+
+export function categorize<T extends { path: string }>(files: T[]): Record<InstallableCategory, T[]> {
+  const out: Record<InstallableCategory, T[]> = { mods: [], shaderpacks: [], resourcepacks: [] };
+  for (const f of files) {
+    const cat = categoryOf(f.path);
+    if (cat) out[cat].push(f);
+  }
+  return out;
+}
+
+export function fileName(path: string): string {
+  return path.split("/").pop() || path;
+}
+
+/** Best-effort mod name from a filename: everything before the first "-" or "_", capitalized. */
+export function guessTitle(filename: string): string {
+  const base = filename.replace(/\.[^.]+$/, "");
+  const stop = base.search(/[-_]/);
+  const raw = (stop === -1 ? base : base.slice(0, stop)).trim();
+  if (!raw) return filename;
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
 export interface ModrinthVersionDependency {
   projectId: string | null;
   versionId: string | null;

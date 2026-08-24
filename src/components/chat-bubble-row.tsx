@@ -1,3 +1,4 @@
+import { AnimatePresence, motion } from "framer-motion";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
 import { useChatHeads, useVisibleChatBubbles } from "@/hooks/use-chat-heads";
@@ -10,25 +11,29 @@ export function ChatBubbleRow() {
   const chatIndex = useChatHeads((s) => s.chatIndex);
   const openUuid = useChatHeads((s) => s.openUuid);
   const openChat = useChatHeads((s) => s.openChat);
+  const minimizeChat = useChatHeads((s) => s.minimizeChat);
 
   if (uuids.length === 0) return null;
 
   return (
     <div className="flex items-center gap-1.5">
-      {uuids.map((uuid) => {
-        const entry = chatIndex[uuid];
-        const unread = entry?.unreadCount || 0;
-        return (
-          <ChatBubble
-            key={uuid}
-            uuid={uuid}
-            username={entry?.otherUsername ?? ""}
-            unread={unread}
-            active={openUuid === uuid}
-            onClick={() => openChat(uuid)}
-          />
-        );
-      })}
+      <AnimatePresence>
+        {uuids.map((uuid) => {
+          const entry = chatIndex[uuid];
+          const unread = entry?.unreadCount || 0;
+          const active = openUuid === uuid;
+          return (
+            <ChatBubble
+              key={uuid}
+              uuid={uuid}
+              username={entry?.otherUsername ?? ""}
+              unread={unread}
+              active={active}
+              onClick={() => (active ? minimizeChat() : openChat(uuid))}
+            />
+          );
+        })}
+      </AnimatePresence>
     </div>
   );
 }
@@ -49,7 +54,14 @@ function ChatBubble({
   const headUrl = usePlayerHeadUrl(uuid);
 
   return (
-    <button
+    <motion.button
+      layout
+      initial={{ opacity: 0, scale: 0.7 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.7 }}
+      whileHover={{ scale: 1.08 }}
+      whileTap={{ scale: 0.92 }}
+      transition={{ duration: 0.15 }}
       type="button"
       onClick={onClick}
       aria-label={`Chat con ${username}`}
@@ -63,11 +75,19 @@ function ChatBubble({
           {username?.charAt(0)?.toUpperCase() ?? "?"}
         </AvatarFallback>
       </Avatar>
-      {unread > 0 && (
-        <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none border border-card">
-          {unread > 1 ? unread : ""}
-        </span>
-      )}
-    </button>
+      <AnimatePresence>
+        {unread > 0 && (
+          <motion.span
+            initial={{ opacity: 0, scale: 0.4 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.4 }}
+            transition={{ duration: 0.15 }}
+            className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none border border-card"
+          >
+            {unread > 1 ? unread : ""}
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </motion.button>
   );
 }
