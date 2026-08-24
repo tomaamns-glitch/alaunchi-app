@@ -18,7 +18,7 @@ export function PresenceAllDialog({ players, myUuid, onClose }: PresenceAllDialo
           <DialogTitle className="text-white">Todos los jugadores</DialogTitle>
         </DialogHeader>
         <div className="max-h-[60vh] overflow-y-auto">
-          <PresenceList players={players} myUuid={myUuid} editable />
+          <PresenceList players={players} myUuid={myUuid} />
         </div>
       </DialogContent>
     </Dialog>

@@ -1,6 +1,6 @@
 import { reportError as sendErrorReport } from "./github";
 import { getAppVersion, isElectron, onAppError } from "./electron";
-import { getGithubRepo } from "@/lib/app-config";
+import { getCrashReportConfig } from "@/lib/app-config";
 
 const reportedKeys = new Set<string>();
 let appVersion = "";
@@ -14,8 +14,7 @@ async function send(context: string, message: string, stack?: string) {
   if (reportedKeys.has(key)) return;
   reportedKeys.add(key);
 
-  const repoUrl = getGithubRepo();
-  const token = localStorage.getItem("githubToken") ?? "";
+  const { repoUrl, token } = getCrashReportConfig();
   if (!repoUrl || !token) return;
 
   await sendErrorReport(repoUrl, token, {
@@ -56,4 +55,14 @@ export function initErrorReporter() {
 /** Called from the React error boundary — a render crash never reaches window.onerror. */
 export function reportRenderError(error: Error, componentStack?: string) {
   void send("renderer:react", error.message, componentStack ? `${error.stack}\n\n${componentStack}` : error.stack);
+}
+
+/** Called from a try/catch that already handles the error itself (toast, etc.) —
+ *  those never reach window.onerror since they're not "unhandled". Use this for
+ *  errors worth knowing about even though the user already got a friendly message,
+ *  like a modpack failing to download or update. */
+export function reportCaughtError(context: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const stack = error instanceof Error ? error.stack : undefined;
+  void send(context, message, stack);
 }

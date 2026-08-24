@@ -1,10 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useAuth } from "@/hooks/use-auth";
+import { invalidatePlayerHead } from "@/hooks/use-player-head";
+import { useShowcaseSkin } from "@/hooks/use-showcase-skin";
+import { getShowcaseUsernames, addShowcaseUsername, removeShowcaseUsername } from "@/lib/skin-showcase";
 import { SkinViewer3D } from "@/components/skin-viewer-3d";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
-import { Loader2, Upload, Trash, Check, Shirt } from "lucide-react";
+import { Loader2, Upload, Trash, Check, Shirt, Store, Plus, X, AlertCircle } from "lucide-react";
 import {
   getSkinProfile,
   changeSkin,
@@ -39,6 +42,9 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
 
   const [skinDataUrl, setSkinDataUrl] = useState<string | null>(null);
   const [capeDataUrl, setCapeDataUrl] = useState<string | null>(null);
+
+  const [showcaseUsernames, setShowcaseUsernames] = useState<string[]>(() => getShowcaseUsernames());
+  const [newShowcaseName, setNewShowcaseName] = useState("");
 
   const activeSkin = profile?.skins.find((s) => s.state === "ACTIVE") ?? null;
   const activeCape = profile?.capes.find((c) => c.state === "ACTIVE") ?? null;
@@ -82,6 +88,26 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
     return () => { cancelled = true; };
   }, [activeCape?.url]);
 
+  // Backs up whatever skin is equipped the moment you open this panel, so if you
+  // then change to something else, the old one is still in your library instead
+  // of just gone. Runs once per open; skipped if that exact skin is already saved.
+  const autoBackedUpRef = useRef(false);
+  useEffect(() => {
+    if (autoBackedUpRef.current || !activeSkin || !skinDataUrl) return;
+    autoBackedUpRef.current = true;
+    const base64 = skinDataUrl.slice(skinDataUrl.indexOf(",") + 1);
+    if (library.some((entry) => entry.fileBase64 === base64)) return;
+    const baseName = username || "Skin actual";
+    let name = baseName;
+    let suffix = 2;
+    while (library.some((entry) => entry.name === name)) {
+      name = `${baseName} (${suffix++})`;
+    }
+    saveToSkinLibrary(name, activeSkin.variant === "SLIM" ? "slim" : "classic", base64)
+      .then((entry) => setLibrary((prev) => [...prev, entry]))
+      .catch(() => {});
+  }, [activeSkin, skinDataUrl, library, username]);
+
   const handleFileChosen = async (file: File) => {
     setPendingName(file.name.replace(/\.png$/i, ""));
     const base64 = await fileToBase64(file);
@@ -102,6 +128,7 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
     try {
       const updated = await changeSkin(mcToken, pendingVariant, pendingBase64);
       setProfile(updated);
+      invalidatePlayerHead(uuid);
       toast.success("Skin actualizada en tu cuenta.");
       clearPending();
     } catch (e: any) {
@@ -131,6 +158,7 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
     try {
       const updated = await changeSkin(mcToken, entry.variant, entry.fileBase64);
       setProfile(updated);
+      invalidatePlayerHead(uuid);
       toast.success(`${entry.name} aplicada.`);
     } catch (e: any) {
       toast.error(e?.message || "Error al aplicar la skin.");
@@ -149,6 +177,46 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleApplyShowcase = async (label: string, fullDataUrl: string, variant: "slim" | "classic") => {
+    if (!mcToken) return;
+    setBusy(true);
+    try {
+      const base64 = fullDataUrl.slice(fullDataUrl.indexOf(",") + 1);
+      const updated = await changeSkin(mcToken, variant, base64);
+      setProfile(updated);
+      invalidatePlayerHead(uuid);
+      toast.success(`Skin de ${label} aplicada.`);
+    } catch (e: any) {
+      toast.error(e?.message || "Error al aplicar la skin.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveShowcaseToLibrary = async (label: string, fullDataUrl: string, variant: "slim" | "classic") => {
+    setBusy(true);
+    try {
+      const base64 = fullDataUrl.slice(fullDataUrl.indexOf(",") + 1);
+      const entry = await saveToSkinLibrary(label, variant, base64);
+      setLibrary((prev) => [...prev, entry]);
+      toast.success(`${label} guardada en tu biblioteca.`);
+    } catch (e: any) {
+      toast.error(e?.message || "Error al guardar.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAddShowcaseName = () => {
+    if (!newShowcaseName.trim()) return;
+    setShowcaseUsernames(addShowcaseUsername(newShowcaseName));
+    setNewShowcaseName("");
+  };
+
+  const handleRemoveShowcaseName = (name: string) => {
+    setShowcaseUsernames(removeShowcaseUsername(name));
   };
 
   const handleToggleCape = async (capeId: string) => {
@@ -197,6 +265,9 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
           <TabsList className="w-full bg-card/50 border border-white/5">
             <TabsTrigger value="library" className="flex-1 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground">
               Biblioteca ({library.length})
+            </TabsTrigger>
+            <TabsTrigger value="showcase" className="flex-1 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground">
+              Escaparate
             </TabsTrigger>
             {profile && profile.capes.length > 0 && (
               <TabsTrigger value="capes" className="flex-1 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground">
@@ -324,6 +395,47 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
             )}
           </TabsContent>
 
+          <TabsContent value="showcase" className="pt-3 space-y-3">
+            <div className="flex gap-2">
+              <Input
+                value={newShowcaseName}
+                onChange={(e) => setNewShowcaseName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAddShowcaseName()}
+                placeholder="Nombre de Minecraft..."
+                className="flex-1 bg-background/50 border-white/10 text-sm h-8"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={handleAddShowcaseName}
+                disabled={!newShowcaseName.trim()}
+                className="h-8 px-2.5"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+
+            {showcaseUsernames.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-4">
+                Añade un nombre de Minecraft para ver su skin actual aquí.
+              </p>
+            ) : (
+              <div className="grid grid-cols-3 gap-2">
+                {showcaseUsernames.map((name) => (
+                  <ShowcaseEntry
+                    key={name}
+                    username={name}
+                    busy={busy}
+                    onApply={handleApplyShowcase}
+                    onSave={handleSaveShowcaseToLibrary}
+                    onRemove={() => handleRemoveShowcaseName(name)}
+                  />
+                ))}
+              </div>
+            )}
+          </TabsContent>
+
           {profile && profile.capes.length > 0 && (
             <TabsContent value="capes" className="pt-3 space-y-2">
               {profile.capes.map((cape) => (
@@ -348,6 +460,73 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
           )}
         </Tabs>
       </div>
+    </div>
+  );
+}
+
+interface ShowcaseEntryProps {
+  username: string;
+  busy: boolean;
+  onApply: (label: string, fullDataUrl: string, variant: "slim" | "classic") => void;
+  onSave: (label: string, fullDataUrl: string, variant: "slim" | "classic") => void;
+  onRemove: () => void;
+}
+
+function ShowcaseEntry({ username, busy, onApply, onSave, onRemove }: ShowcaseEntryProps) {
+  const { loading, error, headUrl, fullDataUrl, variant } = useShowcaseSkin(username);
+
+  return (
+    <div className="relative group flex flex-col items-center gap-1 p-2 rounded-md bg-white/5 border border-white/5">
+      <button
+        type="button"
+        onClick={onRemove}
+        title="Quitar del escaparate"
+        className="absolute -top-1.5 -left-1.5 h-4 w-4 flex items-center justify-center rounded-full bg-white/10 text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-white/20"
+      >
+        <X className="h-2.5 w-2.5" />
+      </button>
+
+      {loading ? (
+        <div className="h-10 w-10 flex items-center justify-center">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        </div>
+      ) : error || !headUrl || !fullDataUrl ? (
+        <div className="h-10 w-10 flex items-center justify-center" title={error ?? "No disponible"}>
+          <AlertCircle className="h-4 w-4 text-muted-foreground" />
+        </div>
+      ) : (
+        <img
+          src={headUrl}
+          alt={username}
+          className="h-10 w-10 object-contain bg-black/30 rounded"
+          style={{ imageRendering: "pixelated" }}
+        />
+      )}
+
+      <span className="text-[10px] text-gray-300 truncate w-full text-center">{username}</span>
+
+      {!loading && headUrl && fullDataUrl && (
+        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity absolute -top-1.5 -right-1.5">
+          <button
+            type="button"
+            onClick={() => onApply(username, fullDataUrl, variant)}
+            disabled={busy}
+            title="Aplicar"
+            className="h-5 w-5 flex items-center justify-center rounded-full bg-accent text-accent-foreground hover:bg-accent/90"
+          >
+            <Check className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onSave(username, fullDataUrl, variant)}
+            disabled={busy}
+            title="Guardar en biblioteca"
+            className="h-5 w-5 flex items-center justify-center rounded-full bg-white/10 text-gray-200 hover:bg-white/20"
+          >
+            <Store className="h-3 w-3" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

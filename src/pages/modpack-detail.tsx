@@ -68,7 +68,7 @@ import {
 import { translateHtmlAwareToSpanish } from "@/services/translate";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
 import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
-import { getGithubRepo } from "@/lib/app-config";
+import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
 import { formatBytes, formatPlaytime } from "@/lib/format";
 import { toast } from "sonner";
 import { SiModrinth } from "react-icons/si";
@@ -319,7 +319,7 @@ export default function ModpackDetail() {
 
     (async () => {
       const repoUrl = getGithubRepo();
-      const token = localStorage.getItem("githubToken") || undefined;
+      const token = getModpacksToken() || undefined;
       const manifest = await fetchSnapshot(repoUrl, id, token);
       if (cancelled) return;
       const manifestFiles = manifest?.files ?? [];

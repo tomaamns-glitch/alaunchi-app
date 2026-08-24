@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ChangelogViewerDialog } from "@/components/changelog-viewer-dialog";
 import { fetchSnapshot, type ChangelogEntry } from "@/services/github";
-import { getGithubRepo } from "@/lib/app-config";
+import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
 
 interface ChangelogHistoryButtonProps {
   modpackId: string;
@@ -33,7 +33,7 @@ export function ChangelogHistoryButton({ modpackId }: ChangelogHistoryButtonProp
     if (!next || history !== null) return;
     setLoading(true);
     const repoUrl = getGithubRepo();
-    const token = localStorage.getItem("githubToken") ?? "";
+    const token = getModpacksToken();
     const manifest = await fetchSnapshot(repoUrl, modpackId, token || undefined);
     setHistory([...(manifest?.changelogHistory ?? [])].reverse());
     setLoading(false);

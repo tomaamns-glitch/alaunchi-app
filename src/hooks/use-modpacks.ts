@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { toast } from "sonner";
 import { Modpack, fetchModpacks } from "../services/github";
-import { getGithubRepo } from "../lib/app-config";
+import { getGithubRepo, getModpacksToken } from "../lib/app-config";
 import { purgeXrayFiles } from "../services/electron";
 
 const eAPI = (window as any).electronAPI;
@@ -81,7 +81,7 @@ export const useModpacks = create<ModpackState>((set, get) => ({
   loadModpacks: async () => {
     set({ loading: true, error: null });
     const repoUrl = getGithubRepo();
-    const token = localStorage.getItem("githubToken") ?? "";
+    const token = getModpacksToken();
 
     try {
       const [remoteModpacks, installedState] = await Promise.all([

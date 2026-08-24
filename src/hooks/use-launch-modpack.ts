@@ -5,7 +5,8 @@ import { installSnapshot, launchMinecraft } from "@/services/electron";
 import { markOnline } from "@/services/presence";
 import { getAzureClientId } from "@/services/auth";
 import { Modpack, fetchSnapshot, snapshotBaseUrl } from "@/services/github";
-import { getGithubRepo } from "@/lib/app-config";
+import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
+import { reportCaughtError } from "@/services/error-reporter";
 import { toast } from "sonner";
 
 export type LaunchStage = "idle" | "updating" | "launching";
@@ -26,21 +27,26 @@ export function useLaunchModpack(pack: Modpack | undefined) {
     try {
       if (pack.updateAvailable) {
         setStage("updating");
-        const repoUrl = getGithubRepo();
-        const token = localStorage.getItem("githubToken") ?? "";
-        const manifest = await fetchSnapshot(repoUrl, pack.id, token || undefined);
-        if (!manifest) throw new Error("No hay manifiesto publicado para este modpack todavía.");
+        try {
+          const repoUrl = getGithubRepo();
+          const token = getModpacksToken();
+          const manifest = await fetchSnapshot(repoUrl, pack.id, token || undefined);
+          if (!manifest) throw new Error("No hay manifiesto publicado para este modpack todavía.");
 
-        const baseUrl = snapshotBaseUrl(repoUrl, manifest);
-        await installSnapshot(
-          pack.id,
-          manifest,
-          baseUrl,
-          { name: pack.name, minecraftVersion: pack.minecraftVersion, loaderType: pack.loaderType },
-          token || undefined
-        );
-        updateModpackStatus(pack.id, { installed: true, installedVersion: manifest.version, updateAvailable: false });
-        toast.success(`${pack.name} actualizado a v${manifest.version}.`);
+          const baseUrl = snapshotBaseUrl(repoUrl, manifest);
+          await installSnapshot(
+            pack.id,
+            manifest,
+            baseUrl,
+            { name: pack.name, minecraftVersion: pack.minecraftVersion, loaderType: pack.loaderType },
+            token || undefined
+          );
+          updateModpackStatus(pack.id, { installed: true, installedVersion: manifest.version, updateAvailable: false });
+          toast.success(`${pack.name} actualizado a v${manifest.version}.`);
+        } catch (e) {
+          reportCaughtError(`modpack:updating:${pack.id}`, e);
+          throw e;
+        }
       }
 
       setStage("launching");

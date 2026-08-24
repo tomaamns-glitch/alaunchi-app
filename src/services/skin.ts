@@ -97,3 +97,49 @@ export function fileToBase64(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
+export interface ResolvedSkin {
+  skinUrl: string;
+  variant: "SLIM" | "CLASSIC";
+}
+
+/** Resolves any player's currently-equipped skin texture URL via Mojang's public
+ *  session server — works for any UUID, not just the signed-in account, and (unlike
+ *  a third-party mirror) always reflects whatever is equipped right now. */
+export async function getSkinUrlForUuid(uuid: string): Promise<ResolvedSkin | null> {
+  requireElectron();
+  const { skinUrl, variant } = await eAPI.getSkinUrlForUuid({ uuid });
+  return skinUrl ? { skinUrl, variant: variant ?? "CLASSIC" } : null;
+}
+
+/** Resolves a Minecraft username to its UUID via Mojang's public API. */
+export async function getUuidForUsername(username: string): Promise<string | null> {
+  requireElectron();
+  const { uuid } = await eAPI.getUuidForUsername({ username });
+  return uuid ?? null;
+}
+
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("No se pudo decodificar la textura de skin."));
+    img.src = src;
+  });
+}
+
+/** Crops the face plus its hat-layer overlay out of a full skin texture and
+ *  returns a square PNG data URL — the standard "player head" avatar render,
+ *  done locally instead of depending on a third-party mirror to do it for us. */
+export async function renderHeadIcon(skinDataUrl: string, size = 64): Promise<string> {
+  const img = await loadImageElement(skinDataUrl);
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas 2D no disponible.");
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(img, 8, 8, 8, 8, 0, 0, size, size);
+  ctx.drawImage(img, 40, 8, 8, 8, 0, 0, size, size);
+  return canvas.toDataURL("image/png");
+}
