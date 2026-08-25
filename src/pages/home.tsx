@@ -39,6 +39,8 @@ import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
 
 const api = (window as any).electronAPI;
 
+const CAROUSEL_POSITION_KEY = "alaunchi_carousel_pack_id";
+
 const LAUNCH_STAGE_PROGRESS: Record<string, number> = {
   preparing: 5,
   downloading_client: 20,
@@ -511,7 +513,23 @@ export default function Home() {
     }
   };
 
+  // Remember which modpack was showing across app restarts — by id, not raw
+  // index, since the carousel order can shift as modpacks are added/removed.
+  const restoredIndexRef = useRef(false);
+  useEffect(() => {
+    if (restoredIndexRef.current || modpacks.length === 0) return;
+    restoredIndexRef.current = true;
+    const lastId = localStorage.getItem(CAROUSEL_POSITION_KEY);
+    if (!lastId) return;
+    const idx = modpacks.findIndex((m) => m.id === lastId);
+    if (idx >= 0) setCurrentIndex(idx);
+  }, [modpacks]);
+
   const currentPack = modpacks[currentIndex];
+
+  useEffect(() => {
+    if (currentPack) localStorage.setItem(CAROUSEL_POSITION_KEY, currentPack.id);
+  }, [currentPack?.id]);
 
   const [showDots, setShowDots] = useState(false);
   const dotsHideTimer = useRef<number | undefined>(undefined);

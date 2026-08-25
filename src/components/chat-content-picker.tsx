@@ -1,10 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Package, Sparkles, Image as ImageIcon, Smile, Loader2, ArrowLeft } from "lucide-react";
+import { Package, Sparkles, Image as ImageIcon, Smile, Loader2, ArrowLeft, Send } from "lucide-react";
 import { listInstanceFiles, listEmotes, readInstanceFile } from "@/services/electron";
 import { identifyModrinthFiles, categoryOf, fileName, guessTitle } from "@/services/modrinth";
 import { uploadSharedContent, type ContentCategory, type SharedContent } from "@/services/content-share";
 import { sendSharedContent } from "@/services/chat";
+import { usePlayerSkinUrl } from "@/hooks/use-player-head";
+import { useEmotePreview } from "@/hooks/use-emote-preview";
+import { EmoteAnimation } from "@/lib/emote-animation";
+import { SkinViewer3D } from "@/components/skin-viewer-3d";
 import { toast } from "sonner";
 
 interface ChatContentPickerProps {
@@ -46,8 +50,17 @@ export function ChatContentPicker({
   const [items, setItems] = useState<PickerItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [sendingPath, setSendingPath] = useState<string | null>(null);
+  const [previewingEmote, setPreviewingEmote] = useState<PickerItem | null>(null);
+
+  const myPreviewSkinUrl = usePlayerSkinUrl(myUuid);
+  const previewEmoteData = useEmotePreview(currentPackId, previewingEmote?.fileName);
+  const previewAnimation = useMemo(
+    () => (previewEmoteData ? new EmoteAnimation(previewEmoteData) : null),
+    [previewEmoteData]
+  );
 
   useEffect(() => {
+    setPreviewingEmote(null);
     if (!category) {
       setItems([]);
       return;
@@ -160,14 +173,48 @@ export function ChatContentPicker({
               whileHover={{ scale: 1.08 }}
               whileTap={{ scale: 0.9 }}
               type="button"
-              onClick={() => setCategory(null)}
+              onClick={() => (previewingEmote ? setPreviewingEmote(null) : setCategory(null))}
               className="h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-300"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
             </motion.button>
-            <span className="text-xs font-semibold text-white">{CATEGORY_META[category].label}</span>
+            <span className="text-xs font-semibold text-white truncate">
+              {previewingEmote ? previewingEmote.displayName : CATEGORY_META[category].label}
+            </span>
           </div>
 
+          {previewingEmote ? (
+            <div className="p-3 flex flex-col items-center gap-3">
+              <div className="flex items-center justify-center bg-black/30 rounded-md w-full h-48">
+                {myPreviewSkinUrl && previewAnimation ? (
+                  <SkinViewer3D
+                    skinUrl={myPreviewSkinUrl}
+                    animation={previewAnimation}
+                    width={130}
+                    height={182}
+                    className="cursor-grab active:cursor-grabbing"
+                  />
+                ) : (
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                )}
+              </div>
+              <motion.button
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.96 }}
+                type="button"
+                disabled={sendingPath === previewingEmote.path}
+                onClick={() => handleShare(previewingEmote)}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-accent hover:bg-accent/90 text-accent-foreground text-xs font-bold disabled:opacity-60 transition-colors"
+              >
+                {sendingPath === previewingEmote.path ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Send className="h-3.5 w-3.5" />
+                )}
+                Compartir
+              </motion.button>
+            </div>
+          ) : (
           <div className="flex-1 min-h-0 overflow-y-auto">
             {loading ? (
               <div className="flex items-center justify-center py-8">
@@ -184,7 +231,7 @@ export function ChatContentPicker({
                   whileTap={{ scale: 0.98 }}
                   type="button"
                   disabled={sendingPath === item.path}
-                  onClick={() => handleShare(item)}
+                  onClick={() => (category === "emotes" ? setPreviewingEmote(item) : handleShare(item))}
                   className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors disabled:opacity-50"
                 >
                   {item.iconUrl ? (
@@ -205,6 +252,7 @@ export function ChatContentPicker({
               ))
             )}
           </div>
+          )}
         </div>
       )}
     </motion.div>

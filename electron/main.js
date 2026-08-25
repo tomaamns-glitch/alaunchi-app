@@ -32,6 +32,14 @@ if (!app.requestSingleInstanceLock()) {
   process.exit(0);
 }
 
+// Without this, Windows toast notifications (and taskbar grouping) show up as
+// "Electron" — no app name, no icon — because Windows identifies notification
+// senders by AppUserModelID, not by window title. Must match electron-builder.yml's
+// appId so the installed NSIS shortcut and this in-process id refer to the same app.
+if (process.platform === "win32") {
+  app.setAppUserModelId("com.alaunchi.launcher");
+}
+
 app.on("second-instance", () => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -96,6 +104,16 @@ const JAVA_DIR = path.join(APP_DATA_DIR, "java");
 const OBJECTS_DIR = path.join(APP_DATA_DIR, "objects");
 const SKIN_LIBRARY_DIR = path.join(APP_DATA_DIR, "skin-library");
 const SKIN_LIBRARY_INDEX = path.join(SKIN_LIBRARY_DIR, "index.json");
+// Dropped right before the silent auto-update's quitAndInstall relaunches the
+// app, and picked up (then deleted) on the very next launch — the only way for
+// that fresh process to know it's the "just updated and reopening" one, since
+// nothing in memory survives the relaunch.
+const UPDATE_READY_FLAG = path.join(APP_DATA_DIR, "update-ready.flag");
+// Deepslate resources (blockstates/models/textures) extracted from each MC version's
+// vanilla client jar, built once and reused by the schematic viewer — see
+// ensureSchematicAssetsCached(). Never redistribute these ourselves; they're pulled
+// from a jar the user already legitimately downloaded, same as the game itself does.
+const SCHEMATIC_CACHE_DIR = path.join(CACHE_DIR, "schematic-assets");
 
 async function ensureDirs() {
   await fs.mkdir(APP_DATA_DIR, { recursive: true });
@@ -104,6 +122,7 @@ async function ensureDirs() {
   await fs.mkdir(JAVA_DIR, { recursive: true });
   await fs.mkdir(OBJECTS_DIR, { recursive: true });
   await fs.mkdir(SKIN_LIBRARY_DIR, { recursive: true });
+  await fs.mkdir(SCHEMATIC_CACHE_DIR, { recursive: true });
 }
 
 const HASH_RE = /^[a-f0-9]{64}$/;
@@ -257,6 +276,22 @@ function appIconPath() {
   return path.join(__dirname, isDev ? "../public/logo.png" : "../dist/logo.png");
 }
 
+let cachedAppIconDataUrl = null;
+
+// Renderer notification icons need a real image source (the renderer's own UI
+// just points <img> at /logo.png, which doesn't resolve the same way from a
+// file:// document) — read once and hand back a data: URL.
+ipcMain.handle("app:get-icon-data-url", async () => {
+  if (cachedAppIconDataUrl) return cachedAppIconDataUrl;
+  try {
+    const buf = await fs.readFile(appIconPath());
+    cachedAppIconDataUrl = `data:image/png;base64,${buf.toString("base64")}`;
+  } catch {
+    cachedAppIconDataUrl = null;
+  }
+  return cachedAppIconDataUrl;
+});
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1100,
@@ -371,6 +406,16 @@ app.whenReady().then(async () => {
   await ensureDirs();
   reconcileDanglingPlaytimeSessions();
 
+  // Consume the flag immediately (not just check it) so a crash-loop or a
+  // second manual relaunch right after doesn't replay the sound.
+  let justUpdated = false;
+  try {
+    if (fsSync.existsSync(UPDATE_READY_FLAG)) {
+      justUpdated = true;
+      fsSync.unlinkSync(UPDATE_READY_FLAG);
+    }
+  } catch {}
+
   const launchMain = () => {
     mainWindow = createWindow();
     createTray(mainWindow);
@@ -398,6 +443,7 @@ app.whenReady().then(async () => {
     launchMain();
     mainWindow.once("ready-to-show", () => {
       if (!splash.isDestroyed()) splash.close();
+      if (justUpdated) mainWindow.webContents.send("app:update-installed");
     });
   };
 
@@ -410,7 +456,10 @@ app.whenReady().then(async () => {
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.on("update-available", () => sendSplashState({ state: "updating" }));
   autoUpdater.on("download-progress", (progress) => sendSplashState({ state: "updating", percent: progress.percent }));
-  autoUpdater.on("update-downloaded", () => autoUpdater.quitAndInstall(true, true));
+  autoUpdater.on("update-downloaded", () => {
+    try { fsSync.writeFileSync(UPDATE_READY_FLAG, String(Date.now())); } catch {}
+    autoUpdater.quitAndInstall(true, true);
+  });
   autoUpdater.on("update-not-available", proceedToMain);
   autoUpdater.on("error", (err) => {
     console.error("Auto-update failed:", err);
@@ -507,6 +556,46 @@ function fetchJson(url, headers) {
       });
     }).on("error", reject);
   });
+}
+
+// Aggregates several third-party schematic-sharing sites (minemev, RedenMC,
+// Choculaterie, MCodex) behind one search/details/files API — reverse-engineered
+// from the open-source (MIT) LitematicDownloader Minecraft mod's client code,
+// since it's not an officially documented public API (only that mod's own docs
+// cover it). It can change or go down without notice, hence the fallback mirror.
+const MINEMEV_BASE = "https://www.minemev.com/api";
+const MINEMEV_FALLBACK_BASE = "https://api.choculaterie.com/api/FallbackModAPI";
+
+async function fetchMinemevJson(pathAndQuery) {
+  try {
+    return await fetchJson(`${MINEMEV_BASE}${pathAndQuery}`);
+  } catch (primaryErr) {
+    try {
+      return await fetchJson(`${MINEMEV_FALLBACK_BASE}${pathAndQuery}`);
+    } catch {
+      throw primaryErr; // the primary host's error is the canonical one to surface
+    }
+  }
+}
+
+// Downloads (if missing) and returns the path to a Minecraft version's vanilla
+// client jar, plus its parsed version JSON. Shared by mc:launch (which needs the
+// full launch pipeline around it) and the schematic viewer's asset extraction
+// (which only needs the jar itself) — one place fetching Mojang's version
+// manifest instead of two copies drifting apart.
+async function ensureClientJar(mcVersion, onProgress) {
+  const versionManifest = await fetchJson("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json");
+  const versionEntry = versionManifest.versions.find((v) => v.id === mcVersion);
+  if (!versionEntry) throw new Error(`Minecraft version ${mcVersion} not found`);
+  const versionJson = await fetchJson(versionEntry.url);
+
+  const versionDir = path.join(CACHE_DIR, "versions", mcVersion);
+  await fs.mkdir(versionDir, { recursive: true });
+  const clientJarPath = path.join(versionDir, `${mcVersion}.jar`);
+  if (!fsSync.existsSync(clientJarPath)) {
+    await downloadFile(versionJson.downloads.client.url, clientJarPath, onProgress || (() => {}));
+  }
+  return { clientJarPath, versionJson };
 }
 
 // General authenticated request (PUT/POST/DELETE) with an optional JSON body.
@@ -1179,6 +1268,92 @@ ipcMain.handle("mc:list-instance-files", async (_, { modpackId }) => {
   return out;
 });
 
+// Structure files (Litematica exports to schematics/, WorldEdit/FAWE to
+// config/worldedit/schematics/) can be nested in player-created subfolders, unlike
+// mods/shaders/resourcepacks, so this is the one recursive scan in the app.
+const SCHEMATIC_ROOTS = [
+  { rel: "schematics", source: "litematica" },
+  { rel: "config/worldedit/schematics", source: "worldedit" },
+];
+const SCHEMATIC_EXTS = new Set([".litematic", ".schem", ".schematic", ".nbt"]);
+
+// Classifies a raw file (dropped or picked from disk) by extension, and for
+// .zip specifically by content — v1/best-effort: a resourcepack is anything
+// with a top-level pack.mcmeta, a shaderpack is anything with .fsh/.vsh/.glsl
+// under shaders/. Doesn't recognize every possible layout, just the common one.
+function classifyContentBuffer(buf, fileName) {
+  const ext = path.extname(fileName).toLowerCase();
+  if (ext === ".jar") return { category: "mods" };
+  if (ext === ".emotecraft") return { category: "emotes" };
+  if (ext === ".litematic") return { category: "schematics", schematicRoot: "litematica" };
+  if (SCHEMATIC_EXTS.has(ext)) return { category: "schematics", schematicRoot: "worldedit" };
+  if (ext === ".zip") {
+    try {
+      const zip = new AdmZip(buf);
+      if (zip.getEntry("pack.mcmeta")) return { category: "resourcepacks" };
+      if (zip.getEntries().some((e) => /^shaders\/.*\.(fsh|vsh|glsl)$/i.test(e.entryName))) {
+        return { category: "shaderpacks" };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function walkSchematicDir(absDir, relPrefix, source, out) {
+  let entries;
+  try {
+    entries = await fs.readdir(absDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const relPath = `${relPrefix}/${entry.name}`;
+    if (entry.isDirectory()) {
+      await walkSchematicDir(path.join(absDir, entry.name), relPath, source, out);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const ext = path.extname(entry.name).toLowerCase();
+    if (!SCHEMATIC_EXTS.has(ext)) continue;
+    try {
+      const stat = await fs.stat(path.join(absDir, entry.name));
+      out.push({ path: relPath, size: stat.size, source });
+    } catch {}
+  }
+}
+
+ipcMain.handle("mc:list-schematics", async (_, { modpackId }) => {
+  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const out = [];
+  for (const { rel, source } of SCHEMATIC_ROOTS) {
+    await walkSchematicDir(path.join(instanceDir, rel), rel, source, out);
+  }
+  return out;
+});
+
+ipcMain.handle("mc:search-schematics-online", async (_, { query, page, pageSize }) => {
+  const params = new URLSearchParams({
+    search: query || "",
+    page: String(page ?? 1),
+    pagesize: String(pageSize ?? 20),
+    clean_uuid: "0",
+  });
+  return fetchMinemevJson(`/search?${params}`);
+});
+
+// Trailing slash is required — the API 301s without it, and fetchJson doesn't
+// follow redirects (nor should it grow that just for these two call sites).
+ipcMain.handle("mc:get-schematic-post", async (_, { vendor, uuid }) => {
+  return fetchMinemevJson(`/details/${encodeURIComponent(vendor)}/${encodeURIComponent(uuid)}/`);
+});
+
+ipcMain.handle("mc:get-schematic-files", async (_, { vendor, uuid }) => {
+  return fetchMinemevJson(`/files/${encodeURIComponent(vendor)}/${encodeURIComponent(uuid)}/`);
+});
+
 ipcMain.handle("mc:delete-instance-file", async (_, { modpackId, path: relPath }) => {
   const instanceDir = path.join(INSTANCES_DIR, modpackId);
   const target = safeJoin(instanceDir, relPath);
@@ -1247,6 +1422,111 @@ ipcMain.handle("mc:download-instance-file", async (_, { modpackId, path: relPath
   return { success: true };
 });
 
+// Content-type detection for a file the renderer is about to add to an instance
+// (dragged or picked) — classification only, doesn't write anything. The renderer
+// still owns the actual conflict decision (mandatory/duplicate/version-mismatch),
+// since that depends on manifest/Modrinth state that only exists client-side.
+ipcMain.handle("mc:classify-dropped-file", async (_, { fileBase64, fileName }) => {
+  const buf = Buffer.from(fileBase64, "base64");
+  const classification = classifyContentBuffer(buf, fileName);
+  const sha1 = crypto.createHash("sha1").update(buf).digest("hex");
+  return { classification, sha1 };
+});
+
+// Writes a dropped file's raw bytes into an instance. No post-write hash
+// re-check like the download handlers do: there's no network transport step
+// here to have corrupted anything in transit.
+ipcMain.handle("mc:write-instance-file", async (_, { modpackId, targetPath, fileBase64 }) => {
+  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const target = safeJoin(instanceDir, targetPath);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const tmpPath = `${target}.tmp.${process.pid}.${Date.now().toString(36)}`;
+  try {
+    await fs.writeFile(tmpPath, Buffer.from(fileBase64, "base64"));
+    await fs.rename(tmpPath, target);
+  } catch (e) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw e;
+  }
+  return { success: true };
+});
+
+// Extracts the deepslate-renderable resources (blockstates, block models, block
+// textures) a given MC version needs, straight out of that version's vanilla
+// client jar — never bundled ourselves, only pulled from a jar the user already
+// legitimately downloaded via ensureClientJar. Cached on disk per version so this
+// only runs once; a "_complete.json" sentinel (written last) marks a full cache hit.
+const SCHEMATIC_ASSET_PREFIXES = [
+  "assets/minecraft/blockstates/",
+  "assets/minecraft/models/block/",
+  "assets/minecraft/textures/block/",
+];
+
+async function ensureSchematicAssetsCached(mcVersion, onProgress) {
+  const dir = path.join(SCHEMATIC_CACHE_DIR, mcVersion);
+  const marker = path.join(dir, "_complete.json");
+  if (fsSync.existsSync(marker)) return dir;
+
+  onProgress?.({ stage: "downloading_client", progress: 0 });
+  const { clientJarPath } = await ensureClientJar(mcVersion, (progress) =>
+    onProgress?.({ stage: "downloading_client", progress })
+  );
+
+  onProgress?.({ stage: "extracting", progress: 0 });
+  const zip = new AdmZip(clientJarPath);
+  const entries = zip.getEntries().filter(
+    (entry) => !entry.isDirectory && SCHEMATIC_ASSET_PREFIXES.some((prefix) => entry.entryName.startsWith(prefix))
+  );
+  let done = 0;
+  for (const entry of entries) {
+    const relPath = entry.entryName.replace(/^assets\/minecraft\//, "");
+    const dest = path.join(dir, relPath);
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.writeFile(dest, entry.getData());
+    done++;
+    if (done % 200 === 0) onProgress?.({ stage: "extracting", progress: Math.round((done / entries.length) * 100) });
+  }
+
+  await fs.writeFile(marker, JSON.stringify({ mcVersion, extractedAt: Date.now(), fileCount: entries.length }));
+  return dir;
+}
+
+async function readSchematicAssetBundle(dir) {
+  const blockstates = {};
+  const models = {};
+  const textures = {};
+
+  const blockstatesDir = path.join(dir, "blockstates");
+  for (const name of await fs.readdir(blockstatesDir).catch(() => [])) {
+    if (!name.endsWith(".json")) continue;
+    blockstates[`minecraft:${path.basename(name, ".json")}`] = JSON.parse(await fs.readFile(path.join(blockstatesDir, name), "utf8"));
+  }
+
+  const modelsDir = path.join(dir, "models", "block");
+  for (const name of await fs.readdir(modelsDir).catch(() => [])) {
+    if (!name.endsWith(".json")) continue;
+    models[`minecraft:block/${path.basename(name, ".json")}`] = JSON.parse(await fs.readFile(path.join(modelsDir, name), "utf8"));
+  }
+
+  const texturesDir = path.join(dir, "textures", "block");
+  for (const name of await fs.readdir(texturesDir).catch(() => [])) {
+    if (!name.endsWith(".png")) continue;
+    const buf = await fs.readFile(path.join(texturesDir, name));
+    textures[`minecraft:block/${path.basename(name, ".png")}`] = buf.toString("base64");
+  }
+
+  return { blockstates, models, textures };
+}
+
+ipcMain.handle("mc:get-schematic-assets", async (event, { mcVersion }) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const dir = await ensureSchematicAssetsCached(mcVersion, (p) =>
+    win?.webContents.send("schematic-assets-progress", { mcVersion, ...p })
+  );
+  win?.webContents.send("schematic-assets-progress", { mcVersion, stage: "ready", progress: 100 });
+  return readSchematicAssetBundle(dir);
+});
+
 ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, authToken, username, uuid, xuid, clientId }) => {
   const effectiveClientId = clientId || LAUNCHER_CONFIG.azureClientId || "";
   if (!xuid) {
@@ -1258,26 +1538,16 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   const win = BrowserWindow.fromWebContents(event.sender);
   win?.webContents.send("launch-status", { modpackId, stage: "preparing" });
 
-  const versionManifest = await fetchJson("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json");
-  const versionEntry = versionManifest.versions.find((v) => v.id === mcVersion);
-  if (!versionEntry) throw new Error(`Minecraft version ${mcVersion} not found`);
-
-  const versionJson = await fetchJson(versionEntry.url);
-  const versionDir = path.join(CACHE_DIR, "versions", mcVersion);
   const librariesDir = path.join(CACHE_DIR, "libraries");
   const assetsDir = path.join(CACHE_DIR, "assets");
   const nativesDir = path.join(CACHE_DIR, "natives", mcVersion);
 
-  await fs.mkdir(versionDir, { recursive: true });
   await fs.mkdir(librariesDir, { recursive: true });
   await fs.mkdir(assetsDir, { recursive: true });
   await fs.mkdir(nativesDir, { recursive: true });
 
   win?.webContents.send("launch-status", { modpackId, stage: "downloading_client" });
-  const clientJarPath = path.join(versionDir, `${mcVersion}.jar`);
-  if (!fsSync.existsSync(clientJarPath)) {
-    await downloadFile(versionJson.downloads.client.url, clientJarPath, () => {});
-  }
+  const { clientJarPath, versionJson } = await ensureClientJar(mcVersion);
 
   win?.webContents.send("launch-status", { modpackId, stage: "downloading_assets" });
   const assetIndexId = versionJson.assetIndex.id;

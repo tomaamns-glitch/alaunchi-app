@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { SkinViewer, WalkingAnimation } from "skinview3d";
+import { SkinViewer, WalkingAnimation, type PlayerAnimation } from "skinview3d";
 
 interface SkinViewer3DProps {
   skinUrl: string;
@@ -8,9 +8,12 @@ interface SkinViewer3DProps {
   width?: number;
   height?: number;
   className?: string;
+  /** Defaults to a plain walking-in-place loop; pass e.g. an EmoteAnimation to preview something else instead. */
+  animation?: PlayerAnimation;
 }
 
-/** A live, rotatable 3D render of a Minecraft skin, walking in place. Drag to spin it. */
+/** A live, rotatable 3D render of a Minecraft skin, walking in place by
+ *  default. Drag to spin it. */
 export function SkinViewer3D({
   skinUrl,
   capeUrl,
@@ -18,6 +21,7 @@ export function SkinViewer3D({
   width = 150,
   height = 210,
   className,
+  animation,
 }: SkinViewer3DProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRef = useRef<SkinViewer | null>(null);
@@ -28,15 +32,22 @@ export function SkinViewer3D({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const animation = new WalkingAnimation();
-    animation.speed = 0.8;
-    const viewer = new SkinViewer({ canvas, width, height, animation, enableControls: true });
+    const defaultAnimation = new WalkingAnimation();
+    defaultAnimation.speed = 0.8;
+    const viewer = new SkinViewer({ canvas, width, height, animation: animation ?? defaultAnimation, enableControls: true });
     viewerRef.current = viewer;
     return () => {
       viewer.dispose();
       viewerRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [width, height]);
+
+  // Swaps the animation on an already-created viewer (e.g. switching which
+  // emote is previewed) without tearing down the whole canvas/context.
+  useEffect(() => {
+    if (viewerRef.current && animation) viewerRef.current.animation = animation;
+  }, [animation]);
 
   useEffect(() => {
     if (!skinUrl) return;

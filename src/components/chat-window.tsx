@@ -87,6 +87,7 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
   const [editingAlias, setEditingAlias] = useState(false);
   const [aliasDraft, setAliasDraft] = useState("");
   const [showContentPicker, setShowContentPicker] = useState(false);
+  const [railExpanded, setRailExpanded] = useState(true);
   const [installedHashes, setInstalledHashes] = useState<Record<string, Set<string>>>({});
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -170,7 +171,13 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
           transition={{ duration: 0.15, ease: "easeOut" }}
           className="absolute bottom-full left-0 mb-2 z-40 flex w-[38rem] h-[30rem] rounded-lg bg-card/95 backdrop-blur border border-white/10 shadow-2xl overflow-hidden"
         >
-          <ChatContactRail myUuid={myUuid} currentPackId={currentPackId} selectedUuid={displayUuid ?? ""} />
+          <ChatContactRail
+            myUuid={myUuid}
+            currentPackId={currentPackId}
+            selectedUuid={displayUuid ?? ""}
+            expanded={railExpanded}
+            onToggleExpanded={() => setRailExpanded((v) => !v)}
+          />
 
           <div className="flex-1 min-w-0 flex flex-col min-h-0">
             <div className="px-4 py-3 border-b border-white/10 flex items-start gap-3">

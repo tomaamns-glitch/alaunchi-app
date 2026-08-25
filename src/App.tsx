@@ -15,6 +15,7 @@ import ModpackDetail from "@/pages/modpack-detail";
 import { Titlebar } from "@/components/titlebar";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { useAuth } from "@/hooks/use-auth";
+import { onUpdateInstalled } from "@/services/electron";
 
 const queryClient = new QueryClient();
 
@@ -58,6 +59,17 @@ function App() {
   useEffect(() => {
     loadPersistedAuth();
   }, [loadPersistedAuth]);
+
+  // Little "ta-da" the moment the silently-updated app reopens — see
+  // onUpdateInstalled's doc comment. Fires at most once per launch, and never
+  // on a normal cold start (no update happened).
+  useEffect(() => {
+    return onUpdateInstalled(() => {
+      const audio = new Audio("/sounds/update-ready.mp3");
+      audio.volume = 0.5;
+      audio.play().catch(() => {});
+    });
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
