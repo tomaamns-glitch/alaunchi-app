@@ -24,6 +24,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   updateInstanceFile: (args) => ipcRenderer.invoke("mc:update-instance-file", args),
   downloadInstanceFile: (args) => ipcRenderer.invoke("mc:download-instance-file", args),
   readInstanceFile: (args) => ipcRenderer.invoke("mc:read-instance-file", args),
+  classifyDroppedFile: (args) => ipcRenderer.invoke("mc:classify-dropped-file", args),
+  writeInstanceFile: (args) => ipcRenderer.invoke("mc:write-instance-file", args),
+  listSchematics: (args) => ipcRenderer.invoke("mc:list-schematics", args),
+  getSchematicAssets: (args) => ipcRenderer.invoke("mc:get-schematic-assets", args),
+  searchSchematicsOnline: (args) => ipcRenderer.invoke("mc:search-schematics-online", args),
+  getSchematicPost: (args) => ipcRenderer.invoke("mc:get-schematic-post", args),
+  getSchematicFiles: (args) => ipcRenderer.invoke("mc:get-schematic-files", args),
   launchMinecraft: (args) => ipcRenderer.invoke("mc:launch", args),
   checkJava: () => ipcRenderer.invoke("mc:check-java"),
   installJava: () => ipcRenderer.invoke("mc:install-java"),
@@ -67,10 +74,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // App info / error reporting
   getAppVersion: () => ipcRenderer.invoke("app:get-version"),
+  getAppIconDataUrl: () => ipcRenderer.invoke("app:get-icon-data-url"),
   onAppError: (callback) => {
     const handler = (_, data) => callback(data);
     ipcRenderer.on("app:error", handler);
     return () => ipcRenderer.removeListener("app:error", handler);
+  },
+  onUpdateInstalled: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("app:update-installed", handler);
+    return () => ipcRenderer.removeListener("app:update-installed", handler);
   },
 
   // Events from main process
@@ -93,5 +106,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     const handler = (_, data) => callback(data);
     ipcRenderer.on("playtime:session-ended", handler);
     return () => ipcRenderer.removeListener("playtime:session-ended", handler);
+  },
+  onSchematicAssetsProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("schematic-assets-progress", handler);
+    return () => ipcRenderer.removeListener("schematic-assets-progress", handler);
   },
 });

@@ -7,9 +7,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ArrowLeft, Save, LogOut, Cpu, FolderOpen, FolderCog, ShieldCheck, Github } from "lucide-react";
+import { ArrowLeft, Save, LogOut, Cpu, FolderOpen, FolderCog, ShieldCheck, Github, Bell, Volume2 } from "lucide-react";
 import { readSettings, writeSettings, isElectron, getDataDir, chooseDataDir, openDataDir } from "@/services/electron";
+import {
+  NOTIFICATION_SOUNDS,
+  getNotificationSound,
+  setNotificationSound,
+  playNotificationSound,
+  type NotificationSoundId,
+} from "@/lib/notification-sound";
 
 export default function Settings() {
   const { isAuthenticated, logout } = useAuth();
@@ -17,6 +25,7 @@ export default function Settings() {
   const [, setLocation] = useLocation();
 
   const [maxMemoryMb, setMaxMemoryMb] = useState(2048);
+  const [notificationSound, setNotificationSoundState] = useState<NotificationSoundId>("chime");
 
   const [dataDir, setDataDir] = useState("");
   const [dataDirCustom, setDataDirCustom] = useState(false);
@@ -28,6 +37,7 @@ export default function Settings() {
 
   useEffect(() => {
     readSettings().then((s) => { if (s.maxMemoryMb) setMaxMemoryMb(s.maxMemoryMb); });
+    setNotificationSoundState(getNotificationSound());
     getDataDir().then((d) => { if (d) { setDataDir(d.dataDir); setDataDirCustom(d.isCustom); } });
     setRepoUrl(localStorage.getItem("githubRepo") || "");
     setToken(localStorage.getItem("githubToken") || "");
@@ -53,6 +63,12 @@ export default function Settings() {
     } finally {
       setChangingDataDir(false);
     }
+  };
+
+  const handleChangeNotificationSound = (id: NotificationSoundId) => {
+    setNotificationSoundState(id);
+    setNotificationSound(id);
+    playNotificationSound(id);
   };
 
   const handleSaveRepo = () => {
@@ -117,6 +133,42 @@ export default function Settings() {
             </CardContent>
           </Card>
         )}
+
+        <Card className="bg-card/50 border-white/5">
+          <CardHeader>
+            <CardTitle className="text-white flex items-center gap-2">
+              <Bell className="h-5 w-5 text-amber-400" /> Notificaciones
+            </CardTitle>
+            <CardDescription>
+              Sonido para los avisos de Windows (nuevo mensaje, alguien se conecta). No suenan
+              mientras estás usando la ventana de ALaunchi.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-2">
+              <Select value={notificationSound} onValueChange={(v) => handleChangeNotificationSound(v as NotificationSoundId)}>
+                <SelectTrigger className="bg-background/50 border-white/10 text-white flex-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {NOTIFICATION_SOUNDS.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>{s.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => playNotificationSound(notificationSound)}
+                disabled={notificationSound === "none"}
+                title="Probar sonido"
+              >
+                <Volume2 className="h-4 w-4" />
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
         {isElectron && (
           <Card className="bg-card/50 border-white/5">

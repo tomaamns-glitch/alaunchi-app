@@ -12,16 +12,20 @@ interface ChatContactRailProps {
   myUuid: string;
   currentPackId: string;
   selectedUuid: string;
+  /** Lifted to the parent ChatWindow, which — unlike this rail — stays mounted
+   *  while the conversation is minimized, so collapsing the rail sticks across
+   *  minimize/reopen instead of resetting to expanded every time. */
+  expanded: boolean;
+  onToggleExpanded: () => void;
 }
 
 /** Left-hand sidebar of the chat window — existing conversations, collapsible
  *  down to just head icons, plus a picker to start a new one from whoever has
  *  played the modpack currently open (minus anyone you're already chatting
  *  with). */
-export function ChatContactRail({ myUuid, currentPackId, selectedUuid }: ChatContactRailProps) {
+export function ChatContactRail({ myUuid, currentPackId, selectedUuid, expanded, onToggleExpanded }: ChatContactRailProps) {
   const chatIndex = useChatHeads((s) => s.chatIndex);
   const openChat = useChatHeads((s) => s.openChat);
-  const [expanded, setExpanded] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [presence, setPresence] = useState<Record<string, PresenceEntry>>({});
   const [nicknames] = useState(() => getNicknames());
@@ -46,7 +50,7 @@ export function ChatContactRail({ myUuid, currentPackId, selectedUuid }: ChatCon
             whileHover={{ scale: 1.08 }}
             whileTap={{ scale: 0.9 }}
             type="button"
-            onClick={() => setExpanded((v) => !v)}
+            onClick={onToggleExpanded}
             title={expanded ? "Contraer" : "Expandir"}
             className="h-7 w-7 flex items-center justify-center rounded-md bg-white/5 hover:bg-white/10 text-gray-300 transition-colors shrink-0"
           >

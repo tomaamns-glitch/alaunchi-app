@@ -113,6 +113,33 @@ export async function openInstanceFolder(modpackId: string): Promise<void> {
   if (isElectron) await eAPI.openInstanceFolder({ modpackId });
 }
 
+export type ContentCategory = "mods" | "shaderpacks" | "resourcepacks" | "emotes" | "schematics";
+export interface ContentClassification {
+  category: ContentCategory;
+  /** Only set when category === "schematics" — which of the two destination folders. */
+  schematicRoot?: "litematica" | "worldedit";
+}
+
+/** Identifies a dropped file's content type (by extension, and for .zip by
+ *  content) and its sha1 — classification only, doesn't write anything. */
+export async function classifyDroppedFile(
+  fileBase64: string,
+  fileName: string
+): Promise<{ classification: ContentClassification | null; sha1: string }> {
+  if (!isElectron) return { classification: null, sha1: "" };
+  return eAPI.classifyDroppedFile({ fileBase64, fileName });
+}
+
+/** Writes a dropped file's raw bytes into an instance. */
+export async function writeInstanceFile(
+  modpackId: string,
+  targetPath: string,
+  source: { fileBase64: string }
+): Promise<void> {
+  if (!isElectron) return;
+  await eAPI.writeInstanceFile({ modpackId, targetPath, ...source });
+}
+
 export interface EmoteFile {
   fileName: string;
   displayName: string;
@@ -125,6 +152,47 @@ export interface EmoteFile {
 export async function listEmotes(modpackId: string): Promise<EmoteFile[]> {
   if (!isElectron) return [];
   return eAPI.listEmotes({ modpackId });
+}
+
+export interface SchematicFile {
+  path: string;
+  size: number;
+  source: "litematica" | "worldedit";
+}
+
+/** Recursively lists .litematic/.schem/.schematic/.nbt files under an installed
+ *  instance's schematics/ and config/worldedit/schematics/ folders. */
+export async function listSchematics(modpackId: string): Promise<SchematicFile[]> {
+  if (!isElectron) return [];
+  return eAPI.listSchematics({ modpackId });
+}
+
+export interface SchematicAssetsBundle {
+  /** "minecraft:<block>" -> blockstates JSON */
+  blockstates: Record<string, unknown>;
+  /** "minecraft:block/<model>" -> block model JSON */
+  models: Record<string, unknown>;
+  /** "minecraft:block/<texture>" -> base64 PNG */
+  textures: Record<string, string>;
+}
+
+/** Extracts (and disk-caches, per MC version) the blockstates/models/textures the
+ *  schematic viewer needs from that version's vanilla client jar. First call for a
+ *  given version may download the jar and take a while — see onSchematicAssetsProgress. */
+export async function getSchematicAssets(mcVersion: string): Promise<SchematicAssetsBundle> {
+  if (!isElectron) return { blockstates: {}, models: {}, textures: {} };
+  return eAPI.getSchematicAssets({ mcVersion });
+}
+
+export interface SchematicAssetsProgress {
+  mcVersion: string;
+  stage: "downloading_client" | "extracting" | "ready";
+  progress: number;
+}
+
+export function onSchematicAssetsProgress(callback: (data: SchematicAssetsProgress) => void): () => void {
+  if (!isElectron) return () => {};
+  return eAPI.onSchematicAssetsProgress(callback);
 }
 
 /** Deletes any "xray"-named file from an installed instance's content folders.
@@ -152,10 +220,30 @@ export async function getAppVersion(): Promise<string> {
   return eAPI.getAppVersion();
 }
 
+let cachedAppIconDataUrl: string | null | undefined;
+
+/** The app icon as a data: URL — for contexts like native OS notifications that
+ *  need a real image source, unlike the app's own UI which just points <img> at
+ *  /logo.png directly. Cached after the first call (the icon file never changes
+ *  mid-session). */
+export async function getAppIconDataUrl(): Promise<string | null> {
+  if (!isElectron) return null;
+  if (cachedAppIconDataUrl === undefined) cachedAppIconDataUrl = await eAPI.getAppIconDataUrl();
+  return cachedAppIconDataUrl ?? null;
+}
+
 /** Errors caught in the main process (it has no GitHub token, so it can't report them itself). */
 export function onAppError(callback: (data: { context: string; message: string; stack: string | null }) => void): () => void {
   if (!isElectron) return () => {};
   return eAPI.onAppError(callback);
+}
+
+/** Fired once, right as the main window shows, when this launch is the silent
+ *  auto-update's relaunch into the now-updated app — see main.js's
+ *  UPDATE_READY_FLAG. Never fires on a normal cold start. */
+export function onUpdateInstalled(callback: () => void): () => void {
+  if (!isElectron) return () => {};
+  return eAPI.onUpdateInstalled(callback);
 }
 
 /** Fired when the playtime watcher in the main process detects a tracked Minecraft

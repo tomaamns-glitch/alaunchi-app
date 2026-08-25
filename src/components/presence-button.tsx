@@ -4,10 +4,12 @@ import { User } from "lucide-react";
 import { subscribePresence, sortAndFilterPresence, sortAllPresence, type PresenceEntry } from "@/services/presence";
 import { getNicknames } from "@/lib/nicknames";
 import { useAuth } from "@/hooks/use-auth";
-import { focusWindow } from "@/services/electron";
+import { focusWindow, getAppIconDataUrl } from "@/services/electron";
 import { PresenceList } from "@/components/presence-list";
 import { PresenceAllDialog } from "@/components/presence-all-dialog";
 import { useHeaderOverlay } from "@/hooks/use-chat-heads";
+import { getPlayerHeadDataUrl } from "@/hooks/use-player-head";
+import { playNotificationSound } from "@/lib/notification-sound";
 
 interface PresenceButtonProps {
   modpackId: string;
@@ -19,11 +21,15 @@ interface PresenceButtonProps {
 
 /** Native OS notification (works even with the window hidden in the tray —
  *  see the close-to-tray behavior in main.js) so a friend connecting doesn't
- *  go unnoticed just because the launcher isn't in the foreground. */
-function notifyConnected(name: string, packName: string) {
-  if (typeof Notification === "undefined") return;
-  const n = new Notification("ALaunchi", { body: `${name} se ha conectado a ${packName}` });
+ *  go unnoticed just because the launcher isn't in the foreground. Skipped
+ *  while the window is focused (you'd see the green dot right there) and
+ *  always requested silent — see notifyNewMessage in use-chat-heads.ts. */
+async function notifyConnected(uuid: string, name: string, packName: string) {
+  if (typeof Notification === "undefined" || document.hasFocus()) return;
+  const icon = (await getPlayerHeadDataUrl(uuid).catch(() => null)) || (await getAppIconDataUrl().catch(() => null));
+  const n = new Notification("ALaunchi", { body: `${name} se ha conectado a ${packName}`, icon: icon ?? undefined, silent: true });
   n.onclick = () => focusWindow();
+  playNotificationSound();
 }
 
 function formatAnnouncement(onlineOthers: [string, PresenceEntry][], nicknames: Record<string, string>): string {
@@ -79,7 +85,7 @@ export function PresenceButton({ modpackId, packName, open, onOpenChange }: Pres
     if (previousUuids) {
       const nicknames = getNicknames();
       for (const [uuid, entry] of onlineOthers) {
-        if (!previousUuids.has(uuid)) notifyConnected(nicknames[uuid] || entry.username, packName);
+        if (!previousUuids.has(uuid)) notifyConnected(uuid, nicknames[uuid] || entry.username, packName).catch(() => {});
       }
     }
     prevOnlineRef.current = currentUuids;

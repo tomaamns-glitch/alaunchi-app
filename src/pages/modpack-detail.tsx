@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useLocation, useParams } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import { useModpacks } from "@/hooks/use-modpacks";
@@ -28,6 +28,10 @@ import {
   MoreVertical,
   FolderOpen,
   Smile,
+  Box,
+  Globe,
+  WifiOff,
+  UploadCloud,
 } from "lucide-react";
 import { SnapshotEntry, fetchSnapshot } from "@/services/github";
 import {
@@ -67,12 +71,36 @@ import {
   getInstalledModpacksMeta,
   openInstanceFolder,
   listEmotes,
+  listSchematics,
+  classifyDroppedFile,
+  writeInstanceFile,
   type InstanceFile,
   type EmoteFile,
+  type SchematicFile,
+  type ContentClassification,
 } from "@/services/electron";
+import { resolveContentConflict, resolveNoIdentityConflict, type ConflictResolution } from "@/lib/content-conflict";
 import { translateHtmlAwareToSpanish } from "@/services/translate";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
 import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
+import { useAuth } from "@/hooks/use-auth";
+import { usePlayerSkinUrl } from "@/hooks/use-player-head";
+import { useEmotePreview } from "@/hooks/use-emote-preview";
+import { EmoteAnimation } from "@/lib/emote-animation";
+import { bytesToBase64 } from "@/lib/emotecraft";
+import { SkinViewer3D } from "@/components/skin-viewer-3d";
+import { useSchematicPreview } from "@/hooks/use-schematic-preview";
+import { useSchematicResources } from "@/hooks/use-schematic-resources";
+import { SchematicViewer3D } from "@/components/schematic-viewer-3d";
+import {
+  searchSchematicsOnline,
+  getSchematicPostDetail,
+  listSchematicFiles,
+  targetPathForSchematicFile,
+  type MinemevSearchHit,
+  type MinemevPostDetail,
+  type MinemevFile,
+} from "@/services/minemev";
 import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
 import { formatBytes, formatPlaytime } from "@/lib/format";
 import { toast } from "sonner";
@@ -123,6 +151,18 @@ interface ContentRow {
   mandatory: boolean;
 }
 
+/** A content file staged for writing, once classified/hashed/conflict-checked —
+ *  either "write it now" (no conflict) or waiting on the user's choice in the
+ *  version-conflict dialog. */
+interface StagedContentWrite {
+  category: Category;
+  targetPath: string;
+  size: number;
+  sha1: string;
+  write: { fileBase64: string };
+  modrinthMatch: ModrinthMatch | null;
+}
+
 const EMPTY_CATEGORIES: Record<Category, any[]> = { mods: [], shaderpacks: [], resourcepacks: [] };
 
 export default function ModpackDetail() {
@@ -143,6 +183,15 @@ export default function ModpackDetail() {
   const [showInstalledFirst, setShowInstalledFirst] = useState(false);
   const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
   const [totalPlaytimeMs, setTotalPlaytimeMs] = useState(0);
+
+  // Drag-and-drop / file-picker content adding — works from anywhere on the page,
+  // auto-detecting mod/shader/resourcepack/emote/schematic and routing accordingly.
+  const [dropActive, setDropActive] = useState(false);
+  const [versionChoice, setVersionChoice] = useState<{
+    staged: StagedContentWrite;
+    existingPath: string;
+    existingLabel: string;
+  } | null>(null);
 
   // Sticky header stack: banner+header (top), category tabs + install button
   // (sticks right under the top layer), and the Nombre/Instalados sort row
@@ -229,6 +278,136 @@ export default function ModpackDetail() {
   const [selectedEmote, setSelectedEmote] = useState<EmoteFile | null>(null);
   const emotecraftInstalled = (content?.mods ?? []).some((f) => f.path.toLowerCase().includes("emotecraft"));
 
+  // Schematics (.litematic/.schem/.schematic/.nbt) — same read-only-tab pattern as
+  // emotes, but the button only shows once the recursive folder scan (below, tied
+  // to instance load) actually finds files, since these aren't gated behind any one
+  // mod being installed the way Emotecraft is.
+  const [schematicsOpen, setSchematicsOpen] = useState(false);
+  const [schematics, setSchematics] = useState<SchematicFile[]>([]);
+  const [selectedSchematic, setSelectedSchematic] = useState<SchematicFile | null>(null);
+
+  // Online schematic search (unofficial aggregator API, see src/services/minemev.ts)
+  // — a sub-mode inside the Esquemas panel, not a separate top-level entry.
+  const [schematicOnlineMode, setSchematicOnlineMode] = useState(false);
+  const [schematicQuery, setSchematicQuery] = useState("");
+  const [schematicResults, setSchematicResults] = useState<MinemevSearchHit[]>([]);
+  const [schematicSearchLoading, setSchematicSearchLoading] = useState(false);
+  const [schematicBackendDown, setSchematicBackendDown] = useState(false);
+  const [schematicPage, setSchematicPage] = useState(1);
+  const [schematicHasMore, setSchematicHasMore] = useState(true);
+  const [schematicLoadingMore, setSchematicLoadingMore] = useState(false);
+  const schematicSentinelRef = useRef<HTMLDivElement | null>(null);
+
+  const [selectedOnlinePost, setSelectedOnlinePost] = useState<MinemevSearchHit | null>(null);
+  const [onlinePostDetail, setOnlinePostDetail] = useState<MinemevPostDetail | null>(null);
+  const [onlinePostFiles, setOnlinePostFiles] = useState<MinemevFile[]>([]);
+  const [onlineDetailLoading, setOnlineDetailLoading] = useState(false);
+  const [downloadingFileId, setDownloadingFileId] = useState<number | null>(null);
+
+  const myUuid = useAuth((s) => s.uuid);
+  const myPreviewSkinUrl = usePlayerSkinUrl(myUuid);
+  const selectedEmoteData = useEmotePreview(id, selectedEmote?.fileName);
+  const emoteAnimation = useMemo(
+    () => (selectedEmoteData ? new EmoteAnimation(selectedEmoteData) : null),
+    [selectedEmoteData]
+  );
+
+  const selectedSchematicStructure = useSchematicPreview(id, selectedSchematic?.path);
+  // Kick off resource loading as soon as the panel opens (not just once a file is
+  // picked) so the slow first-time-per-version jar extraction has a head start.
+  const schematicMcVersion = schematicsOpen || selectedSchematic ? pack?.minecraftVersion : undefined;
+  const { resources: schematicResources, progress: schematicProgress, error: schematicResourcesError } =
+    useSchematicResources(schematicMcVersion);
+
+  // Debounced search — fires as soon as the online sub-tab opens (an empty query
+  // returns a general "browse latest" feed rather than nothing) and again whenever
+  // the query changes, resetting pagination each time.
+  useEffect(() => {
+    if (!schematicOnlineMode) return;
+    let cancelled = false;
+    setSchematicSearchLoading(true);
+    setSchematicPage(1);
+    setSchematicBackendDown(false);
+    const delay = schematicQuery.trim() ? 350 : 0;
+    const timer = setTimeout(() => {
+      searchSchematicsOnline(schematicQuery, 1).then(({ hits, hasMore, ok }) => {
+        if (cancelled) return;
+        setSchematicResults(hits);
+        setSchematicHasMore(hasMore);
+        setSchematicBackendDown(!ok);
+        setSchematicSearchLoading(false);
+      });
+    }, delay);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [schematicOnlineMode, schematicQuery]);
+
+  const loadMoreSchematicResults = useCallback(() => {
+    if (schematicLoadingMore || schematicSearchLoading || !schematicHasMore) return;
+    const nextPage = schematicPage + 1;
+    setSchematicLoadingMore(true);
+    searchSchematicsOnline(schematicQuery, nextPage).then(({ hits, hasMore, ok }) => {
+      if (ok) setSchematicResults((prev) => [...prev, ...hits]);
+      setSchematicPage(nextPage);
+      setSchematicHasMore(hasMore);
+      setSchematicLoadingMore(false);
+    });
+  }, [schematicLoadingMore, schematicSearchLoading, schematicHasMore, schematicPage, schematicQuery]);
+
+  useEffect(() => {
+    if (!schematicOnlineMode || !schematicHasMore) return;
+    const el = schematicSentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) loadMoreSchematicResults();
+      },
+      { rootMargin: "300px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [schematicOnlineMode, schematicHasMore, loadMoreSchematicResults]);
+
+  useEffect(() => {
+    if (!selectedOnlinePost) {
+      setOnlinePostDetail(null);
+      setOnlinePostFiles([]);
+      return;
+    }
+    let cancelled = false;
+    setOnlineDetailLoading(true);
+    Promise.all([
+      getSchematicPostDetail(selectedOnlinePost.vendor, selectedOnlinePost.uuid),
+      listSchematicFiles(selectedOnlinePost.vendor, selectedOnlinePost.uuid),
+    ]).then(([detail, files]) => {
+      if (cancelled) return;
+      setOnlinePostDetail(detail);
+      setOnlinePostFiles(files);
+      setOnlineDetailLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedOnlinePost]);
+
+  const handleDownloadSchematicFile = async (file: MinemevFile) => {
+    if (!pack || !selectedOnlinePost) return;
+    setDownloadingFileId(file.id);
+    try {
+      const existing = new Set(schematics.map((s) => s.path));
+      const targetPath = targetPathForSchematicFile(file, selectedOnlinePost.uuid, existing);
+      await downloadInstanceFile(pack.id, targetPath, file.downloadUrl);
+      setSchematics((prev) => [...prev, { path: targetPath, size: file.fileSize, source: "litematica" }]);
+      toast.success(`${file.fileName} descargado.`);
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudo descargar el esquema.");
+    } finally {
+      setDownloadingFileId(null);
+    }
+  };
+
   useEffect(() => {
     if (!emotesOpen || !id) return;
     let cancelled = false;
@@ -291,6 +470,11 @@ export default function ModpackDetail() {
     setSelectedModPath(null);
     setEmotesOpen(false);
     setEmotes([]);
+    setSchematicsOpen(false);
+    setSchematics([]);
+    setSchematicOnlineMode(false);
+    setSchematicResults([]);
+    setSelectedOnlinePost(null);
 
     (async () => {
       const repoUrl = getGithubRepo();
@@ -302,11 +486,12 @@ export default function ModpackDetail() {
 
       let optionalFiles: InstanceFile[] = [];
       if (pack?.installed) {
-        const localFiles = await listInstanceFiles(id);
+        const [localFiles, schematicFiles] = await Promise.all([listInstanceFiles(id), listSchematics(id)]);
         const mandatoryPaths = new Set(manifestFiles.map((f) => f.path));
         optionalFiles = localFiles.filter((f) => !mandatoryPaths.has(f.path));
         if (cancelled) return;
         setOptionalContent(categorize(optionalFiles));
+        setSchematics(schematicFiles);
       }
 
       const matches = await identifyModrinthFiles([...manifestFiles, ...optionalFiles]);
@@ -539,7 +724,14 @@ export default function ModpackDetail() {
     await handleInstallVersion(activeCategory, `search:${hit.projectId}`, version, hit);
   };
 
-  const openModFromSearch = (hit: ModrinthSearchHit) => {
+  const openModFromSearch = (hit: ModrinthSearchHit, installed?: { path: string; mandatory: boolean }) => {
+    if (installed) {
+      // Already installed (mandatory or optional) — open the real row so the
+      // panel's "installed"/"locked" logic (which keys off the real path) works,
+      // instead of a synthetic search:<id> path that never matches anything.
+      openMod(installed.path);
+      return;
+    }
     setModrinthMatches((prev) => {
       const next = new Map(prev);
       next.set(`search:${hit.projectId}`, {
@@ -625,8 +817,199 @@ export default function ModpackDetail() {
     }
   };
 
+  // ─── Drag-and-drop / file-picker content adding ──────────────────────────
+
+  const contentTargetPath = (classification: ContentClassification, name: string): string => {
+    if (classification.category === "schematics") {
+      const folder = classification.schematicRoot === "worldedit" ? "config/worldedit/schematics" : "schematics";
+      return `${folder}/${name}`;
+    }
+    return `${classification.category}/${name}`;
+  };
+
+  /** Actually writes a staged mod/shader/resourcepack, replacing existingPath's
+   *  entry if this came from the "use the new version" choice. */
+  const writeStagedContent = async (staged: StagedContentWrite, existingPath?: string) => {
+    try {
+      await writeInstanceFile(pack.id, staged.targetPath, staged.write);
+      if (existingPath && existingPath !== staged.targetPath) {
+        await deleteInstanceFile(pack.id, existingPath);
+      }
+      setOptionalContent((prev) => ({
+        ...prev,
+        [staged.category]: [
+          ...prev[staged.category].filter((f) => f.path !== existingPath && f.path !== staged.targetPath),
+          { path: staged.targetPath, size: staged.size, sha1: staged.sha1 },
+        ],
+      }));
+      setModrinthMatches((prev) => {
+        const next = new Map(prev);
+        if (existingPath) next.delete(existingPath);
+        if (staged.modrinthMatch) next.set(staged.targetPath, staged.modrinthMatch);
+        return next;
+      });
+      setActiveCategory(staged.category);
+      setEmotesOpen(false);
+      setSchematicsOpen(false);
+      toast.success(`${staged.modrinthMatch?.title ?? fileName(staged.targetPath)} añadido.`);
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudo añadir el archivo.");
+    }
+  };
+
+  /** Shared entry point for drag-and-drop — classifies, resolves any conflict
+   *  against what's already installed, and either writes, skips, blocks, or
+   *  (mods/shaders/resourcepacks only) stages a version-choice prompt.
+   *  Emotes/schematics never prompt — see resolveNoIdentityConflict. */
+  const processIncomingFile = async (
+    name: string,
+    sha1: string,
+    classification: ContentClassification | null,
+    write: { fileBase64: string },
+    size: number
+  ) => {
+    if (!classification) {
+      toast.error(`${name}: tipo de archivo no soportado.`);
+      return;
+    }
+    const targetPath = contentTargetPath(classification, name);
+
+    if (classification.category === "emotes") {
+      if (!emotecraftInstalled) {
+        toast.error("Este modpack no tiene Emotecraft instalado; no se pueden añadir emotes.");
+        return;
+      }
+      const existingPaths = new Set(emotes.map((e) => `emotes/${e.fileName}`));
+      const existingHashes = new Map(emotes.filter((e) => e.sha1).map((e) => [`emotes/${e.fileName}`, e.sha1 as string]));
+      const resolution = resolveNoIdentityConflict(targetPath, sha1, existingPaths, existingHashes);
+      if (resolution.kind === "skip") {
+        toast(resolution.reason);
+        return;
+      }
+      if (resolution.kind !== "write") return; // never "block"/"prompt" for emotes
+      try {
+        await writeInstanceFile(pack.id, resolution.targetPath, write);
+        const addedName = resolution.targetPath.slice(resolution.targetPath.lastIndexOf("/") + 1);
+        setEmotes((prev) => [
+          ...prev,
+          { fileName: addedName, displayName: addedName.replace(/\.emotecraft$/i, "").trim(), thumbnailBase64: null, sha1 },
+        ]);
+        setEmotesOpen(true);
+        setSchematicsOpen(false);
+        toast.success(`${addedName} añadido.`);
+      } catch (e: any) {
+        toast.error(e?.message || "No se pudo añadir el emote.");
+      }
+      return;
+    }
+
+    if (classification.category === "schematics") {
+      const existingPaths = new Set(schematics.map((s) => s.path));
+      const resolution = resolveNoIdentityConflict(targetPath, sha1, existingPaths, new Map());
+      if (resolution.kind === "skip") {
+        toast(resolution.reason);
+        return;
+      }
+      if (resolution.kind !== "write") return;
+      try {
+        await writeInstanceFile(pack.id, resolution.targetPath, write);
+        setSchematics((prev) => [
+          ...prev,
+          { path: resolution.targetPath, size, source: classification.schematicRoot === "worldedit" ? "worldedit" : "litematica" },
+        ]);
+        setSchematicsOpen(true);
+        setEmotesOpen(false);
+        toast.success(`${name} añadido.`);
+      } catch (e: any) {
+        toast.error(e?.message || "No se pudo añadir el esquema.");
+      }
+      return;
+    }
+
+    // mods / shaderpacks / resourcepacks
+    const category = classification.category as Category;
+    const matches = await identifyModrinthFiles([{ path: targetPath, sha1 }]).catch(() => new Map<string, ModrinthMatch>());
+    const match = matches.get(targetPath) ?? null;
+    const rows = rowsFor(category);
+    const resolution = resolveContentConflict({
+      targetPath,
+      modrinthProjectId: match?.projectId ?? null,
+      modrinthVersionId: match?.versionId ?? null,
+      existingRows: rows,
+      existingModrinthMatches: modrinthMatches,
+    });
+    const staged: StagedContentWrite = { category, targetPath, size, sha1, write, modrinthMatch: match };
+
+    if (resolution.kind === "block") {
+      toast.error(resolution.reason);
+    } else if (resolution.kind === "skip") {
+      toast(resolution.reason);
+    } else if (resolution.kind === "prompt") {
+      setVersionChoice({ staged, existingPath: resolution.existingPath, existingLabel: resolution.existingLabel });
+    } else {
+      await writeStagedContent(staged);
+    }
+  };
+
+  const handleContentDrop = async (files: File[]) => {
+    for (const file of files) {
+      try {
+        const buf = await file.arrayBuffer();
+        const base64 = bytesToBase64(new Uint8Array(buf));
+        const { classification, sha1 } = await classifyDroppedFile(base64, file.name);
+        await processIncomingFile(file.name, sha1, classification, { fileBase64: base64 }, file.size);
+      } catch (e: any) {
+        toast.error(e?.message || `No se pudo procesar ${file.name}.`);
+      }
+    }
+  };
+
+  const handleVersionChoice = async (choice: "keep-existing" | "use-new") => {
+    if (!versionChoice) return;
+    const { staged, existingPath } = versionChoice;
+    setVersionChoice(null);
+    if (choice === "use-new") await writeStagedContent(staged, existingPath);
+  };
+
+  const dragCounterRef = useRef(0);
+  const handlePageDragEnter = (e: React.DragEvent) => {
+    if (!pack.installed) return;
+    e.preventDefault();
+    dragCounterRef.current++;
+    setDropActive(true);
+  };
+  const handlePageDragOver = (e: React.DragEvent) => {
+    if (pack.installed) e.preventDefault(); // required for onDrop to fire at all
+  };
+  const handlePageDragLeave = () => {
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) setDropActive(false);
+  };
+  const handlePageDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounterRef.current = 0;
+    setDropActive(false);
+    if (!pack.installed) return;
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) handleContentDrop(files);
+  };
+
   return (
-    <div className="min-h-full bg-background text-foreground">
+    <div
+      className="min-h-full bg-background text-foreground relative"
+      onDragEnter={handlePageDragEnter}
+      onDragOver={handlePageDragOver}
+      onDragLeave={handlePageDragLeave}
+      onDrop={handlePageDrop}
+    >
+      {dropActive && (
+        <div className="fixed inset-0 z-50 pointer-events-none bg-accent/10 border-4 border-dashed border-accent/50 flex items-center justify-center">
+          <div className="bg-card/90 rounded-lg px-6 py-4 flex items-center gap-3 text-white">
+            <UploadCloud className="h-6 w-6 text-accent" />
+            <span className="font-semibold">Suelta el archivo para añadirlo</span>
+          </div>
+        </div>
+      )}
       <div ref={headerGroupRef} className="sticky top-0 z-30 bg-background">
         <div className="relative h-32 md:h-40 bg-black/50 overflow-hidden">
           {pack.bannerUrl || pack.imageUrl ? (
@@ -1044,9 +1427,13 @@ export default function ModpackDetail() {
               </div>
             ) : (
               <Tabs
-                value={effectiveCategory}
+                // An empty value matches no real category, so Radix stops marking
+                // whichever tab was last active while the Emotes/Esquemas sibling
+                // panels (which aren't part of this Tabs' value space) are open.
+                value={emotesOpen || schematicsOpen ? "" : effectiveCategory}
                 onValueChange={(v) => {
                   setEmotesOpen(false);
+                  setSchematicsOpen(false);
                   setActiveCategory(v as Category);
                 }}
               >
@@ -1071,7 +1458,10 @@ export default function ModpackDetail() {
                           <TabsTrigger
                             key={c}
                             value={c}
-                            onClick={() => setEmotesOpen(false)}
+                            onClick={() => {
+                              setEmotesOpen(false);
+                              setSchematicsOpen(false);
+                            }}
                             className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5"
                           >
                             <Icon className="h-3.5 w-3.5" />
@@ -1083,7 +1473,10 @@ export default function ModpackDetail() {
                       {emotecraftInstalled && (
                         <button
                           type="button"
-                          onClick={() => setEmotesOpen(true)}
+                          onClick={() => {
+                            setSchematicsOpen(false);
+                            setEmotesOpen(true);
+                          }}
                           className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium gap-1.5 transition-all ${
                             emotesOpen
                               ? "bg-accent text-accent-foreground shadow"
@@ -1094,16 +1487,37 @@ export default function ModpackDetail() {
                           Emotes
                         </button>
                       )}
+                      {schematics.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEmotesOpen(false);
+                            setSchematicsOpen(true);
+                          }}
+                          className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium gap-1.5 transition-all ${
+                            schematicsOpen
+                              ? "bg-accent text-accent-foreground shadow"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          <Box className="h-3.5 w-3.5" />
+                          Esquemas
+                        </button>
+                      )}
                     </TabsList>
-                    {pack.installed && !emotesOpen && (
-                      <Button
-                        size="sm"
-                        onClick={() => setSearchMode(true)}
-                        className="bg-green-600 hover:bg-green-500 border-transparent text-white font-bold gap-1.5"
-                      >
-                        <SiModrinth className="h-3.5 w-3.5" />
-                        {`Instalar ${CATEGORY_META[effectiveCategory].label}`}
-                      </Button>
+                    {pack.installed && (
+                      <div className="flex items-center gap-2">
+                        {!emotesOpen && !schematicsOpen && (
+                          <Button
+                            size="sm"
+                            onClick={() => setSearchMode(true)}
+                            className="bg-green-600 hover:bg-green-500 border-transparent text-white font-bold gap-1.5"
+                          >
+                            <SiModrinth className="h-3.5 w-3.5" />
+                            {`Instalar ${CATEGORY_META[effectiveCategory].label}`}
+                          </Button>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
@@ -1184,7 +1598,7 @@ export default function ModpackDetail() {
                             return (
                               <div key={hit.projectId} className="flex items-center gap-4 p-4 bg-card/50 rounded-md w-full">
                                 <div
-                                  onClick={() => openModFromSearch(hit)}
+                                  onClick={() => openModFromSearch(hit, installed)}
                                   className="flex items-center gap-4 min-w-0 flex-1 cursor-pointer"
                                 >
                                   {hit.iconUrl ? (
@@ -1288,6 +1702,135 @@ export default function ModpackDetail() {
                       ))}
                     </div>
                   )
+                ) : schematicsOpen ? (
+                  <>
+                    <div className="flex items-center gap-1.5 mb-3">
+                      <button
+                        type="button"
+                        onClick={() => setSchematicOnlineMode(false)}
+                        className={`px-2.5 py-1 rounded-full text-[11px] border transition-colors ${
+                          !schematicOnlineMode
+                            ? "bg-accent text-accent-foreground border-transparent"
+                            : "bg-white/5 text-muted-foreground border-white/10 hover:bg-white/10"
+                        }`}
+                      >
+                        Instalados
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSchematicOnlineMode(true)}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] border transition-colors ${
+                          schematicOnlineMode
+                            ? "bg-accent text-accent-foreground border-transparent"
+                            : "bg-white/5 text-muted-foreground border-white/10 hover:bg-white/10"
+                        }`}
+                      >
+                        <Globe className="h-3 w-3" />
+                        Buscar online
+                      </button>
+                    </div>
+
+                    {!schematicOnlineMode ? (
+                      schematics.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+                          <Box className="h-6 w-6" />
+                          <p className="text-sm">No hay esquemas en esta instancia.</p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-4 gap-3">
+                          {schematics.map((s) => {
+                            const displayName = s.path.slice(s.path.lastIndexOf("/") + 1);
+                            const folder = s.path.slice(0, s.path.length - displayName.length - 1);
+                            return (
+                              <button
+                                type="button"
+                                key={s.path}
+                                onClick={() => setSelectedSchematic(s)}
+                                className="flex flex-col items-center gap-2 p-3 rounded-md bg-gray-500/10 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-colors text-left"
+                              >
+                                <div className="h-16 w-16 rounded bg-black/30 overflow-hidden flex items-center justify-center shrink-0">
+                                  <Box className="h-6 w-6 text-muted-foreground" />
+                                </div>
+                                <span className="text-xs text-gray-200 text-center truncate w-full" title={s.path}>
+                                  {displayName}
+                                </span>
+                                {folder && (
+                                  <span className="text-[10px] text-muted-foreground text-center truncate w-full" title={folder}>
+                                    {folder}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )
+                    ) : (
+                      <div className="flex flex-col gap-3">
+                        <Input
+                          value={schematicQuery}
+                          onChange={(e) => setSchematicQuery(e.target.value)}
+                          placeholder="Buscar esquemas online..."
+                          className="h-8 bg-card/50 border-white/10 text-xs"
+                        />
+                        {schematicSearchLoading ? (
+                          <div className="flex items-center justify-center py-16 text-muted-foreground">
+                            <Loader2 className="h-5 w-5 animate-spin mr-2" /> Buscando...
+                          </div>
+                        ) : schematicBackendDown ? (
+                          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+                            <WifiOff className="h-6 w-6" />
+                            <p className="text-sm">No se pudo conectar con el buscador de esquemas online.</p>
+                          </div>
+                        ) : schematicResults.length === 0 ? (
+                          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+                            <FileQuestion className="h-6 w-6" />
+                            <p className="text-sm">Sin resultados.</p>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-2">
+                            {schematicResults.map((hit) => (
+                              <button
+                                type="button"
+                                key={`${hit.vendor}/${hit.uuid}`}
+                                onClick={() => setSelectedOnlinePost(hit)}
+                                className="flex items-center gap-3 p-3 bg-card/50 rounded-md w-full text-left hover:bg-white/5 transition-colors"
+                              >
+                                {hit.thumbnailUrl ? (
+                                  <img
+                                    src={hit.thumbnailUrl}
+                                    alt=""
+                                    className="h-14 w-14 rounded shrink-0 object-cover bg-black/30"
+                                  />
+                                ) : (
+                                  <div className="h-14 w-14 rounded shrink-0 bg-black/30 flex items-center justify-center">
+                                    <Box className="h-6 w-6 text-muted-foreground" />
+                                  </div>
+                                )}
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-gray-100 font-semibold text-sm truncate">{hit.postName}</p>
+                                  <p className="text-muted-foreground text-xs truncate">{hit.description}</p>
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <Badge variant="secondary" className="text-[10px] py-0">
+                                      {hit.vendor}
+                                    </Badge>
+                                    <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                                      <Download className="h-2.5 w-2.5" />
+                                      {hit.downloads.toLocaleString()}
+                                    </span>
+                                  </div>
+                                </div>
+                              </button>
+                            ))}
+                            {schematicHasMore && (
+                              <div ref={schematicSentinelRef} className="flex items-center justify-center py-4">
+                                {schematicLoadingMore && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
                 ) : (
                 categories.map((c) => (
                   <TabsContent key={c} value={c} className="mt-4">
@@ -1415,7 +1958,15 @@ export default function ModpackDetail() {
             <DialogTitle className="text-white">{selectedEmote?.displayName}</DialogTitle>
           </DialogHeader>
           <div className="flex items-center justify-center bg-black/30 rounded-md p-6">
-            {selectedEmote?.thumbnailBase64 ? (
+            {myPreviewSkinUrl && emoteAnimation ? (
+              <SkinViewer3D
+                skinUrl={myPreviewSkinUrl}
+                animation={emoteAnimation}
+                width={200}
+                height={280}
+                className="cursor-grab active:cursor-grabbing"
+              />
+            ) : selectedEmote?.thumbnailBase64 ? (
               <img
                 src={`data:image/png;base64,${selectedEmote.thumbnailBase64}`}
                 alt={selectedEmote.displayName}
@@ -1426,8 +1977,157 @@ export default function ModpackDetail() {
             )}
           </div>
           <p className="text-xs text-muted-foreground text-center">
-            Vista previa estática — la reproducción animada todavía no está disponible.
+            {myPreviewSkinUrl && emoteAnimation ? "Arrastra para girar la cámara." : "Cargando vista previa animada..."}
           </p>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!selectedSchematic} onOpenChange={(open) => !open && setSelectedSchematic(null)}>
+        <DialogContent className="bg-card border-white/10 text-foreground sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-white">
+              {selectedSchematic ? selectedSchematic.path.slice(selectedSchematic.path.lastIndexOf("/") + 1) : ""}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex items-center justify-center bg-black/30 rounded-md p-6">
+            {schematicResources && selectedSchematicStructure ? (
+              <SchematicViewer3D
+                structure={selectedSchematicStructure}
+                resources={schematicResources}
+                width={560}
+                height={420}
+                className="cursor-grab active:cursor-grabbing"
+              />
+            ) : (
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground text-center">
+            {schematicResourcesError
+              ? schematicResourcesError
+              : !schematicResources
+              ? schematicProgress?.stage === "downloading_client"
+                ? `Descargando recursos de Minecraft ${pack?.minecraftVersion}... ${schematicProgress.progress}%`
+                : schematicProgress?.stage === "extracting"
+                ? `Extrayendo modelos y texturas... ${schematicProgress.progress}%`
+                : "Preparando modelos y texturas..."
+              : !selectedSchematicStructure
+              ? "Cargando esquema..."
+              : "Arrastra para girar la cámara, rueda para hacer zoom. Los bloques de mods pueden no mostrarse."}
+          </p>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!selectedOnlinePost} onOpenChange={(open) => !open && setSelectedOnlinePost(null)}>
+        <DialogContent className="bg-card border-white/10 text-foreground sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-white flex items-center gap-2">
+              {selectedOnlinePost?.postName}
+              {selectedOnlinePost && (
+                <Badge variant="secondary" className="text-[10px]">
+                  {selectedOnlinePost.vendor}
+                </Badge>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          {onlineDetailLoading ? (
+            <div className="flex items-center justify-center py-16 text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin mr-2" /> Cargando...
+            </div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              {onlinePostDetail && (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Por {onlinePostDetail.author}
+                    {onlinePostDetail.tags.length > 0 && (
+                      <span className="ml-2">
+                        {onlinePostDetail.tags.map((tag) => (
+                          <Badge key={tag} variant="outline" className="text-[10px] mr-1">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </span>
+                    )}
+                  </p>
+                  {onlinePostDetail.descriptionMd && (
+                    <div className="prose prose-sm prose-invert max-w-none prose-img:rounded-md prose-a:text-accent">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        rehypePlugins={[rehypeRaw, [rehypeSanitize, HTML_SANITIZE_SCHEMA]]}
+                      >
+                        {onlinePostDetail.descriptionMd}
+                      </ReactMarkdown>
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div className="flex flex-col gap-2">
+                {onlinePostFiles.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Este esquema no tiene archivos descargables.</p>
+                ) : (
+                  onlinePostFiles.map((file) => (
+                    <div
+                      key={file.id}
+                      className="flex items-center gap-3 p-2.5 bg-gray-500/10 rounded-md border border-white/10"
+                    >
+                      <Box className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm text-gray-100 truncate">{file.fileName}</p>
+                        <p className="text-[10px] text-muted-foreground">{formatBytes(file.fileSize)}</p>
+                      </div>
+                      <Button
+                        size="sm"
+                        disabled={!file.supported || downloadingFileId === file.id}
+                        title={file.supported ? undefined : "Formato no compatible con el visor"}
+                        onClick={() => handleDownloadSchematicFile(file)}
+                        className="bg-accent hover:bg-accent/90 text-accent-foreground gap-1.5 shrink-0"
+                      >
+                        {downloadingFileId === file.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Download className="h-3.5 w-3.5" />
+                        )}
+                        Descargar
+                      </Button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!versionChoice} onOpenChange={(open) => !open && setVersionChoice(null)}>
+        <DialogContent className="bg-card border-white/10 text-foreground sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-white">¿Con cuál versión te quedas?</DialogTitle>
+          </DialogHeader>
+          {versionChoice && (
+            <div className="flex flex-col gap-4">
+              <p className="text-sm text-muted-foreground">
+                Ya tienes instalado <span className="text-white font-medium">{versionChoice.existingLabel}</span>. El
+                archivo que has añadido es una versión distinta.
+              </p>
+              <div className="flex flex-col gap-2">
+                <Button
+                  variant="outline"
+                  className="border-white/10 justify-start"
+                  onClick={() => handleVersionChoice("keep-existing")}
+                >
+                  Mantener el que ya tengo
+                </Button>
+                <Button
+                  className="bg-accent hover:bg-accent/90 text-accent-foreground justify-start"
+                  onClick={() => handleVersionChoice("use-new")}
+                >
+                  Usar el nuevo
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

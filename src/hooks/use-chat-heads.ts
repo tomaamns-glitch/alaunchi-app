@@ -1,13 +1,20 @@
 import { create } from "zustand";
 import { subscribeChatIndex, markConversationRead, type ChatIndexEntry } from "@/services/chat";
-import { focusWindow } from "@/services/electron";
+import { focusWindow, getAppIconDataUrl } from "@/services/electron";
+import { getPlayerHeadDataUrl } from "@/hooks/use-player-head";
+import { playNotificationSound } from "@/lib/notification-sound";
 
 /** Native OS notification for an incoming chat message — same pattern as
- *  notifyConnected in presence-button.tsx. */
-function notifyNewMessage(name: string, text: string) {
-  if (typeof Notification === "undefined") return;
-  const n = new Notification(name, { body: text });
+ *  notifyConnected in presence-button.tsx. Skipped while the app window is
+ *  focused (you're already looking at it — the unread bubble covers it) and
+ *  always requested silent so the user's chosen sound (see notification-sound.ts)
+ *  is the only audio, instead of whatever the OS default is. */
+async function notifyNewMessage(uuid: string, name: string, text: string) {
+  if (typeof Notification === "undefined" || document.hasFocus()) return;
+  const icon = (await getPlayerHeadDataUrl(uuid).catch(() => null)) || (await getAppIconDataUrl().catch(() => null));
+  const n = new Notification(name, { body: text, icon: icon ?? undefined, silent: true });
   n.onclick = () => focusWindow();
+  playNotificationSound();
 }
 
 interface ChatHeadsState {
@@ -23,6 +30,24 @@ interface ChatHeadsState {
 
 let unsubscribeIndex: (() => void) | null = null;
 
+// Chats you had minimized (visible as a bubble, not necessarily unread) stay
+// that way across an app restart instead of quietly closing — scoped per
+// account since the same PC can be shared by more than one Microsoft login.
+const pinnedStorageKey = (myUuid: string) => `alaunchi_pinned_chats_${myUuid}`;
+
+function loadPinnedUuids(myUuid: string): Set<string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(pinnedStorageKey(myUuid)) || "[]");
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function savePinnedUuids(myUuid: string, pinnedUuids: Set<string>) {
+  localStorage.setItem(pinnedStorageKey(myUuid), JSON.stringify(Array.from(pinnedUuids)));
+}
+
 export const useChatHeads = create<ChatHeadsState>((set, get) => ({
   myUuid: null,
   chatIndex: {},
@@ -32,7 +57,7 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
   init: (myUuid) => {
     if (get().myUuid === myUuid) return;
     unsubscribeIndex?.();
-    set({ myUuid, chatIndex: {}, openUuid: null, pinnedUuids: new Set() });
+    set({ myUuid, chatIndex: {}, openUuid: null, pinnedUuids: loadPinnedUuids(myUuid) });
 
     let previous: Record<string, ChatIndexEntry> = {};
     unsubscribeIndex = subscribeChatIndex(myUuid, (index) => {
@@ -40,7 +65,7 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
         const before = previous[uuid]?.unreadCount || 0;
         const after = entry.unreadCount || 0;
         if (after > before) {
-          notifyNewMessage(entry.otherUsername, entry.lastMessage);
+          notifyNewMessage(uuid, entry.otherUsername, entry.lastMessage).catch(() => {});
         }
       }
       previous = index;
@@ -54,16 +79,20 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
     const nextPinned = new Set(pinnedUuids);
     nextPinned.add(uuid);
     set({ openUuid: uuid, pinnedUuids: nextPinned });
-    if (myUuid) markConversationRead(myUuid, uuid).catch(() => {});
+    if (myUuid) {
+      markConversationRead(myUuid, uuid).catch(() => {});
+      savePinnedUuids(myUuid, nextPinned);
+    }
   },
 
   minimizeChat: () => set({ openUuid: null }),
 
   closeChat: (uuid) => {
-    const { openUuid, pinnedUuids } = get();
+    const { myUuid, openUuid, pinnedUuids } = get();
     const nextPinned = new Set(pinnedUuids);
     nextPinned.delete(uuid);
     set({ pinnedUuids: nextPinned, openUuid: openUuid === uuid ? null : openUuid });
+    if (myUuid) savePinnedUuids(myUuid, nextPinned);
   },
 }));
 
