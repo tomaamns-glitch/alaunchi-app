@@ -26,7 +26,7 @@ function AppSplash() {
   return (
     <div className="h-full w-full flex flex-col items-center justify-center gap-4 bg-background">
       <img
-        src="/logo.png"
+        src="./logo.png"
         alt="ALaunchi"
         className="h-14 object-contain opacity-90"
         onError={(e) => {
@@ -65,7 +65,10 @@ function App() {
   // on a normal cold start (no update happened).
   useEffect(() => {
     return onUpdateInstalled(() => {
-      const audio = new Audio("/sounds/update-ready.mp3");
+      // Relative, not "/sounds/..." — the packaged app loads index.html via
+      // file://, where a leading slash resolves against the filesystem root
+      // instead of the dist/ folder next to this document.
+      const audio = new Audio("./sounds/update-ready.mp3");
       audio.volume = 0.5;
       audio.play().catch(() => {});
     });

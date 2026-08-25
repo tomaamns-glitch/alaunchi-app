@@ -40,6 +40,18 @@ export function subscribeUserDirectory(callback: (users: Record<string, KnownUse
   return () => off(usersRef, "value", handler);
 }
 
+/** One user's directory entry — "Última conexión" in the chat header reads
+ *  this (see touchUserDirectory: refreshed both when the launcher opens and
+ *  when it's closed-to-tray, so lastSeen tracks actual launcher usage). */
+export function subscribeUserActivity(
+  uuid: string,
+  callback: (activity: KnownUser | null) => void
+): Unsubscribe {
+  const userRef = ref(rtdb, `users/${uuid}`);
+  const handler = onValue(userRef, (snap) => callback(snap.val() ?? null));
+  return () => off(userRef, "value", handler);
+}
+
 export function subscribeChatIndex(
   myUuid: string,
   callback: (index: Record<string, ChatIndexEntry>) => void

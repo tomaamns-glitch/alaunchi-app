@@ -131,7 +131,7 @@ export default function Login() {
         className="z-10 flex flex-col items-center max-w-sm w-full p-8 border border-white/5 bg-card/80 backdrop-blur-md rounded-2xl shadow-2xl"
       >
         <img
-          src="/logo.png"
+          src="./logo.png"
           alt="ALaunchi"
           className="h-16 mb-6 object-contain"
           onError={(e) => {

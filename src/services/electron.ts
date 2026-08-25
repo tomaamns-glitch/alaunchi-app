@@ -246,6 +246,14 @@ export function onUpdateInstalled(callback: () => void): () => void {
   return eAPI.onUpdateInstalled(callback);
 }
 
+/** Fired every time the launcher window is closed to the tray (the custom
+ *  titlebar's X, or Alt+F4) — see main.js's "close" handler. The renderer's
+ *  cue to refresh "última conexión" for the chat header. */
+export function onClosedToTray(callback: () => void): () => void {
+  if (!isElectron) return () => {};
+  return eAPI.onClosedToTray(callback);
+}
+
 /** Fired when the playtime watcher in the main process detects a tracked Minecraft
  *  process has exited — the renderer's cue to mark itself offline in presence. */
 export function onPlaytimeSessionEnded(callback: (data: { modpackId: string; totalPlaytimeMs: number }) => void): () => void {

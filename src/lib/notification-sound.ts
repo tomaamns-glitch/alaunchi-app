@@ -16,10 +16,13 @@ export const NOTIFICATION_SOUNDS: { id: NotificationSoundId; label: string }[] =
   { id: "none", label: "Silencio" },
 ];
 
-// Presets backed by a bundled clip instead of a synthesized tone.
+// Presets backed by a bundled clip instead of a synthesized tone. Relative
+// paths, not "/sounds/..." — the packaged app loads index.html via file://,
+// where a leading slash resolves against the filesystem root instead of the
+// dist/ folder next to this document.
 const SOUND_FILES: Partial<Record<NotificationSoundId, string>> = {
-  amethyst: "/sounds/notif-amethyst.mp3",
-  villager: "/sounds/notif-villager.mp3",
+  amethyst: "./sounds/notif-amethyst.mp3",
+  villager: "./sounds/notif-villager.mp3",
 };
 
 const STORAGE_KEY = "alaunchi_notification_sound";

@@ -365,6 +365,10 @@ function createWindow() {
     if (isQuitting) return;
     event.preventDefault();
     win.hide();
+    // Renderer's cue to refresh "when did they last use the launcher" (chat
+    // header) — the process survives close-to-tray, so it can just make the
+    // Firebase write itself rather than needing anything recorded here.
+    if (!win.webContents.isDestroyed()) win.webContents.send("app:closed-to-tray");
     if (!hasShownTrayHint) {
       hasShownTrayHint = true;
       tray?.displayBalloon({
