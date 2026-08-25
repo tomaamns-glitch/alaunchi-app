@@ -1,17 +1,26 @@
-// Notification sounds are synthesized on the fly with the Web Audio API rather
-// than shipped as bundled audio files — no assets to source/license, and it keeps
-// "personalizar el sonido" to a simple stored preset id instead of a file picker.
+// Most notification sounds are synthesized on the fly with the Web Audio API —
+// no assets to source/license, keeps "personalizar el sonido" to a simple stored
+// preset id instead of a file picker. A few real clips (public/sounds/) are
+// mixed into the same preset list for the ones the user actually supplied.
 // Independent of the OS notification's own sound (always requested silent — see
 // use-chat-heads.ts / presence-button.tsx), so this is the only thing played.
 
-export type NotificationSoundId = "chime" | "ding" | "pop" | "none";
+export type NotificationSoundId = "chime" | "ding" | "pop" | "amethyst" | "villager" | "none";
 
 export const NOTIFICATION_SOUNDS: { id: NotificationSoundId; label: string }[] = [
   { id: "chime", label: "Campanilla" },
   { id: "ding", label: "Ding" },
   { id: "pop", label: "Pop" },
+  { id: "amethyst", label: "Amatista" },
+  { id: "villager", label: "Aldeano" },
   { id: "none", label: "Silencio" },
 ];
+
+// Presets backed by a bundled clip instead of a synthesized tone.
+const SOUND_FILES: Partial<Record<NotificationSoundId, string>> = {
+  amethyst: "/sounds/notif-amethyst.mp3",
+  villager: "/sounds/notif-villager.mp3",
+};
 
 const STORAGE_KEY = "alaunchi_notification_sound";
 const DEFAULT_SOUND: NotificationSoundId = "chime";
@@ -57,6 +66,13 @@ function tone(ctx: AudioContext, freq: number, startAt: number, duration: number
 /** Plays the given (or, by default, the user's saved) notification sound. */
 export function playNotificationSound(id: NotificationSoundId = getNotificationSound()): void {
   if (id === "none") return;
+  const file = SOUND_FILES[id];
+  if (file) {
+    const audio = new Audio(file);
+    audio.volume = 0.6;
+    audio.play().catch(() => {});
+    return;
+  }
   const ctx = getAudioContext();
   if (!ctx) return;
   const now = ctx.currentTime;
