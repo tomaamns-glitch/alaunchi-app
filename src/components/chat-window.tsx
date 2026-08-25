@@ -17,11 +17,11 @@ import {
   Smile,
 } from "lucide-react";
 import { toast } from "sonner";
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import {
   getConversationId,
   subscribeMessages,
+  subscribeUserActivity,
   sendMessage,
   type ChatMessage,
 } from "@/services/chat";
@@ -29,7 +29,6 @@ import { subscribePresence, type PresenceEntry } from "@/services/presence";
 import { listInstanceFiles, listEmotes, downloadInstanceFile } from "@/services/electron";
 import { getNicknames, setNickname } from "@/lib/nicknames";
 import { formatPlaytime } from "@/lib/format";
-import { usePlayerHeadUrl } from "@/hooks/use-player-head";
 import { useChatHeads } from "@/hooks/use-chat-heads";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { ChatContactRail } from "@/components/chat-contact-rail";
@@ -83,6 +82,7 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [presenceEntry, setPresenceEntry] = useState<PresenceEntry | null>(null);
+  const [lastConnection, setLastConnection] = useState<number | null>(null);
   const [nicknames, setNicknamesState] = useState(() => getNicknames());
   const [editingAlias, setEditingAlias] = useState(false);
   const [aliasDraft, setAliasDraft] = useState("");
@@ -91,7 +91,6 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
   const [installedHashes, setInstalledHashes] = useState<Record<string, Set<string>>>({});
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  const headUrl = usePlayerHeadUrl(displayUuid);
   const otherUsername = displayUuid ? chatIndex[displayUuid]?.otherUsername ?? "" : "";
   const alias = displayUuid ? nicknames[displayUuid] : undefined;
 
@@ -107,6 +106,11 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
     if (!displayUuid) return;
     return subscribePresence(currentPackId, (entries) => setPresenceEntry(entries[displayUuid] ?? null));
   }, [displayUuid, currentPackId]);
+
+  useEffect(() => {
+    if (!displayUuid) return;
+    return subscribeUserActivity(displayUuid, (activity) => setLastConnection(activity?.lastSeen ?? null));
+  }, [displayUuid]);
 
   useEffect(() => {
     setEditingAlias(false);
@@ -181,13 +185,6 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
 
           <div className="flex-1 min-w-0 flex flex-col min-h-0">
             <div className="px-4 py-3 border-b border-white/10 flex items-start gap-3">
-              <Avatar className="h-10 w-10 border border-white/10 shrink-0">
-                {headUrl && <AvatarImage src={headUrl} alt={otherUsername} />}
-                <AvatarFallback className="bg-accent/20 text-accent text-sm font-bold">
-                  {otherUsername.charAt(0)?.toUpperCase() ?? "?"}
-                </AvatarFallback>
-              </Avatar>
-
               <div className="min-w-0 flex-1">
                 {editingAlias ? (
                   <div className="flex items-center gap-1">
@@ -221,20 +218,23 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
                     }}
                     className="flex items-center gap-1.5 text-sm font-semibold text-white hover:text-accent transition-colors"
                   >
-                    {alias || otherUsername}
+                    {alias ? `${alias} (${otherUsername})` : otherUsername}
                     <Pencil className="h-3 w-3 opacity-50" />
                   </motion.button>
                 )}
-                <p className="text-xs text-muted-foreground truncate">{otherUsername}</p>
                 <p className="text-[11px] text-muted-foreground truncate">
+                  Última vez jugada:{" "}
                   {presenceEntry?.online ? (
                     <span className="text-green-400">● En línea</span>
                   ) : presenceEntry?.lastSeen ? (
-                    `Hace ${formatDistanceToNow(presenceEntry.lastSeen, { locale: es })}`
+                    `hace ${formatDistanceToNow(presenceEntry.lastSeen, { locale: es })}`
                   ) : (
-                    "Sin conexión registrada"
+                    "sin registrar"
                   )}
                   {presenceEntry?.playtimeMs ? ` · ${formatPlaytime(presenceEntry.playtimeMs)}` : ""}
+                </p>
+                <p className="text-[11px] text-muted-foreground truncate">
+                  Última conexión: {lastConnection ? `hace ${formatDistanceToNow(lastConnection, { locale: es })}` : "sin registrar"}
                 </p>
               </div>
 

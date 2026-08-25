@@ -15,7 +15,7 @@ import {
   Package,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { installSnapshot, launchMinecraft } from "@/services/electron";
+import { installSnapshot, launchMinecraft, onClosedToTray } from "@/services/electron";
 import { markOnline } from "@/services/presence";
 import { touchUserDirectory } from "@/services/chat";
 import { getAzureClientId } from "@/services/auth";
@@ -460,6 +460,16 @@ export default function Home() {
   useEffect(() => {
     if (!uuid || !username) return;
     touchUserDirectory(uuid, username).catch(() => {});
+  }, [uuid, username]);
+
+  // Refresh the same directory entry again right as the launcher closes to
+  // the tray, so "Última conexión" in the chat header reflects that moment
+  // instead of staying stuck at whenever the app was last opened.
+  useEffect(() => {
+    if (!uuid || !username) return;
+    return onClosedToTray(() => {
+      touchUserDirectory(uuid, username).catch(() => {});
+    });
   }, [uuid, username]);
 
   useEffect(() => {

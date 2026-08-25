@@ -85,6 +85,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("app:update-installed", handler);
     return () => ipcRenderer.removeListener("app:update-installed", handler);
   },
+  onClosedToTray: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("app:closed-to-tray", handler);
+    return () => ipcRenderer.removeListener("app:closed-to-tray", handler);
+  },
 
   // Events from main process
   onInstallProgress: (callback) => {

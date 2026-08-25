@@ -622,10 +622,10 @@ export default function AdminModpack() {
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <img
-          src={pack.imageUrl || "/logo.png"}
+          src={pack.imageUrl || "./logo.png"}
           alt={pack.name}
           className="h-9 w-9 object-cover rounded bg-black/50"
-          onError={(e) => { (e.target as HTMLImageElement).src = "/logo.png"; }}
+          onError={(e) => { (e.target as HTMLImageElement).src = "./logo.png"; }}
         />
         <div className="min-w-0">
           <h1 className="text-lg font-bold text-white truncate">{pack.name}</h1>

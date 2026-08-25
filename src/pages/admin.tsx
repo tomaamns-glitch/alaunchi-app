@@ -130,10 +130,10 @@ export default function Admin() {
                 <div className="flex items-center justify-between p-4">
                   <div className="flex items-center gap-4 min-w-0">
                     <img
-                      src={pack.imageUrl || "/logo.png"}
+                      src={pack.imageUrl || "./logo.png"}
                       alt={pack.name}
                       className="h-14 w-14 object-cover rounded bg-black/50 shrink-0"
-                      onError={(e) => { (e.target as HTMLImageElement).src = "/logo.png"; }}
+                      onError={(e) => { (e.target as HTMLImageElement).src = "./logo.png"; }}
                     />
                     <div className="min-w-0">
                       <h3 className="font-bold text-white truncate">{pack.name}</h3>
