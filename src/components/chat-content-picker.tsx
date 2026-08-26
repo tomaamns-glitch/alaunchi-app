@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Package, Sparkles, Image as ImageIcon, Smile, Loader2, ArrowLeft, Send } from "lucide-react";
-import { listInstanceFiles, listEmotes, readInstanceFile } from "@/services/electron";
+import { Package, Sparkles, Image as ImageIcon, Smile, Loader2, ArrowLeft, Send, Box, Shirt, Camera } from "lucide-react";
+import { listInstanceFiles, listEmotes, listSchematics, listScreenshots, readInstanceFile } from "@/services/electron";
 import { identifyModrinthFiles, categoryOf, fileName, guessTitle } from "@/services/modrinth";
 import { uploadSharedContent, type ContentCategory, type SharedContent } from "@/services/content-share";
 import { sendSharedContent } from "@/services/chat";
+import { listSkinLibrary } from "@/services/skin";
 import { usePlayerSkinUrl } from "@/hooks/use-player-head";
 import { useEmotePreview } from "@/hooks/use-emote-preview";
 import { EmoteAnimation } from "@/lib/emote-animation";
@@ -25,6 +26,9 @@ const CATEGORY_META: Record<ContentCategory, { label: string; icon: typeof Packa
   shaderpacks: { label: "Shaders", icon: Sparkles },
   resourcepacks: { label: "Texturas", icon: ImageIcon },
   emotes: { label: "Emotes", icon: Smile },
+  schematics: { label: "Esquemas", icon: Box },
+  skins: { label: "Skins", icon: Shirt },
+  screenshots: { label: "Capturas", icon: Camera },
 };
 
 interface PickerItem {
@@ -34,6 +38,12 @@ interface PickerItem {
   iconUrl: string | null;
   sha1: string;
   size: number;
+  /** Only set for category === "schematics". */
+  schematicSource?: "litematica" | "worldedit";
+  /** Only set for category === "skins" — bytes are already in hand from
+   *  listSkinLibrary(), no readInstanceFile needed at share time. */
+  skinFileBase64?: string;
+  skinVariant?: "slim" | "classic";
 }
 
 /** Popup (opens upward, next to "Enviar contenido") to browse the current
@@ -84,6 +94,54 @@ export function ChatContentPicker({
               size: 0,
             }))
         );
+      } else if (category === "schematics") {
+        const files = await listSchematics(currentPackId);
+        if (cancelled) return;
+        setItems(
+          files
+            .filter((s) => s.sha1)
+            .map((s) => ({
+              path: s.path,
+              fileName: s.path.slice(s.path.lastIndexOf("/") + 1),
+              displayName: s.path.slice(s.path.lastIndexOf("/") + 1),
+              iconUrl: null,
+              sha1: s.sha1 as string,
+              size: s.size,
+              schematicSource: s.source,
+            }))
+        );
+      } else if (category === "skins") {
+        const skins = await listSkinLibrary();
+        if (cancelled) return;
+        setItems(
+          skins
+            .filter((s) => s.sha1)
+            .map((s) => ({
+              path: `skin:${s.id}`,
+              fileName: `${s.name}.png`,
+              displayName: s.name,
+              iconUrl: `data:image/png;base64,${s.fileBase64}`,
+              sha1: s.sha1 as string,
+              size: 0,
+              skinFileBase64: s.fileBase64,
+              skinVariant: s.variant,
+            }))
+        );
+      } else if (category === "screenshots") {
+        const shots = await listScreenshots(currentPackId);
+        if (cancelled) return;
+        setItems(
+          shots
+            .filter((s) => s.sha1)
+            .map((s) => ({
+              path: `screenshots/${s.fileName}`,
+              fileName: s.fileName,
+              displayName: s.fileName,
+              iconUrl: s.thumbnailDataUrl,
+              sha1: s.sha1 as string,
+              size: s.size,
+            }))
+        );
       } else {
         const files = await listInstanceFiles(currentPackId);
         const catFiles = files.filter((f) => categoryOf(f.path) === category && f.sha1);
@@ -116,8 +174,10 @@ export function ChatContentPicker({
     if (!category) return;
     setSendingPath(item.path);
     try {
-      const base64 = await readInstanceFile(currentPackId, item.path);
+      const base64 = category === "skins" ? item.skinFileBase64! : await readInstanceFile(currentPackId, item.path);
       const downloadUrl = await uploadSharedContent(base64, item.sha1);
+      // RTDB rejects `undefined` field values at write time — every optional
+      // field below is added via conditional spread, never left undefined.
       const content: SharedContent = {
         category,
         fileName: item.fileName,
@@ -125,8 +185,10 @@ export function ChatContentPicker({
         iconUrl: item.iconUrl,
         sha1: item.sha1,
         size: item.size,
-        modpackId: currentPackId,
         downloadUrl,
+        ...(category !== "skins" ? { modpackId: currentPackId } : {}),
+        ...(item.schematicSource ? { schematicSource: item.schematicSource } : {}),
+        ...(item.skinVariant ? { skinVariant: item.skinVariant } : {}),
       };
       await sendSharedContent(myUuid, myUsername, otherUuid, otherUsername, content);
       toast.success(`${item.displayName} compartido.`);

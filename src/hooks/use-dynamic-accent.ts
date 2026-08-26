@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { extractDominantColor, type HSL } from "@/lib/dominant-color";
 
 // Must match --accent in index.css.
-const DEFAULT_ACCENT: HSL = { h: 38, s: 90, l: 55 };
+const DEFAULT_ACCENT: HSL = { h: 205, s: 90, l: 55 };
 
 function parseAccent(value: string): HSL | null {
   const m = value.trim().match(/^([\d.]+)\s+([\d.]+)%\s+([\d.]+)%$/);

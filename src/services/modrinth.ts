@@ -203,31 +203,60 @@ export async function listVersions(
     const res = await fetch(`${API}/project/${projectId}/version?${params}`);
     if (!res.ok) return [];
     const versions: ModrinthVersionFull[] = await res.json();
-    return versions
-      .map((v) => {
-        const file = v.files.find((f) => f.primary) ?? v.files[0];
-        if (!file) return null;
-        return {
-          versionId: v.id,
-          versionNumber: v.version_number,
-          versionType: v.version_type,
-          filename: file.filename,
-          url: file.url,
-          sha1: file.hashes.sha1,
-          size: file.size,
-          datePublished: v.date_published,
-          downloads: v.downloads,
-          dependencies: (v.dependencies ?? []).map((d) => ({
-            projectId: d.project_id,
-            versionId: d.version_id,
-            dependencyType: d.dependency_type,
-          })),
-        };
-      })
-      .filter((v): v is ModrinthUpdate => v !== null);
+    return versions.map(mapVersionFull).filter((v): v is ModrinthUpdate => v !== null);
   } catch {
     return [];
   }
+}
+
+function mapVersionFull(v: ModrinthVersionFull): ModrinthUpdate | null {
+  const file = v.files.find((f) => f.primary) ?? v.files[0];
+  if (!file) return null;
+  return {
+    versionId: v.id,
+    versionNumber: v.version_number,
+    versionType: v.version_type,
+    filename: file.filename,
+    url: file.url,
+    sha1: file.hashes.sha1,
+    size: file.size,
+    datePublished: v.date_published,
+    downloads: v.downloads,
+    dependencies: (v.dependencies ?? []).map((d) => ({
+      projectId: d.project_id,
+      versionId: d.version_id,
+      dependencyType: d.dependency_type,
+    })),
+  };
+}
+
+/**
+ * Fetches full version data (including dependencies) for an explicit list of
+ * version ids in one request — used to check every installed mod's current
+ * dependencies at once instead of one listVersions() call per mod. Verified
+ * against Modrinth's live API (GET /v2/versions?ids=[...]) — same batching
+ * shape as lookupProjects' /projects?ids=.
+ */
+export async function getVersionsByIds(versionIds: string[]): Promise<ModrinthUpdate[]> {
+  const unique = Array.from(new Set(versionIds));
+  if (unique.length === 0) return [];
+  try {
+    const res = await fetch(`${API}/versions?ids=${encodeURIComponent(JSON.stringify(unique))}`);
+    if (!res.ok) return [];
+    const versions: ModrinthVersionFull[] = await res.json();
+    return versions.map(mapVersionFull).filter((v): v is ModrinthUpdate => v !== null);
+  } catch {
+    return [];
+  }
+}
+
+/** A dependency's project title/icon, for an auto-installed mod that wasn't
+ *  already in the picture (reuses the same cached lookup identifyModrinthFiles
+ *  and getRequiredDependencies use internally). */
+export async function getProjectInfo(projectId: string): Promise<{ title: string; iconUrl: string | null } | null> {
+  const projects = await lookupProjects([projectId]);
+  const p = projects[projectId];
+  return p ? { title: p.title, iconUrl: p.icon_url } : null;
 }
 
 /**

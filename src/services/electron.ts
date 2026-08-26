@@ -158,6 +158,7 @@ export interface SchematicFile {
   path: string;
   size: number;
   source: "litematica" | "worldedit";
+  sha1: string | null;
 }
 
 /** Recursively lists .litematic/.schem/.schematic/.nbt files under an installed
@@ -165,6 +166,21 @@ export interface SchematicFile {
 export async function listSchematics(modpackId: string): Promise<SchematicFile[]> {
   if (!isElectron) return [];
   return eAPI.listSchematics({ modpackId });
+}
+
+export interface ScreenshotFile {
+  fileName: string;
+  size: number;
+  sha1: string | null;
+  /** Small resized preview data URL — the lightbox fetches full-res bytes on
+   *  demand via readInstanceFile instead of loading every screenshot upfront. */
+  thumbnailDataUrl: string | null;
+}
+
+/** Lists the vanilla F2 screenshots (screenshots/*.png) in an installed instance. */
+export async function listScreenshots(modpackId: string): Promise<ScreenshotFile[]> {
+  if (!isElectron) return [];
+  return eAPI.listScreenshots({ modpackId });
 }
 
 export interface SchematicAssetsBundle {

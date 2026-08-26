@@ -20,6 +20,7 @@ class OrbitCamera {
   private viewDist = 4;
   private center: [number, number, number] = [0, 0, 0];
   private dragPos: [number, number] | null = null;
+  private dragButton: number | null = null;
   private raf = 0;
 
   constructor(
@@ -30,23 +31,57 @@ class OrbitCamera {
     window.addEventListener("mousemove", this.onMouseMove);
     window.addEventListener("mouseup", this.onMouseUp);
     canvas.addEventListener("wheel", this.onWheel, { passive: false });
+    canvas.addEventListener("contextmenu", this.onContextMenu);
   }
 
   private onMouseDown = (e: MouseEvent) => {
-    if (e.button === 0) this.dragPos = [e.clientX, e.clientY];
+    if (e.button === 0 || e.button === 2) {
+      this.dragPos = [e.clientX, e.clientY];
+      this.dragButton = e.button;
+    }
   };
 
   private onMouseMove = (e: MouseEvent) => {
     if (!this.dragPos) return;
-    this.yRotation += (e.clientX - this.dragPos[0]) / 100;
-    this.xRotation += (e.clientY - this.dragPos[1]) / 100;
+    const dx = e.clientX - this.dragPos[0];
+    const dy = e.clientY - this.dragPos[1];
     this.dragPos = [e.clientX, e.clientY];
+    if (this.dragButton === 2) {
+      this.pan(dx, dy);
+    } else {
+      this.yRotation += dx / 100;
+      this.xRotation += dy / 100;
+    }
     this.redraw();
   };
 
   private onMouseUp = () => {
     this.dragPos = null;
+    this.dragButton = null;
   };
+
+  // Right-click drives panning (see onMouseDown/onMouseMove), so the OS/
+  // Electron context menu popping up on release would be a jarring surprise.
+  private onContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
+  };
+
+  /** Moves the look-at target across the camera's own right/up plane instead
+   *  of orbiting around it — lets you look around the build instead of always
+   *  being stuck orbiting its fixed center. Speed scales with viewDist so a
+   *  drag feels the same whether zoomed in or way out. */
+  private pan(dx: number, dy: number) {
+    const cosY = Math.cos(this.yRotation);
+    const sinY = Math.sin(this.yRotation);
+    const cosX = Math.cos(this.xRotation);
+    const sinX = Math.sin(this.xRotation);
+    const right: [number, number, number] = [cosY, 0, -sinY];
+    const up: [number, number, number] = [sinY * sinX, cosX, cosY * sinX];
+    const speed = this.viewDist / 300;
+    for (let i = 0; i < 3; i++) {
+      this.center[i] -= dx * right[i] * speed - dy * up[i] * speed;
+    }
+  }
 
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
@@ -86,11 +121,12 @@ class OrbitCamera {
     window.removeEventListener("mousemove", this.onMouseMove);
     window.removeEventListener("mouseup", this.onMouseUp);
     this.canvas.removeEventListener("wheel", this.onWheel);
+    this.canvas.removeEventListener("contextmenu", this.onContextMenu);
   }
 }
 
-/** A live, rotatable 3D render of a parsed schematic Structure. Drag to
- *  rotate, scroll to zoom. Unlike SkinViewer3D (which wraps skinview3d's own
+/** A live, rotatable 3D render of a parsed schematic Structure. Left-drag to
+ *  orbit, right-drag to pan, scroll to zoom. Unlike SkinViewer3D (which wraps skinview3d's own
  *  SkinViewer lifecycle), this drives deepslate's raw-WebGL StructureRenderer
  *  directly, since deepslate has no three.js layer. */
 export function SchematicViewer3D({ structure, resources, width = 400, height = 300, className }: SchematicViewer3DProps) {

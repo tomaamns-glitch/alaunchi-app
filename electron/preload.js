@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openInstanceFolder: (args) => ipcRenderer.invoke("mc:open-instance-folder", args),
   purgeXrayFiles: (args) => ipcRenderer.invoke("mc:purge-xray-files", args),
   listEmotes: (args) => ipcRenderer.invoke("mc:list-emotes", args),
+  listScreenshots: (args) => ipcRenderer.invoke("mc:list-screenshots", args),
   readSettings: () => ipcRenderer.invoke("fs:read-settings"),
   writeSettings: (settings) => ipcRenderer.invoke("fs:write-settings", settings),
   readAuth: () => ipcRenderer.invoke("fs:read-auth"),

@@ -32,13 +32,16 @@ import {
   Globe,
   WifiOff,
   UploadCloud,
+  Camera,
 } from "lucide-react";
 import { SnapshotEntry, fetchSnapshot } from "@/services/github";
 import {
   identifyModrinthFiles,
   getLatestVersion,
   getProjectDetail,
+  getProjectInfo,
   getRequiredDependencies,
+  getVersionsByIds,
   listVersions,
   searchProjects,
   fetchCategoryTags,
@@ -72,13 +75,17 @@ import {
   openInstanceFolder,
   listEmotes,
   listSchematics,
+  listScreenshots,
+  readInstanceFile,
   classifyDroppedFile,
   writeInstanceFile,
   type InstanceFile,
   type EmoteFile,
   type SchematicFile,
+  type ScreenshotFile,
   type ContentClassification,
 } from "@/services/electron";
+import { ImageLightbox } from "@/components/image-lightbox";
 import { resolveContentConflict, resolveNoIdentityConflict, type ConflictResolution } from "@/lib/content-conflict";
 import { translateHtmlAwareToSpanish } from "@/services/translate";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
@@ -179,6 +186,9 @@ export default function ModpackDetail() {
   const [optionalContent, setOptionalContent] = useState<Record<Category, InstanceFile[]>>(EMPTY_CATEGORIES);
   const [modrinthMatches, setModrinthMatches] = useState<Map<string, ModrinthMatch>>(new Map());
   const [updates, setUpdates] = useState<Map<string, ModrinthUpdate>>(new Map());
+  // projectIds that are a required dependency of at least one other installed
+  // mod — drives the "Dependencia" badge on the installed list.
+  const [requiredByOthers, setRequiredByOthers] = useState<Set<string>>(new Set());
   const [sortAsc, setSortAsc] = useState(true);
   const [showInstalledFirst, setShowInstalledFirst] = useState(false);
   const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
@@ -285,6 +295,15 @@ export default function ModpackDetail() {
   const [schematicsOpen, setSchematicsOpen] = useState(false);
   const [schematics, setSchematics] = useState<SchematicFile[]>([]);
   const [selectedSchematic, setSelectedSchematic] = useState<SchematicFile | null>(null);
+
+  // Vanilla F2 screenshots — same read-only-tab pattern as Emotes/Esquemas, but
+  // always shown (once the pack is installed) since screenshots are a vanilla
+  // feature, not gated behind any mod or prior content.
+  const [screenshotsOpen, setScreenshotsOpen] = useState(false);
+  const [screenshots, setScreenshots] = useState<ScreenshotFile[]>([]);
+  const [screenshotsLoading, setScreenshotsLoading] = useState(false);
+  const [lightboxImage, setLightboxImage] = useState<{ src: string; title?: string } | null>(null);
+  const [lightboxLoading, setLightboxLoading] = useState(false);
 
   // Online schematic search (unofficial aggregator API, see src/services/minemev.ts)
   // — a sub-mode inside the Esquemas panel, not a separate top-level entry.
@@ -399,7 +418,7 @@ export default function ModpackDetail() {
       const existing = new Set(schematics.map((s) => s.path));
       const targetPath = targetPathForSchematicFile(file, selectedOnlinePost.uuid, existing);
       await downloadInstanceFile(pack.id, targetPath, file.downloadUrl);
-      setSchematics((prev) => [...prev, { path: targetPath, size: file.fileSize, source: "litematica" }]);
+      setSchematics((prev) => [...prev, { path: targetPath, size: file.fileSize, source: "litematica", sha1: null }]);
       toast.success(`${file.fileName} descargado.`);
     } catch (e: any) {
       toast.error(e?.message || "No se pudo descargar el esquema.");
@@ -428,6 +447,27 @@ export default function ModpackDetail() {
       cancelled = true;
     };
   }, [emotesOpen, id]);
+
+  useEffect(() => {
+    if (!screenshotsOpen || !id) return;
+    let cancelled = false;
+    setScreenshotsLoading(true);
+    listScreenshots(id)
+      .then((result) => {
+        if (cancelled) return;
+        setScreenshots(result);
+        setScreenshotsLoading(false);
+      })
+      .catch((e: any) => {
+        if (cancelled) return;
+        setScreenshots([]);
+        setScreenshotsLoading(false);
+        toast.error(e?.message || "No se pudo leer la carpeta de capturas.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [screenshotsOpen, id]);
 
   const openMod = (path: string) => {
     setPanelDirection(1);
@@ -475,6 +515,8 @@ export default function ModpackDetail() {
     setSchematicOnlineMode(false);
     setSchematicResults([]);
     setSelectedOnlinePost(null);
+    setScreenshotsOpen(false);
+    setScreenshots([]);
 
     (async () => {
       const repoUrl = getGithubRepo();
@@ -657,6 +699,79 @@ export default function ModpackDetail() {
     return () => observer.disconnect();
   }, [searchMode, hasMoreResults, loadMoreResults]);
 
+  /** Resolves and installs a newly-installed mod's required dependencies,
+   *  transitively (a dependency can itself have required dependencies), with
+   *  a visited-set guard against cycles. Never touches a dependency that's
+   *  already installed — mandatory (pack-shipped) or optional — which is what
+   *  makes "never override the modpack's mandatory version" automatic rather
+   *  than a special case. Uses a local snapshot of what's installed instead of
+   *  re-reading React state mid-loop, since state updates from setOptionalContent
+   *  below won't be visible to the next iteration synchronously. */
+  const autoInstallDependencies = async (rootVersion: ModrinthUpdate, rootProjectId: string) => {
+    if (!pack) return;
+    const known = new Set<string>();
+    for (const row of rowsFor("mods")) {
+      const pid = modrinthMatches.get(row.path)?.projectId;
+      if (pid) known.add(pid);
+    }
+    known.add(rootProjectId);
+
+    const visited = new Set<string>([rootProjectId]);
+    const queue: ModrinthUpdate[] = [rootVersion];
+    let installedCount = 0;
+
+    while (queue.length > 0) {
+      const version = queue.shift()!;
+      const requiredIds = Array.from(
+        new Set(
+          version.dependencies
+            .filter((d) => d.dependencyType === "required" && d.projectId)
+            .map((d) => d.projectId as string)
+        )
+      );
+      for (const depId of requiredIds) {
+        if (visited.has(depId)) continue;
+        visited.add(depId);
+        if (known.has(depId)) continue; // already covered — mandatory or optional, leave it alone
+
+        const latest = await getLatestVersion(depId, pack.loaderType, pack.minecraftVersion, "mods");
+        if (!latest) continue; // no version compatible with this instance — skip silently
+        const info = await getProjectInfo(depId);
+        if (!info) continue;
+
+        const newPath = `mods/${latest.filename}`;
+        try {
+          await downloadInstanceFile(pack.id, newPath, latest.url, latest.sha1);
+        } catch {
+          continue; // don't let one failed dependency abort the rest
+        }
+        known.add(depId);
+        installedCount++;
+
+        setOptionalContent((prev) => ({
+          ...prev,
+          mods: [...prev.mods, { path: newPath, size: latest.size, sha1: latest.sha1 }],
+        }));
+        setModrinthMatches((prev) => {
+          const next = new Map(prev);
+          next.set(newPath, {
+            title: info.title,
+            iconUrl: info.iconUrl,
+            projectId: depId,
+            versionId: latest.versionId,
+            versionNumber: latest.versionNumber,
+          });
+          return next;
+        });
+
+        queue.push(latest);
+      }
+    }
+    if (installedCount > 0) {
+      toast.info(`${installedCount} dependencia${installedCount > 1 ? "s" : ""} instalada${installedCount > 1 ? "s" : ""} automáticamente.`);
+    }
+  };
+
   /** Downloads a chosen version into the instance — replacing an existing file, or a fresh install
    *  if `path` is a not-yet-installed search result (synthetic "search:<projectId>" key). */
   const handleInstallVersion = async (
@@ -703,6 +818,9 @@ export default function ModpackDetail() {
       });
       if (selectedModPath === path) setSelectedModPath(newPath);
       toast.success(isFresh ? `${matchInfo.title} instalado.` : `Cambiado a v${version.versionNumber}.`);
+      // Fire-and-forget — the mod just installed above updates its own UI
+      // immediately; any dependencies it needs install in the background.
+      if (c === "mods") void autoInstallDependencies(version, matchInfo.projectId);
     } catch (e: any) {
       toast.error(e?.message || "Error al instalar.");
     } finally {
@@ -790,6 +908,35 @@ export default function ModpackDetail() {
   ];
 
   const titleFor = (path: string) => modrinthMatches.get(path)?.title ?? guessTitle(fileName(path));
+
+  // Batch-fetches every installed mod's current version (one request via
+  // getVersionsByIds instead of one listVersions() call each) to find which
+  // installed mods are required by another installed mod — drives the
+  // "Dependencia" badge above.
+  useEffect(() => {
+    if (!pack?.installed) {
+      setRequiredByOthers(new Set());
+      return;
+    }
+    let cancelled = false;
+    const versionIds = rowsFor("mods")
+      .map((r) => modrinthMatches.get(r.path)?.versionId)
+      .filter((v): v is string => !!v);
+    getVersionsByIds(versionIds).then((versions) => {
+      if (cancelled) return;
+      const required = new Set<string>();
+      for (const v of versions) {
+        for (const d of v.dependencies) {
+          if (d.dependencyType === "required" && d.projectId) required.add(d.projectId);
+        }
+      }
+      setRequiredByOthers(required);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modrinthMatches, content, optionalContent, pack?.installed]);
 
   const effectiveCategory = categories.includes(activeCategory) ? activeCategory : categories[0];
   const selectedCategory = selectedModPath ? categoryOf(selectedModPath) ?? effectiveCategory : null;
@@ -915,7 +1062,7 @@ export default function ModpackDetail() {
         await writeInstanceFile(pack.id, resolution.targetPath, write);
         setSchematics((prev) => [
           ...prev,
-          { path: resolution.targetPath, size, source: classification.schematicRoot === "worldedit" ? "worldedit" : "litematica" },
+          { path: resolution.targetPath, size, source: classification.schematicRoot === "worldedit" ? "worldedit" : "litematica", sha1 },
         ]);
         setSchematicsOpen(true);
         setEmotesOpen(false);
@@ -1304,12 +1451,18 @@ export default function ModpackDetail() {
                   ) : (
                     <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {projectDetail.gallery.map((g) => (
-                        <img
+                        <button
+                          type="button"
                           key={g.url}
-                          src={g.url}
-                          alt={g.title || ""}
-                          className="w-full aspect-video object-cover rounded-md border border-white/10"
-                        />
+                          onClick={() => setLightboxImage({ src: g.url, title: g.title })}
+                          className="block"
+                        >
+                          <img
+                            src={g.url}
+                            alt={g.title || ""}
+                            className="w-full aspect-video object-cover rounded-md border border-white/10 hover:border-white/30 transition-colors"
+                          />
+                        </button>
                       ))}
                     </div>
                   )}
@@ -1430,10 +1583,11 @@ export default function ModpackDetail() {
                 // An empty value matches no real category, so Radix stops marking
                 // whichever tab was last active while the Emotes/Esquemas sibling
                 // panels (which aren't part of this Tabs' value space) are open.
-                value={emotesOpen || schematicsOpen ? "" : effectiveCategory}
+                value={emotesOpen || schematicsOpen || screenshotsOpen ? "" : effectiveCategory}
                 onValueChange={(v) => {
                   setEmotesOpen(false);
                   setSchematicsOpen(false);
+                  setScreenshotsOpen(false);
                   setActiveCategory(v as Category);
                 }}
               >
@@ -1461,6 +1615,7 @@ export default function ModpackDetail() {
                             onClick={() => {
                               setEmotesOpen(false);
                               setSchematicsOpen(false);
+                              setScreenshotsOpen(false);
                             }}
                             className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5"
                           >
@@ -1475,6 +1630,7 @@ export default function ModpackDetail() {
                           type="button"
                           onClick={() => {
                             setSchematicsOpen(false);
+                            setScreenshotsOpen(false);
                             setEmotesOpen(true);
                           }}
                           className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium gap-1.5 transition-all ${
@@ -1492,6 +1648,7 @@ export default function ModpackDetail() {
                           type="button"
                           onClick={() => {
                             setEmotesOpen(false);
+                            setScreenshotsOpen(false);
                             setSchematicsOpen(true);
                           }}
                           className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium gap-1.5 transition-all ${
@@ -1504,10 +1661,28 @@ export default function ModpackDetail() {
                           Esquemas
                         </button>
                       )}
+                      {pack.installed && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEmotesOpen(false);
+                            setSchematicsOpen(false);
+                            setScreenshotsOpen(true);
+                          }}
+                          className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium gap-1.5 transition-all ${
+                            screenshotsOpen
+                              ? "bg-accent text-accent-foreground shadow"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          <Camera className="h-3.5 w-3.5" />
+                          Capturas
+                        </button>
+                      )}
                     </TabsList>
                     {pack.installed && (
                       <div className="flex items-center gap-2">
-                        {!emotesOpen && !schematicsOpen && (
+                        {!emotesOpen && !schematicsOpen && !screenshotsOpen && (
                           <Button
                             size="sm"
                             onClick={() => setSearchMode(true)}
@@ -1831,6 +2006,50 @@ export default function ModpackDetail() {
                       </div>
                     )}
                   </>
+                ) : screenshotsOpen ? (
+                  screenshotsLoading ? (
+                    <div className="flex items-center justify-center py-16 text-muted-foreground">
+                      <Loader2 className="h-5 w-5 animate-spin mr-2" /> Cargando...
+                    </div>
+                  ) : screenshots.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+                      <Camera className="h-6 w-6" />
+                      <p className="text-sm">No hay capturas en la carpeta "screenshots" de esta instancia.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-4 gap-3">
+                      {screenshots.map((shot) => (
+                        <button
+                          type="button"
+                          key={shot.fileName}
+                          onClick={async () => {
+                            setLightboxImage({ src: shot.thumbnailDataUrl ?? "", title: shot.fileName });
+                            setLightboxLoading(true);
+                            try {
+                              const base64 = await readInstanceFile(id!, `screenshots/${shot.fileName}`);
+                              setLightboxImage({ src: `data:image/png;base64,${base64}`, title: shot.fileName });
+                            } catch (e: any) {
+                              toast.error(e?.message || "No se pudo cargar la captura.");
+                            } finally {
+                              setLightboxLoading(false);
+                            }
+                          }}
+                          className="flex flex-col items-center gap-2 p-2 rounded-md bg-gray-500/10 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-colors"
+                        >
+                          <div className="h-24 w-full rounded bg-black/30 overflow-hidden flex items-center justify-center shrink-0">
+                            {shot.thumbnailDataUrl ? (
+                              <img src={shot.thumbnailDataUrl} alt={shot.fileName} className="h-full w-full object-cover" />
+                            ) : (
+                              <Camera className="h-6 w-6 text-muted-foreground" />
+                            )}
+                          </div>
+                          <span className="text-[10px] text-gray-200 text-center truncate w-full" title={shot.fileName}>
+                            {shot.fileName}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )
                 ) : (
                 categories.map((c) => (
                   <TabsContent key={c} value={c} className="mt-4">
@@ -1906,13 +2125,18 @@ export default function ModpackDetail() {
                                     </div>
                                   )}
                                   <div className="min-w-0 flex-1">
-                                    {match ? (
-                                      <motion.p layoutId={`title-${row.path}`} className="text-gray-100 font-medium text-base truncate">
-                                        {match.title}
-                                      </motion.p>
-                                    ) : (
-                                      <p className="text-gray-100 font-medium text-base truncate">{titleFor(row.path)}</p>
-                                    )}
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      {match ? (
+                                        <motion.p layoutId={`title-${row.path}`} className="text-gray-100 font-medium text-base truncate">
+                                          {match.title}
+                                        </motion.p>
+                                      ) : (
+                                        <p className="text-gray-100 font-medium text-base truncate">{titleFor(row.path)}</p>
+                                      )}
+                                      {c === "mods" && match && requiredByOthers.has(match.projectId) && (
+                                        <Badge variant="outline" className="text-[10px] shrink-0">Dependencia</Badge>
+                                      )}
+                                    </div>
                                     <p className="text-muted-foreground text-[11px] font-mono truncate">{fileName(row.path)}</p>
                                   </div>
                                 </div>
@@ -2013,10 +2237,16 @@ export default function ModpackDetail() {
                 : "Preparando modelos y texturas..."
               : !selectedSchematicStructure
               ? "Cargando esquema..."
-              : "Arrastra para girar la cámara, rueda para hacer zoom. Los bloques de mods pueden no mostrarse."}
+              : "Arrastra para girar la cámara, clic derecho para desplazarte, rueda para hacer zoom. Los bloques de mods pueden no mostrarse."}
           </p>
         </DialogContent>
       </Dialog>
+
+      <ImageLightbox
+        image={lightboxImage}
+        loading={lightboxLoading}
+        onClose={() => setLightboxImage(null)}
+      />
 
       <Dialog open={!!selectedOnlinePost} onOpenChange={(open) => !open && setSelectedOnlinePost(null)}>
         <DialogContent className="bg-card border-white/10 text-foreground sm:max-w-2xl max-h-[85vh] overflow-y-auto">
