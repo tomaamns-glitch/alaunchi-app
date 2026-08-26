@@ -26,6 +26,8 @@ export interface LibrarySkin {
   variant: "slim" | "classic";
   addedAt: string;
   fileBase64: string;
+  /** Absent (undefined/null) for skins saved before sha1 tracking was added. */
+  sha1?: string | null;
 }
 
 function requireElectron() {

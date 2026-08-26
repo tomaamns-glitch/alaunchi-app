@@ -2,7 +2,14 @@ import { ref as dbRef, get, set } from "firebase/database";
 import { ref as storageRef, uploadString, getDownloadURL } from "firebase/storage";
 import { rtdb, storage } from "@/lib/firebase";
 
-export type ContentCategory = "mods" | "shaderpacks" | "resourcepacks" | "emotes";
+export type ContentCategory =
+  | "mods"
+  | "shaderpacks"
+  | "resourcepacks"
+  | "emotes"
+  | "schematics"
+  | "skins"
+  | "screenshots";
 
 export interface SharedContent {
   category: ContentCategory;
@@ -11,8 +18,15 @@ export interface SharedContent {
   iconUrl: string | null;
   sha1: string;
   size: number;
-  modpackId: string;
   downloadUrl: string;
+  /** Absent for "skins" — skins live in the account-wide skin library, not
+   *  any one modpack's instance folder. */
+  modpackId?: string;
+  /** Only set for category === "schematics" — which of the two destination
+   *  folders (Litematica vs WorldEdit/FAWE) to write into on download. */
+  schematicSource?: "litematica" | "worldedit";
+  /** Only set for category === "skins". */
+  skinVariant?: "slim" | "classic";
 }
 
 /**
@@ -33,4 +47,20 @@ export async function uploadSharedContent(fileBase64: string, sha1: string): Pro
   const downloadUrl = await getDownloadURL(objectRef);
   await set(registryRef, { downloadUrl, uploadedAt: Date.now() });
   return downloadUrl;
+}
+
+/** Fetches a shared-content download URL (Firebase Storage) directly in the
+ *  renderer and returns its bytes as base64 — used for categories with no
+ *  instance-file destination (skins), where downloadInstanceFile doesn't
+ *  apply. Not routed through the mc:fetch-texture-b64 IPC proxy: that one
+ *  enforces a Mojang-only host allowlist unrelated to Storage's public,
+ *  CORS-friendly download URLs. */
+export async function fetchAsBase64(url: string): Promise<string> {
+  const blob = await (await fetch(url)).blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1] ?? "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }

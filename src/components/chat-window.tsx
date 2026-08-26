@@ -15,6 +15,9 @@ import {
   Sparkles,
   Image as ImageIcon,
   Smile,
+  Box,
+  Shirt,
+  Camera,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
@@ -26,7 +29,9 @@ import {
   type ChatMessage,
 } from "@/services/chat";
 import { subscribePresence, type PresenceEntry } from "@/services/presence";
-import { listInstanceFiles, listEmotes, downloadInstanceFile } from "@/services/electron";
+import { listInstanceFiles, listEmotes, listSchematics, listScreenshots, downloadInstanceFile } from "@/services/electron";
+import { listSkinLibrary, saveToSkinLibrary } from "@/services/skin";
+import { fetchAsBase64 } from "@/services/content-share";
 import { getNicknames, setNickname } from "@/lib/nicknames";
 import { formatPlaytime } from "@/lib/format";
 import { useChatHeads } from "@/hooks/use-chat-heads";
@@ -49,6 +54,9 @@ const CONTENT_CATEGORY_ICON: Record<ContentCategory, typeof Package> = {
   shaderpacks: Sparkles,
   resourcepacks: ImageIcon,
   emotes: Smile,
+  schematics: Box,
+  skins: Shirt,
+  screenshots: Camera,
 };
 
 const CONTENT_CATEGORY_LABEL: Record<ContentCategory, string> = {
@@ -56,6 +64,9 @@ const CONTENT_CATEGORY_LABEL: Record<ContentCategory, string> = {
   shaderpacks: "Shader",
   resourcepacks: "Textura",
   emotes: "Emote",
+  schematics: "Esquema",
+  skins: "Skin",
+  screenshots: "Captura",
 };
 
 /** Floating panel for one open conversation — head/alias/status/playtime up
@@ -89,6 +100,7 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
   const [showContentPicker, setShowContentPicker] = useState(false);
   const [railExpanded, setRailExpanded] = useState(true);
   const [installedHashes, setInstalledHashes] = useState<Record<string, Set<string>>>({});
+  const [installedSkinHashes, setInstalledSkinHashes] = useState<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const otherUsername = displayUuid ? chatIndex[displayUuid]?.otherUsername ?? "" : "";
@@ -125,15 +137,35 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
   // by the visible messages — refreshed on load and after every install, so
   // deleting the file locally shows back up as "Descargar" next time you look.
   const refreshInstalledHashes = useCallback(async (modpackId: string) => {
-    const [files, emotes] = await Promise.all([listInstanceFiles(modpackId), listEmotes(modpackId)]);
+    const [files, emotes, schematicFiles, shots] = await Promise.all([
+      listInstanceFiles(modpackId),
+      listEmotes(modpackId),
+      listSchematics(modpackId),
+      listScreenshots(modpackId),
+    ]);
     const hashes = new Set<string>();
     for (const f of files) if (f.sha1) hashes.add(f.sha1);
     for (const e of emotes) if (e.sha1) hashes.add(e.sha1);
+    for (const s of schematicFiles) if (s.sha1) hashes.add(s.sha1);
+    for (const s of shots) if (s.sha1) hashes.add(s.sha1);
     setInstalledHashes((prev) => ({ ...prev, [modpackId]: hashes }));
   }, []);
 
+  // Skins are account-scoped, not per-modpack — separate from installedHashes'
+  // Record<modpackId, Set<sha1>> shape above.
+  const refreshInstalledSkinHashes = useCallback(async () => {
+    const skins = await listSkinLibrary();
+    setInstalledSkinHashes(new Set(skins.map((s) => s.sha1).filter((h): h is string => !!h)));
+  }, []);
+
   useEffect(() => {
-    const modpackIds = new Set(messages.filter((m) => m.content).map((m) => m.content!.modpackId));
+    refreshInstalledSkinHashes().catch(() => {});
+  }, [refreshInstalledSkinHashes]);
+
+  useEffect(() => {
+    const modpackIds = new Set(
+      messages.filter((m) => m.content?.modpackId).map((m) => m.content!.modpackId as string)
+    );
     modpackIds.forEach((id) => {
       refreshInstalledHashes(id).catch(() => {});
     });
@@ -272,9 +304,17 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
                         {m.content ? (
                           <SharedContentCard
                             content={m.content}
-                            installed={installedHashes[m.content.modpackId]?.has(m.content.sha1) ?? false}
+                            installed={
+                              m.content.category === "skins"
+                                ? installedSkinHashes.has(m.content.sha1)
+                                : (m.content.modpackId ? installedHashes[m.content.modpackId]?.has(m.content.sha1) : false) ?? false
+                            }
                             pack={modpacks.find((p) => p.id === m.content!.modpackId)}
-                            onInstalled={() => refreshInstalledHashes(m.content!.modpackId)}
+                            onInstalled={() =>
+                              m.content!.category === "skins"
+                                ? refreshInstalledSkinHashes()
+                                : refreshInstalledHashes(m.content!.modpackId as string)
+                            }
                           />
                         ) : (
                           <div
@@ -367,13 +407,23 @@ function SharedContentCard({
 }) {
   const [installing, setInstalling] = useState(false);
   const Icon = CONTENT_CATEGORY_ICON[content.category];
-  const packInstalled = pack?.installed ?? false;
+  // Skins have no modpack to install into — they go straight to the local
+  // skin library, so the "instala el modpack primero" gate doesn't apply.
+  const packInstalled = content.category === "skins" ? true : pack?.installed ?? false;
 
   const handleDownload = async () => {
     setInstalling(true);
     try {
-      const targetPath = `${content.category}/${content.fileName}`;
-      await downloadInstanceFile(content.modpackId, targetPath, content.downloadUrl, content.sha1);
+      if (content.category === "skins") {
+        const base64 = await fetchAsBase64(content.downloadUrl);
+        await saveToSkinLibrary(content.displayName, content.skinVariant ?? "classic", base64);
+      } else if (content.category === "schematics") {
+        const folder = content.schematicSource === "worldedit" ? "config/worldedit/schematics" : "schematics";
+        await downloadInstanceFile(content.modpackId!, `${folder}/${content.fileName}`, content.downloadUrl, content.sha1);
+      } else {
+        const targetPath = `${content.category}/${content.fileName}`;
+        await downloadInstanceFile(content.modpackId!, targetPath, content.downloadUrl, content.sha1);
+      }
       toast.success(`${content.displayName} instalado.`);
       onInstalled();
     } catch (e: any) {

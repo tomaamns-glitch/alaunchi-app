@@ -1323,8 +1323,10 @@ async function walkSchematicDir(absDir, relPrefix, source, out) {
     const ext = path.extname(entry.name).toLowerCase();
     if (!SCHEMATIC_EXTS.has(ext)) continue;
     try {
-      const stat = await fs.stat(path.join(absDir, entry.name));
-      out.push({ path: relPath, size: stat.size, source });
+      const absPath = path.join(absDir, entry.name);
+      const stat = await fs.stat(absPath);
+      const sha1 = await hashFileSha1(absPath).catch(() => null);
+      out.push({ path: relPath, size: stat.size, source, sha1 });
     } catch {}
   }
 }
@@ -2793,8 +2795,9 @@ ipcMain.handle("mc:skin-library-save", async (_, { name, variant, fileBase64 }) 
   const id = crypto.randomUUID();
   const fileBuffer = Buffer.from(fileBase64, "base64");
   await fs.writeFile(path.join(SKIN_LIBRARY_DIR, `${id}.png`), fileBuffer);
+  const sha1 = crypto.createHash("sha1").update(fileBuffer).digest("hex");
   const index = await readSkinLibraryIndex();
-  const entry = { id, name: name || "Skin sin nombre", variant: variant === "slim" ? "slim" : "classic", addedAt: new Date().toISOString() };
+  const entry = { id, name: name || "Skin sin nombre", variant: variant === "slim" ? "slim" : "classic", addedAt: new Date().toISOString(), sha1 };
   index.push(entry);
   await fs.writeFile(SKIN_LIBRARY_INDEX, JSON.stringify(index, null, 2));
   return { ...entry, fileBase64 };
@@ -2979,6 +2982,41 @@ ipcMain.handle("mc:list-emotes", async (_, { modpackId }) => {
       thumbnailBase64,
       sha1,
     });
+  }
+  return results;
+});
+
+// Vanilla F2 screenshots — always a flat folder (unlike schematics, never
+// nested by the game itself), so this mirrors mc:list-emotes's scan rather
+// than the recursive schematics walker. Only a small resized thumbnail comes
+// back here; the lightbox fetches full-res bytes on demand via the existing
+// generic mc:read-instance-file, same as any other instance file.
+ipcMain.handle("mc:list-screenshots", async (_, { modpackId }) => {
+  const screenshotsDir = path.join(INSTANCES_DIR, modpackId, "screenshots");
+  let entries;
+  try {
+    entries = await fs.readdir(screenshotsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const results = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".png")) continue;
+    const filePath = path.join(screenshotsDir, entry.name);
+    let size = 0;
+    try {
+      size = (await fs.stat(filePath)).size;
+    } catch {
+      continue;
+    }
+    let thumbnailDataUrl = null;
+    try {
+      thumbnailDataUrl = nativeImage.createFromPath(filePath).resize({ width: 220 }).toDataURL();
+    } catch (e) {
+      console.warn(`[Screenshots] No se pudo generar miniatura de ${entry.name}:`, e.message);
+    }
+    const sha1 = await hashFileSha1(filePath).catch(() => null);
+    results.push({ fileName: entry.name, size, sha1, thumbnailDataUrl });
   }
   return results;
 });
