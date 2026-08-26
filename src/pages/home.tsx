@@ -22,9 +22,8 @@ import { getAzureClientId } from "@/services/auth";
 import { toast } from "sonner";
 import { Modpack, SnapshotManifest, fetchSnapshot, snapshotBaseUrl } from "@/services/github";
 import { Progress } from "@/components/ui/progress";
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { SkinManagerPanel } from "@/components/skin-manager-panel";
+import { AccountMenuButton } from "@/components/account-menu-button";
 import { ChangelogHistoryButton } from "@/components/changelog-history-button";
 import { ChangelogViewerDialog } from "@/components/changelog-viewer-dialog";
 import { PresenceButton } from "@/components/presence-button";
@@ -33,13 +32,15 @@ import { ChatBubbleRow } from "@/components/chat-bubble-row";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
 import { reportCaughtError } from "@/services/error-reporter";
-import { usePlayerHeadUrl } from "@/hooks/use-player-head";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
 
 const api = (window as any).electronAPI;
 
-const CAROUSEL_POSITION_KEY = "alaunchi_carousel_pack_id";
+/** Last modpack shown in the carousel, persisted so it survives app restarts
+ *  and so other pages (hub.tsx) can resolve "the current pack" without a
+ *  carousel of their own. */
+export const CAROUSEL_POSITION_KEY = "alaunchi_carousel_pack_id";
 
 const LAUNCH_STAGE_PROGRESS: Record<string, number> = {
   preparing: 5,
@@ -429,7 +430,6 @@ export default function Home() {
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks, loading } = useModpacks();
   const isAdmin = useIsAdmin();
-  const myHeadUrl = usePlayerHeadUrl(uuid);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   // Skin panel, players popup, "todos" dialog, and an open chat are all
@@ -438,12 +438,6 @@ export default function Home() {
   const openOverlay = useHeaderOverlay((s) => s.open);
   const closeOverlay = useHeaderOverlay((s) => s.close);
   const profileOpen = activePopup === "profile";
-  const setProfileOpen = (next: boolean | ((prev: boolean) => boolean)) => {
-    const wasOpen = profileOpen;
-    const nextOpen = typeof next === "function" ? next(wasOpen) : next;
-    if (nextOpen) openOverlay("profile");
-    else closeOverlay();
-  };
 
   const [javaStatus, setJavaStatus] = useState<JavaStatus>("checking");
   const [javaInstalling, setJavaInstalling] = useState(false);
@@ -674,7 +668,7 @@ export default function Home() {
                   <div
                     onClick={(e) => { if (profileOpen) return; e.stopPropagation(); goPrev(); }}
                     className={`group absolute inset-y-0 left-0 w-24 flex items-center justify-start pl-4 z-10 ${
-                      profileOpen ? "cursor-default" : "cursor-pointer"
+                      profileOpen ? "cursor-default pointer-events-none" : "cursor-pointer"
                     }`}
                   >
                     <div className="h-11 w-11 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
@@ -722,44 +716,7 @@ export default function Home() {
       {!loading && currentPack && (
         <footer className="relative h-20 border-t border-white/5 bg-card/50 backdrop-blur flex items-center justify-between px-6 shrink-0">
           <div className="flex items-center gap-1">
-            <div className="relative">
-              {profileOpen && (
-                <button
-                  type="button"
-                  aria-label="Cerrar"
-                  onClick={() => setProfileOpen(false)}
-                  className="fixed inset-0 z-30 cursor-default"
-                />
-              )}
-              <AnimatePresence>
-                {profileOpen && uuid && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 8, scale: 0.96 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 8, scale: 0.96 }}
-                    transition={{ duration: 0.15, ease: "easeOut" }}
-                    className="absolute bottom-full left-0 mb-2 z-40 p-4 rounded-lg bg-card/95 backdrop-blur border border-white/10 shadow-2xl max-h-[70vh] overflow-y-auto"
-                  >
-                    <SkinManagerPanel uuid={uuid} username={username} />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-              <button
-                type="button"
-                onClick={() => setProfileOpen((v) => !v)}
-                className="relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors"
-              >
-                <Avatar className="h-6 w-6 rounded-md border border-white/10">
-                  {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-md" />}
-                  <AvatarFallback className="rounded-md bg-accent/20 text-accent text-xs font-bold">
-                    {username?.charAt(0)?.toUpperCase() ?? "?"}
-                  </AvatarFallback>
-                </Avatar>
-                <span className="text-sm font-medium text-gray-200" data-testid="text-username">
-                  {username}
-                </span>
-              </button>
-            </div>
+            <AccountMenuButton uuid={uuid} username={username} />
             <PresenceButton
               modpackId={currentPack.id}
               packName={currentPack.name}

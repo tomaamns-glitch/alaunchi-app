@@ -13,6 +13,8 @@ export function Titlebar() {
   const [maximized, setMaximized] = useState(false);
   const [, setLocation] = useLocation();
   const [onModpackDetail] = useRoute("/modpack/:id");
+  const [onHub] = useRoute("/hub");
+  const showBack = onModpackDetail || onHub;
   const isAdmin = useIsAdmin();
 
   useEffect(() => {
@@ -32,11 +34,11 @@ export function Titlebar() {
       <div className="flex items-center gap-1 px-2">
         <button
           style={noDragStyle}
-          onClick={() => setLocation(onModpackDetail ? "/" : "/settings")}
+          onClick={() => setLocation(showBack ? "/" : "/hub")}
           className="h-7 w-7 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-          aria-label={onModpackDetail ? "Volver" : "Ajustes"}
+          aria-label={showBack ? "Volver" : "Panel"}
         >
-          {onModpackDetail ? <ArrowLeft className="h-4 w-4" /> : <Home className="h-4 w-4" />}
+          {showBack ? <ArrowLeft className="h-4 w-4" /> : <Home className="h-4 w-4" />}
         </button>
         <span className="font-bold tracking-tight text-white text-sm">
           <span className="text-accent">AL</span>aunchi
