@@ -3,6 +3,9 @@ import { toast } from "sonner";
 import { Modpack, fetchModpacks } from "../services/github";
 import { getGithubRepo, getModpacksToken } from "../lib/app-config";
 import { purgeXrayFiles } from "../services/electron";
+import { getGatedModpackIds, getUserAccessSet } from "../services/access-codes";
+import { useAuth } from "./use-auth";
+import { isAdminEmail } from "../lib/admin";
 
 const eAPI = (window as any).electronAPI;
 const isElectron = !!eAPI;
@@ -46,6 +49,30 @@ function sweepXrayContent(modpacks: Modpack[]) {
         }
       })
       .catch(() => {});
+  }
+}
+
+// Mirrors useIsAdmin() (src/hooks/use-is-admin.ts) — that one's a hook and
+// this runs inside a zustand action, so it reads the auth store imperatively
+// via .getState() instead of subscribing to it.
+function isCurrentUserAdmin(): boolean {
+  return import.meta.env.DEV || isAdminEmail(useAuth.getState().email);
+}
+
+// Modpacks with no code at all are unrestricted (every pack published before
+// this feature existed, or one whose code creation failed) — only ones the
+// admin actually gated get filtered by grant. The admin always sees the full
+// catalog regardless, since they need it to manage every pack.
+async function filterByAccess(modpacks: Modpack[]): Promise<Modpack[]> {
+  if (isCurrentUserAdmin()) return modpacks;
+  const uuid = useAuth.getState().uuid;
+  if (!uuid) return modpacks;
+  try {
+    const [gatedIds, userAccess] = await Promise.all([getGatedModpackIds(), getUserAccessSet(uuid)]);
+    return modpacks.filter((mp) => !gatedIds.has(mp.id) || userAccess.has(mp.id));
+  } catch {
+    // Firebase hiccup — fail open rather than hiding every modpack.
+    return modpacks;
   }
 }
 
@@ -102,8 +129,9 @@ export const useModpacks = create<ModpackState>((set, get) => ({
         };
       });
 
-      set({ modpacks: merged, loading: false });
-      sweepXrayContent(merged);
+      const visible = await filterByAccess(merged);
+      set({ modpacks: visible, loading: false });
+      sweepXrayContent(visible);
     } catch (e: any) {
       set({ loading: false, error: e?.message ?? "Error al cargar modpacks" });
     }

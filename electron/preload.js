@@ -35,6 +35,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   checkJava: () => ipcRenderer.invoke("mc:check-java"),
   installJava: () => ipcRenderer.invoke("mc:install-java"),
 
+  // Custom (locally-created) instances
+  createInstance: (args) => ipcRenderer.invoke("instances:create", args),
+  deleteInstance: (args) => ipcRenderer.invoke("instances:delete", args),
+  listMinecraftVersions: () => ipcRenderer.invoke("versions:list-minecraft"),
+  listForgeVersions: (args) => ipcRenderer.invoke("versions:list-forge", args),
+  listNeoforgeVersions: (args) => ipcRenderer.invoke("versions:list-neoforge", args),
+  listFabricVersions: (args) => ipcRenderer.invoke("versions:list-fabric", args),
+
   // Microsoft Auth (Device Code Flow + Silent Refresh)
   startDeviceCodeAuth: (args) => ipcRenderer.invoke("ms:device-code-auth", args),
   pollToken: (args) => ipcRenderer.invoke("ms:poll-token", args),

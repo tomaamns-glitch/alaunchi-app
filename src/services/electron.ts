@@ -113,6 +113,69 @@ export async function openInstanceFolder(modpackId: string): Promise<void> {
   if (isElectron) await eAPI.openInstanceFolder({ modpackId });
 }
 
+export interface CreateInstanceInput {
+  name: string;
+  loaderType: "vanilla" | "forge" | "neoforge" | "fabric";
+  minecraftVersion: string;
+  loaderVersion?: string;
+  iconDataUrl?: string;
+}
+
+/** Creates a brand-new local instance (not backed by any GitHub catalog) and
+ *  writes its alaunchi-meta.json — mirrors the shape mc:get-installed-modpacks reads. */
+export async function createInstance(input: CreateInstanceInput): Promise<Record<string, any>> {
+  if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
+  return eAPI.createInstance(input);
+}
+
+/** Permanently deletes a locally-created instance's folder. Refuses (in main.js)
+ *  if the instance isn't source:"custom", so this can never touch a GitHub pack. */
+export async function deleteInstance(id: string): Promise<void> {
+  if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
+  await eAPI.deleteInstance({ id });
+}
+
+export interface MinecraftVersionEntry {
+  id: string;
+  releaseTime: string;
+}
+
+/** Every released Minecraft version (no snapshots/betas), newest first. */
+export async function listMinecraftVersions(): Promise<MinecraftVersionEntry[]> {
+  if (!isElectron) return [];
+  return eAPI.listMinecraftVersions();
+}
+
+export interface ForgeVersionEntry {
+  version: string;
+  recommended: boolean;
+  latest: boolean;
+}
+
+/** Every Forge build for a given MC version, newest first — no stable/beta split
+ *  exists in Forge's own metadata, so nothing is filtered out. */
+export async function listForgeVersions(minecraftVersion: string): Promise<ForgeVersionEntry[]> {
+  if (!isElectron) return [];
+  return eAPI.listForgeVersions({ minecraftVersion });
+}
+
+/** Every NeoForge build for a given MC version, newest first. */
+export async function listNeoforgeVersions(minecraftVersion: string): Promise<{ version: string }[]> {
+  if (!isElectron) return [];
+  return eAPI.listNeoforgeVersions({ minecraftVersion });
+}
+
+export interface FabricVersionEntry {
+  version: string;
+  stable: boolean;
+}
+
+/** Every Fabric loader build for a given MC version, newest first, with a real stable flag. */
+export async function listFabricVersions(minecraftVersion: string): Promise<FabricVersionEntry[]> {
+  if (!isElectron) return [];
+  return eAPI.listFabricVersions({ minecraftVersion });
+}
+
 export type ContentCategory = "mods" | "shaderpacks" | "resourcepacks" | "emotes" | "schematics";
 export interface ContentClassification {
   category: ContentCategory;

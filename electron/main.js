@@ -99,6 +99,12 @@ function getOverriddenDataDir() {
 
 const APP_DATA_DIR = getOverriddenDataDir() || path.join(os.homedir(), ".alaunchi");
 const INSTANCES_DIR = path.join(APP_DATA_DIR, "instances");
+// Locally-created instances (Hub → "Nueva instancia") never touch GitHub — kept
+// in their own top-level folder rather than mixed into INSTANCES_DIR so a user
+// browsing ~/.alaunchi can tell "installed from a published modpack" apart from
+// "I made this myself" at a glance. See instanceDirFor() for how handlers that
+// take a bare modpackId figure out which of the two a given id lives in.
+const CUSTOM_INSTANCES_DIR = path.join(APP_DATA_DIR, "custom-instances");
 const CACHE_DIR = path.join(APP_DATA_DIR, "cache");
 const JAVA_DIR = path.join(APP_DATA_DIR, "java");
 const OBJECTS_DIR = path.join(APP_DATA_DIR, "objects");
@@ -118,6 +124,7 @@ const SCHEMATIC_CACHE_DIR = path.join(CACHE_DIR, "schematic-assets");
 async function ensureDirs() {
   await fs.mkdir(APP_DATA_DIR, { recursive: true });
   await fs.mkdir(INSTANCES_DIR, { recursive: true });
+  await fs.mkdir(CUSTOM_INSTANCES_DIR, { recursive: true });
   await fs.mkdir(CACHE_DIR, { recursive: true });
   await fs.mkdir(JAVA_DIR, { recursive: true });
   await fs.mkdir(OBJECTS_DIR, { recursive: true });
@@ -458,6 +465,14 @@ app.whenReady().then(async () => {
   // to launching the current version rather than blocking forever.
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
+  // Without this, checkForUpdates() on an unpacked `electron .` run silently
+  // resolves with no update-available/update-not-available/error event at
+  // all (just logs "Skip checkForUpdates...") — proceedToMain() would then
+  // never fire and the splash spins forever. Reads dev-app-update.yml (see
+  // that file's own comment) instead of the packaged app's generated
+  // app-update.yml. Only ever true for an unpacked run — the real installed
+  // app is always app.isPackaged === true, so this is a no-op there.
+  if (!app.isPackaged) autoUpdater.forceDevUpdateConfig = true;
   autoUpdater.on("update-available", () => sendSplashState({ state: "updating" }));
   autoUpdater.on("download-progress", (progress) => sendSplashState({ state: "updating", percent: progress.percent }));
   autoUpdater.on("update-downloaded", () => {
@@ -557,6 +572,24 @@ function fetchJson(url, headers) {
         }
         try { resolve(JSON.parse(data)); }
         catch (e) { reject(new Error("Invalid JSON from " + url)); }
+      });
+    }).on("error", reject);
+  });
+}
+
+// Same as fetchJson but returns the raw body — used for maven-metadata.xml,
+// which has no JSON equivalent published anywhere for the full Forge version list.
+function fetchText(url, headers) {
+  return new Promise((resolve, reject) => {
+    const protocol = url.startsWith("https") ? https : http;
+    protocol.get(url, { headers: { "User-Agent": "ALaunchi/1.0", ...headers } }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => (data += chunk));
+      res.on("end", () => {
+        if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+          return reject(new Error(`HTTP ${res.statusCode} en ${url}: ${data.slice(0, 300)}`));
+        }
+        resolve(data);
       });
     }).on("error", reject);
   });
@@ -700,8 +733,20 @@ function isPidAlive(pid) {
   }
 }
 
+// Every handler that only receives a bare modpackId (not whether it's a
+// GitHub-published pack or a locally-created one) resolves its real folder
+// through here rather than assuming INSTANCES_DIR — checks CUSTOM_INSTANCES_DIR
+// first since that's the smaller, cheaper-to-rule-out set, and falls back to
+// INSTANCES_DIR (also the right default for an id that doesn't exist in either
+// yet, e.g. a brand-new GitHub modpack about to be installed for the first time).
+function instanceDirFor(modpackId) {
+  const customPath = path.join(CUSTOM_INSTANCES_DIR, modpackId);
+  if (fsSync.existsSync(customPath)) return customPath;
+  return path.join(INSTANCES_DIR, modpackId);
+}
+
 async function creditPlaytimeAndClearSession(modpackId, startedAt) {
-  const metaPath = path.join(INSTANCES_DIR, modpackId, "alaunchi-meta.json");
+  const metaPath = path.join(instanceDirFor(modpackId), "alaunchi-meta.json");
   let totalPlaytimeMs = 0;
   try {
     const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
@@ -738,44 +783,110 @@ function watchProcessForPlaytime(modpackId, pid, startedAt) {
 // unknowable at this point, so we don't guess — that session's tail just
 // goes uncounted rather than risking an inflated total).
 async function reconcileDanglingPlaytimeSessions() {
-  try {
-    const entries = await fs.readdir(INSTANCES_DIR, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const metaPath = path.join(INSTANCES_DIR, entry.name, "alaunchi-meta.json");
-      if (!fsSync.existsSync(metaPath)) continue;
-      try {
-        const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
-        if (!meta.activeSession) continue;
-        const { pid, startedAt } = meta.activeSession;
-        if (isPidAlive(pid)) {
-          watchProcessForPlaytime(entry.name, pid, startedAt);
-        } else {
-          delete meta.activeSession;
-          await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
-        }
-      } catch {}
-    }
-  } catch {}
+  for (const baseDir of [INSTANCES_DIR, CUSTOM_INSTANCES_DIR]) {
+    try {
+      const entries = await fs.readdir(baseDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const metaPath = path.join(baseDir, entry.name, "alaunchi-meta.json");
+        if (!fsSync.existsSync(metaPath)) continue;
+        try {
+          const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
+          if (!meta.activeSession) continue;
+          const { pid, startedAt } = meta.activeSession;
+          if (isPidAlive(pid)) {
+            watchProcessForPlaytime(entry.name, pid, startedAt);
+          } else {
+            delete meta.activeSession;
+            await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
+          }
+        } catch {}
+      }
+    } catch {}
+  }
 }
 
 ipcMain.handle("mc:get-installed-modpacks", async () => {
-  try {
-    const entries = await fs.readdir(INSTANCES_DIR, { withFileTypes: true });
-    const installed = {};
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        const metaPath = path.join(INSTANCES_DIR, entry.name, "alaunchi-meta.json");
-        if (fsSync.existsSync(metaPath)) {
-          const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
-          installed[entry.name] = meta;
+  const installed = {};
+  for (const baseDir of [INSTANCES_DIR, CUSTOM_INSTANCES_DIR]) {
+    try {
+      const entries = await fs.readdir(baseDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const metaPath = path.join(baseDir, entry.name, "alaunchi-meta.json");
+          if (fsSync.existsSync(metaPath)) {
+            const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
+            installed[entry.name] = meta;
+          }
         }
       }
-    }
-    return installed;
-  } catch {
-    return {};
+    } catch {}
   }
+  return installed;
+});
+
+// ─── INSTANCIAS PERSONALIZADAS (creadas localmente, sin catálogo de GitHub) ──
+
+function slugifyInstanceName(name) {
+  const base = (name || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(new RegExp("[\\u0300-\\u036f]", "g"), "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+  return base || "instancia";
+}
+
+async function generateInstanceId(name) {
+  const base = slugifyInstanceName(name);
+  let id = base;
+  // Check both folders — a custom instance's id must be unique against
+  // GitHub-published packs too, since mc:get-installed-modpacks merges both
+  // into one flat {id: meta} map for the renderer.
+  while (fsSync.existsSync(path.join(CUSTOM_INSTANCES_DIR, id)) || fsSync.existsSync(path.join(INSTANCES_DIR, id))) {
+    id = `${base}-${crypto.randomBytes(3).toString("hex")}`;
+  }
+  return id;
+}
+
+ipcMain.handle("instances:create", async (_, { name, loaderType, minecraftVersion, loaderVersion, iconDataUrl }) => {
+  const id = await generateInstanceId(name);
+  const instanceDir = path.join(CUSTOM_INSTANCES_DIR, id);
+  await fs.mkdir(path.join(instanceDir, "mods"), { recursive: true });
+  await fs.mkdir(path.join(instanceDir, "resourcepacks"), { recursive: true });
+  await fs.mkdir(path.join(instanceDir, "shaderpacks"), { recursive: true });
+
+  const meta = {
+    id,
+    name,
+    version: "1",
+    minecraftVersion,
+    loaderType,
+    loaderVersion: loaderVersion || undefined,
+    iconDataUrl: iconDataUrl || undefined,
+    installedAt: Date.now(),
+    source: "custom",
+  };
+  await fs.writeFile(path.join(instanceDir, "alaunchi-meta.json"), JSON.stringify(meta, null, 2));
+  return meta;
+});
+
+ipcMain.handle("instances:delete", async (_, { id }) => {
+  // Deliberately CUSTOM_INSTANCES_DIR only, not instanceDirFor() — this handler
+  // must be physically incapable of touching a GitHub-published modpack's folder.
+  const instanceDir = path.join(CUSTOM_INSTANCES_DIR, id);
+  let meta;
+  try {
+    meta = JSON.parse(await fs.readFile(path.join(instanceDir, "alaunchi-meta.json"), "utf8"));
+  } catch {
+    throw new Error("Instancia no encontrada.");
+  }
+  if (meta.source !== "custom") {
+    throw new Error("Solo se pueden eliminar instancias creadas localmente.");
+  }
+  await fs.rm(instanceDir, { recursive: true, force: true });
+  return { success: true };
 });
 
 async function extractBundleZip(zipPath, destDir) {
@@ -813,7 +924,7 @@ async function fileNeedsDownload(destPath, sizeMb) {
 
 ipcMain.handle("mc:install-modpack", async (event, { modpackId, modpack, files }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const instanceDir = instanceDirFor(modpackId);
   const modsDir = path.join(instanceDir, "mods");
   const resourcepacksDir = path.join(instanceDir, "resourcepacks");
   const shaderpacks = path.join(instanceDir, "shaderpacks");
@@ -885,7 +996,7 @@ ipcMain.handle("mc:install-modpack", async (event, { modpackId, modpack, files }
 
 ipcMain.handle("mc:update-modpack", async (event, { modpackId, filesToDelete, filesToAdd }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const instanceDir = instanceDirFor(modpackId);
 
   win?.webContents.send("install-progress", { modpackId, stage: "updating", progress: 0 });
 
@@ -944,7 +1055,7 @@ ipcMain.handle("mc:update-modpack", async (event, { modpackId, filesToDelete, fi
 
 ipcMain.handle("mc:sync-modpack", async (event, { modpackId, modpack, newFiles }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const instanceDir = instanceDirFor(modpackId);
 
   win?.webContents.send("install-progress", { modpackId, stage: "downloading", progress: 0 });
 
@@ -1062,7 +1173,7 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
     }
   }
 
-  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const instanceDir = instanceDirFor(modpackId);
   await fs.mkdir(instanceDir, { recursive: true });
 
   const metaPath = path.join(instanceDir, "alaunchi-meta.json");
@@ -1249,7 +1360,7 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
 const CONTENT_DIRS = ["mods", "shaderpacks", "resourcepacks"];
 
 ipcMain.handle("mc:list-instance-files", async (_, { modpackId }) => {
-  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const instanceDir = instanceDirFor(modpackId);
   const out = [];
   for (const dir of CONTENT_DIRS) {
     const full = path.join(instanceDir, dir);
@@ -1332,7 +1443,7 @@ async function walkSchematicDir(absDir, relPrefix, source, out) {
 }
 
 ipcMain.handle("mc:list-schematics", async (_, { modpackId }) => {
-  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const instanceDir = instanceDirFor(modpackId);
   const out = [];
   for (const { rel, source } of SCHEMATIC_ROOTS) {
     await walkSchematicDir(path.join(instanceDir, rel), rel, source, out);
@@ -1361,7 +1472,7 @@ ipcMain.handle("mc:get-schematic-files", async (_, { vendor, uuid }) => {
 });
 
 ipcMain.handle("mc:delete-instance-file", async (_, { modpackId, path: relPath }) => {
-  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const instanceDir = instanceDirFor(modpackId);
   const target = safeJoin(instanceDir, relPath);
   await fs.unlink(target);
   // Remember this so a future update doesn't silently re-download a file the
@@ -1378,7 +1489,7 @@ ipcMain.handle("mc:delete-instance-file", async (_, { modpackId, path: relPath }
 });
 
 ipcMain.handle("mc:update-instance-file", async (_, { modpackId, oldPath, newPath, url, sha1 }) => {
-  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const instanceDir = instanceDirFor(modpackId);
   const target = safeJoin(instanceDir, newPath);
   const oldTarget = safeJoin(instanceDir, oldPath);
   await fs.mkdir(path.dirname(target), { recursive: true });
@@ -1403,14 +1514,14 @@ ipcMain.handle("mc:update-instance-file", async (_, { modpackId, oldPath, newPat
 // Reads a file already inside an instance as base64 — used to share content
 // (mods/shaders/textures/emotes) in chat, uploading the sender's own local copy.
 ipcMain.handle("mc:read-instance-file", async (_, { modpackId, path: relPath }) => {
-  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const instanceDir = instanceDirFor(modpackId);
   const target = safeJoin(instanceDir, relPath);
   const buf = await fs.readFile(target);
   return { base64: buf.toString("base64") };
 });
 
 ipcMain.handle("mc:download-instance-file", async (_, { modpackId, path: relPath, url, sha1 }) => {
-  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const instanceDir = instanceDirFor(modpackId);
   const target = safeJoin(instanceDir, relPath);
   await fs.mkdir(path.dirname(target), { recursive: true });
   const tmpPath = `${target}.tmp.${process.pid}.${Date.now().toString(36)}`;
@@ -1443,7 +1554,7 @@ ipcMain.handle("mc:classify-dropped-file", async (_, { fileBase64, fileName }) =
 // re-check like the download handlers do: there's no network transport step
 // here to have corrupted anything in transit.
 ipcMain.handle("mc:write-instance-file", async (_, { modpackId, targetPath, fileBase64 }) => {
-  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const instanceDir = instanceDirFor(modpackId);
   const target = safeJoin(instanceDir, targetPath);
   await fs.mkdir(path.dirname(target), { recursive: true });
   const tmpPath = `${target}.tmp.${process.pid}.${Date.now().toString(36)}`;
@@ -1613,7 +1724,7 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
     }
   }
 
-  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const instanceDir = instanceDirFor(modpackId);
   const modsDir = path.join(instanceDir, "mods");
   await fs.mkdir(modsDir, { recursive: true });
 
@@ -1868,24 +1979,27 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   return { success: true, pid: child.pid };
 });
 
+// Full list of NeoForge builds for a given MC version, newest first. Shared by
+// resolveNeoforgeVersion (launch-time "give me the best one") and the
+// versions:list-neoforge picker (needs the whole list, betas included).
+async function neoforgeVersionsForMc(mcVersion) {
+  const data = await fetchJson(
+    "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge"
+  );
+  const versions = data.versions || [];
+  const parts = mcVersion.split(".");
+  const major = parts[1];
+  const minor = parts[2] || "0";
+  const prefix = mcVersion === "1.20.1" ? "47." : `${major}.${minor}.`;
+  // The API returns them oldest-first; reverse so index 0 is newest, matching
+  // every other version list in this file (Mojang manifest, Fabric loader list).
+  return versions.filter((v) => v.startsWith(prefix)).reverse();
+}
+
 async function resolveNeoforgeVersion(mcVersion) {
   try {
-    const data = await fetchJson(
-      "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge"
-    );
-    const versions = data.versions || [];
-    const parts = mcVersion.split(".");
-    const major = parts[1];
-    const minor = parts[2] || "0";
-    let prefix;
-    if (mcVersion === "1.20.1") {
-      prefix = "47.";
-    } else {
-      prefix = `${major}.${minor}.`;
-    }
-    const matching = versions.filter((v) => v.startsWith(prefix));
-    if (!matching.length) return null;
-    return matching[matching.length - 1];
+    const matching = await neoforgeVersionsForMc(mcVersion);
+    return matching[0] || null;
   } catch {
     return null;
   }
@@ -1902,6 +2016,62 @@ async function resolveForgeVersion(mcVersion) {
     return null;
   }
 }
+
+// Full list of Forge builds for a given MC version, newest first, each flagged
+// with whether it's the recommended/latest promotion. Forge's maven-metadata.xml
+// has no JSON equivalent, so this is a small hand-rolled <version> tag scrape —
+// consistent with how this file already reads install_profile.json out of raw
+// zip entries rather than pulling in a dependency for it.
+async function forgeVersionsForMc(mcVersion) {
+  const xml = await fetchText("https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml");
+  const all = [...xml.matchAll(/<version>([^<]+)<\/version>/g)].map((m) => m[1]);
+  const prefix = `${mcVersion}-`;
+  // maven-metadata.xml lists every MC version's builds together, oldest-first —
+  // filter down to this MC version and drop the redundant prefix so the result
+  // matches exactly what runForgeInstallerDirect expects as `loaderVersion`
+  // (it reconstructs `${mcVersion}-${loaderVersion}` itself).
+  const versions = all
+    .filter((v) => v.startsWith(prefix))
+    .map((v) => v.slice(prefix.length))
+    .reverse();
+
+  let recommended = null;
+  let latest = null;
+  try {
+    const promos = (await fetchJson("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json")).promos || {};
+    recommended = promos[`${mcVersion}-recommended`] || null;
+    latest = promos[`${mcVersion}-latest`] || null;
+  } catch {}
+
+  return versions.map((version) => ({
+    version,
+    recommended: version === recommended,
+    latest: version === latest,
+  }));
+}
+
+// Fabric's loader-versions-per-MC-version endpoint already carries a real
+// `stable` flag, unlike Forge/NeoForge — no need to infer betas from promotions.
+async function fabricVersionsForMc(mcVersion) {
+  const data = await fetchJson(`https://meta.fabricmc.net/v2/versions/loader/${encodeURIComponent(mcVersion)}`);
+  return (data || []).map((entry) => ({ version: entry.loader.version, stable: !!entry.loader.stable }));
+}
+
+ipcMain.handle("versions:list-minecraft", async () => {
+  const manifest = await fetchJson("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json");
+  return (manifest.versions || [])
+    .filter((v) => v.type === "release")
+    .map((v) => ({ id: v.id, releaseTime: v.releaseTime }));
+});
+
+ipcMain.handle("versions:list-forge", async (_, { minecraftVersion }) => forgeVersionsForMc(minecraftVersion));
+
+ipcMain.handle("versions:list-neoforge", async (_, { minecraftVersion }) => {
+  const versions = await neoforgeVersionsForMc(minecraftVersion);
+  return versions.map((version) => ({ version }));
+});
+
+ipcMain.handle("versions:list-fabric", async (_, { minecraftVersion }) => fabricVersionsForMc(minecraftVersion));
 
 // ─── FORGE/NEOFORGE — INSTALACIÓN DIRECTA (inspirada en Prism Launcher) ─────
 // En lugar de ejecutar el instalador JAR (que escribe en ~/.minecraft),
@@ -2917,7 +3087,7 @@ ipcMain.handle("fs:open-data-dir", async () => {
 });
 
 ipcMain.handle("mc:open-instance-folder", async (_, { modpackId }) => {
-  await shell.openPath(path.join(INSTANCES_DIR, modpackId));
+  await shell.openPath(instanceDirFor(modpackId));
   return { success: true };
 });
 
@@ -2926,7 +3096,7 @@ ipcMain.handle("mc:open-instance-folder", async (_, { modpackId }) => {
 const ANTIXRAY_CONTENT_DIRS = ["mods", "shaderpacks", "resourcepacks"];
 
 ipcMain.handle("mc:purge-xray-files", async (_, { modpackId }) => {
-  const instanceDir = path.join(INSTANCES_DIR, modpackId);
+  const instanceDir = instanceDirFor(modpackId);
   const deletedFiles = [];
   for (const dir of ANTIXRAY_CONTENT_DIRS) {
     const full = path.join(instanceDir, dir);
@@ -2956,7 +3126,7 @@ ipcMain.handle("mc:purge-xray-files", async (_, { modpackId }) => {
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 ipcMain.handle("mc:list-emotes", async (_, { modpackId }) => {
-  const emotesDir = path.join(INSTANCES_DIR, modpackId, "emotes");
+  const emotesDir = path.join(instanceDirFor(modpackId), "emotes");
   let entries;
   try {
     entries = await fs.readdir(emotesDir, { withFileTypes: true });
@@ -2992,7 +3162,7 @@ ipcMain.handle("mc:list-emotes", async (_, { modpackId }) => {
 // back here; the lightbox fetches full-res bytes on demand via the existing
 // generic mc:read-instance-file, same as any other instance file.
 ipcMain.handle("mc:list-screenshots", async (_, { modpackId }) => {
-  const screenshotsDir = path.join(INSTANCES_DIR, modpackId, "screenshots");
+  const screenshotsDir = path.join(instanceDirFor(modpackId), "screenshots");
   let entries;
   try {
     entries = await fs.readdir(screenshotsDir, { withFileTypes: true });

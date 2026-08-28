@@ -16,6 +16,10 @@ export interface Modpack {
   totalSizeMb: number;
   /** When on, clients filter/delete anything with "xray" in the filename for this pack. */
   antiXray?: boolean;
+  /** Absent/"github" = published catalog pack. "custom" = created locally in the Hub, never touches GitHub. */
+  source?: "github" | "custom";
+  /** Only set for source === "custom" — the resolved Forge/NeoForge/Fabric build, e.g. "47.4.0". */
+  loaderVersion?: string;
 }
 
 export interface NewModpackData {

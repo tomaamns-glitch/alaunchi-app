@@ -19,6 +19,7 @@ import { ArrowLeft, Plus, Trash, Loader2 } from "lucide-react";
 import { createModpack, deleteModpack, type NewModpackData } from "@/services/github";
 import { getGithubRepo } from "@/lib/app-config";
 import { useIsAdmin } from "@/hooks/use-is-admin";
+import { createAccessCode } from "@/services/access-codes";
 
 const LOADERS = ["forge", "fabric", "neoforge", "vanilla"] as const;
 
@@ -35,7 +36,7 @@ const emptyForm = (): NewModpackData => ({
 });
 
 export default function Admin() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, uuid, username } = useAuth();
   const isAdmin = useIsAdmin();
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks } = useModpacks();
@@ -65,6 +66,17 @@ export default function Admin() {
     try {
       await createModpack(token, repoUrl, newForm);
       toast.success(`Modpack "${newForm.name}" creado en GitHub`);
+      // Best-effort — a Firebase hiccup here shouldn't undo the GitHub creation
+      // that just succeeded. Worst case the pack is left without a code, which
+      // just means "unrestricted", the same as any pack published before this
+      // feature existed.
+      if (uuid && username) {
+        try {
+          await createAccessCode(newForm.id, uuid, username);
+        } catch {
+          toast.warning("No se pudo generar el código de acceso. Puedes crearlo luego desde la pestaña Acceso.");
+        }
+      }
       setShowNewDialog(false);
       setNewForm(emptyForm());
       loadModpacks();
