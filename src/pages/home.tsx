@@ -13,6 +13,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Package,
+  KeyRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { installSnapshot, launchMinecraft, onClosedToTray } from "@/services/electron";
@@ -34,6 +35,7 @@ import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
 import { reportCaughtError } from "@/services/error-reporter";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
+import { RedeemCodeDialog } from "@/components/redeem-code-dialog";
 
 const api = (window as any).electronAPI;
 
@@ -430,6 +432,7 @@ export default function Home() {
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks, loading } = useModpacks();
   const isAdmin = useIsAdmin();
+  const [redeemOpen, setRedeemOpen] = useState(false);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   // Skin panel, players popup, "todos" dialog, and an open chat are all
@@ -617,16 +620,23 @@ export default function Home() {
           </div>
         ) : modpacks.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
-            <p className="text-lg font-medium">No hay modpacks disponibles</p>
             {isAdmin ? (
               <>
+                <p className="text-lg font-medium">No hay modpacks disponibles</p>
                 <p className="text-sm">Configura el repositorio de GitHub en Ajustes</p>
                 <Button variant="outline" size="sm" onClick={() => setLocation("/settings")}>
                   Ir a Ajustes
                 </Button>
               </>
             ) : (
-              <p className="text-sm">Vuelve a intentarlo más tarde</p>
+              <>
+                <p className="text-lg font-medium">No tienes ninguna instancia</p>
+                <p className="text-sm">Añade una con el código que te hayan pasado</p>
+                <Button variant="outline" size="sm" onClick={() => setRedeemOpen(true)}>
+                  <KeyRound className="mr-2 h-3.5 w-3.5" />
+                  Añadir
+                </Button>
+              </>
             )}
           </div>
         ) : (
@@ -749,6 +759,8 @@ export default function Home() {
           </div>
         </footer>
       )}
+
+      <RedeemCodeDialog open={redeemOpen} onOpenChange={setRedeemOpen} onRedeemed={() => loadModpacks()} />
     </div>
   );
 }
