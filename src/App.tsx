@@ -11,6 +11,7 @@ import Home from "@/pages/home";
 import Admin from "@/pages/admin";
 import AdminModpack from "@/pages/admin-modpack";
 import Settings from "@/pages/settings";
+import Profile from "@/pages/profile";
 import Hub from "@/pages/hub";
 import ModpackDetail from "@/pages/modpack-detail";
 import { Titlebar } from "@/components/titlebar";
@@ -47,6 +48,7 @@ function Router() {
       <Route path="/admin" component={Admin} />
       <Route path="/admin/:id" component={AdminModpack} />
       <Route path="/settings" component={Settings} />
+      <Route path="/profile" component={Profile} />
       <Route path="/hub" component={Hub} />
       <Route path="/modpack/:id" component={ModpackDetail} />
       <Route component={NotFound} />

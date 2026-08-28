@@ -7,6 +7,8 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/hooks/use-auth";
 import { redeemAccessCode } from "@/services/access-codes";
+import { fetchSnapshot, cacheSnapshot } from "@/services/github";
+import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
 
 interface RedeemCodeDialogProps {
   open: boolean;
@@ -39,6 +41,15 @@ export function RedeemCodeDialog({ open, onOpenChange, onRedeemed }: RedeemCodeD
         return;
       }
       toast.success("Modpack añadido a tu carrusel.");
+      // Fire-and-forget — by the time the player finds the pack in the
+      // carousel and hits "Instalar", the manifest is (usually) already
+      // sitting in the cache, so that first click skips straight to
+      // downloading files instead of waiting on this fetch too.
+      const repoUrl = getGithubRepo();
+      const token = getModpacksToken();
+      fetchSnapshot(repoUrl, modpackId, token || undefined)
+        .then((manifest) => manifest && cacheSnapshot(modpackId, manifest))
+        .catch(() => {});
       onRedeemed();
       onOpenChange(false);
       reset();

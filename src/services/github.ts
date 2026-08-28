@@ -276,6 +276,30 @@ export async function fetchModpacks(repoUrl: string, token?: string): Promise<Mo
   }
 }
 
+// Short-lived manifest cache, keyed by modpackId — lets a fresh code redeem
+// pre-fetch the manifest in the background so the *first* install click
+// (ModpackActionBar's handleInstall, home.tsx) can skip straight to
+// downloading files instead of waiting on this fetch too. Never consulted by
+// an update check (that always needs the truly latest manifest, in case the
+// admin republished since the pack was unlocked) — only the never-installed
+// "installing" path opts into reading it.
+const MANIFEST_CACHE_TTL_MS = 5 * 60 * 1000;
+const manifestCache = new Map<string, { manifest: SnapshotManifest; fetchedAt: number }>();
+
+export function cacheSnapshot(modpackId: string, manifest: SnapshotManifest): void {
+  manifestCache.set(modpackId, { manifest, fetchedAt: Date.now() });
+}
+
+export function getCachedSnapshot(modpackId: string): SnapshotManifest | null {
+  const entry = manifestCache.get(modpackId);
+  if (!entry) return null;
+  if (Date.now() - entry.fetchedAt > MANIFEST_CACHE_TTL_MS) {
+    manifestCache.delete(modpackId);
+    return null;
+  }
+  return entry.manifest;
+}
+
 export async function fetchSnapshot(
   repoUrl: string,
   modpackId: string,
