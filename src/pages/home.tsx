@@ -21,7 +21,7 @@ import { markOnline } from "@/services/presence";
 import { touchUserDirectory } from "@/services/chat";
 import { getAzureClientId } from "@/services/auth";
 import { toast } from "sonner";
-import { Modpack, SnapshotManifest, fetchSnapshot, snapshotBaseUrl } from "@/services/github";
+import { Modpack, SnapshotManifest, fetchSnapshot, snapshotBaseUrl, getCachedSnapshot } from "@/services/github";
 import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AccountMenuButton } from "@/components/account-menu-button";
@@ -194,7 +194,11 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
     try {
       const repoUrl = getGithubRepo();
       const token = getModpacksToken();
-      const manifest = await fetchSnapshot(repoUrl, pack.id, token || undefined);
+      // A code redeem pre-fetches this in the background (redeem-code-dialog.tsx)
+      // so the pack's very first install can skip straight to downloading files
+      // — never for "updating" though, that always needs the true latest manifest.
+      const cached = mode === "installing" ? getCachedSnapshot(pack.id) : null;
+      const manifest = cached ?? (await fetchSnapshot(repoUrl, pack.id, token || undefined));
       if (!manifest) throw new Error("No hay manifiesto publicado para este modpack todavía.");
 
       if (mode === "updating") setStageLabel("Descargando...");

@@ -128,11 +128,14 @@ export async function createInstance(input: CreateInstanceInput): Promise<Record
   return eAPI.createInstance(input);
 }
 
-/** Permanently deletes a locally-created instance's folder. Refuses (in main.js)
- *  if the instance isn't source:"custom", so this can never touch a GitHub pack. */
-export async function deleteInstance(id: string): Promise<void> {
+/** Removes a locally-created instance. Refuses (in main.js) if the instance
+ *  isn't source:"custom", so this can never touch a GitHub pack. With
+ *  `keepFiles`, only the alaunchi-meta.json marker is removed — the instance
+ *  stops appearing anywhere in the app but its folder (mods, saves, config)
+ *  stays on disk untouched; without it, the whole folder is deleted. */
+export async function deleteInstance(id: string, keepFiles?: boolean): Promise<void> {
   if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
-  await eAPI.deleteInstance({ id });
+  await eAPI.deleteInstance({ id, keepFiles });
 }
 
 export interface MinecraftVersionEntry {
