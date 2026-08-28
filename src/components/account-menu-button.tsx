@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { Shirt, Settings, ChevronLeft } from "lucide-react";
+import { Shirt, Settings, User, ChevronLeft } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { SkinManagerPanel } from "@/components/skin-manager-panel";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
@@ -58,6 +58,17 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
           >
             {profileView === "menu" ? (
               <div className="w-48 p-1.5 flex flex-col gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileOpen(false);
+                    setLocation("/profile");
+                  }}
+                  className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-gray-200 hover:bg-white/10 transition-colors"
+                >
+                  <User className="h-4 w-4 text-accent" />
+                  Perfil
+                </button>
                 <button
                   type="button"
                   onClick={() => setProfileView("skin")}

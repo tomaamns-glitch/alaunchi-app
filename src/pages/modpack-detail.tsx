@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { isFavorite, toggleFavorite } from "@/services/favorites";
 import {
   ArrowLeft,
   ArrowUpDown,
@@ -209,6 +211,7 @@ export default function ModpackDetail() {
   const [totalPlaytimeMs, setTotalPlaytimeMs] = useState(0);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deletingInstance, setDeletingInstance] = useState(false);
+  const [keepInstanceFiles, setKeepInstanceFiles] = useState(false);
 
   // Drag-and-drop / file-picker content adding — works from anywhere on the page,
   // auto-detecting mod/shader/resourcepack/emote/schematic and routing accordingly.
@@ -279,6 +282,7 @@ export default function ModpackDetail() {
   const [showOriginalDescription, setShowOriginalDescription] = useState(false);
   const [dependencies, setDependencies] = useState<ModrinthDependency[]>([]);
   const [dependenciesLoading, setDependenciesLoading] = useState(false);
+  const [isModFavorited, setIsModFavorited] = useState(false);
 
   // Browse/search Modrinth to install new content into the active category.
   const [activeCategory, setActiveCategory] = useState<Category>("mods");
@@ -610,6 +614,11 @@ export default function ModpackDetail() {
     return () => {
       cancelled = true;
     };
+  }, [selectedModPath]);
+
+  useEffect(() => {
+    const match = selectedModPath ? modrinthMatches.get(selectedModPath) : null;
+    setIsModFavorited(match ? isFavorite(match.projectId) : false);
   }, [selectedModPath]);
 
   // Auto-translates the long-form description to Spanish once it loads; falls back
@@ -1225,6 +1234,22 @@ export default function ModpackDetail() {
                       {selectedRow && (
                         <span className="text-sm text-muted-foreground shrink-0">v{selectedMatch.versionNumber}</span>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = toggleFavorite({
+                            projectId: selectedMatch.projectId,
+                            title: selectedMatch.title,
+                            iconUrl: selectedMatch.iconUrl ?? undefined,
+                            category: selectedCategory ?? effectiveCategory,
+                          });
+                          setIsModFavorited(next);
+                        }}
+                        aria-label={isModFavorited ? "Quitar de favoritos" : "Añadir a favoritos"}
+                        className="shrink-0 text-gray-400 hover:text-accent transition-colors"
+                      >
+                        <Heart className={`h-4 w-4 ${isModFavorited ? "fill-accent text-accent" : ""}`} />
+                      </button>
                     </div>
                     {!!projectDetail?.description && (
                       <p className="text-sm text-gray-300">{projectDetail.description}</p>
@@ -1365,7 +1390,10 @@ export default function ModpackDetail() {
                     {pack.source === "custom" && (
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
-                        onClick={() => setDeleteConfirmOpen(true)}
+                        onClick={() => {
+                          setKeepInstanceFiles(false);
+                          setDeleteConfirmOpen(true);
+                        }}
                       >
                         <Trash2 className="mr-2 h-4 w-4" />
                         Eliminar instancia
@@ -1397,10 +1425,19 @@ export default function ModpackDetail() {
                     <AlertDialogHeader>
                       <AlertDialogTitle>¿Eliminar "{pack.name}"?</AlertDialogTitle>
                       <AlertDialogDescription>
-                        Se borrará toda la instancia (mods, partidas guardadas, configuración) de este equipo.
-                        Esta acción no se puede deshacer.
+                        {keepInstanceFiles
+                          ? "La instancia dejará de aparecer en la app, pero sus archivos (mods, partidas guardadas, configuración) se quedarán en el equipo."
+                          : "Se borrará toda la instancia (mods, partidas guardadas, configuración) de este equipo. Esta acción no se puede deshacer."}
                       </AlertDialogDescription>
                     </AlertDialogHeader>
+                    <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
+                      <Checkbox
+                        checked={keepInstanceFiles}
+                        onCheckedChange={(v) => setKeepInstanceFiles(v === true)}
+                        disabled={deletingInstance}
+                      />
+                      Conservar los archivos de la instancia
+                    </label>
                     <AlertDialogFooter>
                       <AlertDialogCancel disabled={deletingInstance}>Cancelar</AlertDialogCancel>
                       <AlertDialogAction
@@ -1417,8 +1454,12 @@ export default function ModpackDetail() {
                             // are hooks declared after the `if (!pack) return` above).
                             // Navigating away first, then letting the Hub's own mount
                             // effect reload the list, sidesteps that entirely.
-                            await deleteInstanceIpc(pack.id);
-                            toast.success(`${pack.name} eliminada.`);
+                            await deleteInstanceIpc(pack.id, keepInstanceFiles);
+                            toast.success(
+                              keepInstanceFiles
+                                ? `${pack.name} quitada de la app (archivos conservados).`
+                                : `${pack.name} eliminada.`
+                            );
                             setLocation("/hub");
                           } catch (err: any) {
                             toast.error(err?.message || "No se pudo eliminar la instancia.");
@@ -1429,7 +1470,7 @@ export default function ModpackDetail() {
                         }}
                       >
                         {deletingInstance && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                        Eliminar
+                        {keepInstanceFiles ? "Quitar" : "Eliminar"}
                       </AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>

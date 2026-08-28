@@ -872,20 +872,30 @@ ipcMain.handle("instances:create", async (_, { name, loaderType, minecraftVersio
   return meta;
 });
 
-ipcMain.handle("instances:delete", async (_, { id }) => {
+ipcMain.handle("instances:delete", async (_, { id, keepFiles }) => {
   // Deliberately CUSTOM_INSTANCES_DIR only, not instanceDirFor() — this handler
   // must be physically incapable of touching a GitHub-published modpack's folder.
   const instanceDir = path.join(CUSTOM_INSTANCES_DIR, id);
+  const metaPath = path.join(instanceDir, "alaunchi-meta.json");
   let meta;
   try {
-    meta = JSON.parse(await fs.readFile(path.join(instanceDir, "alaunchi-meta.json"), "utf8"));
+    meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
   } catch {
     throw new Error("Instancia no encontrada.");
   }
   if (meta.source !== "custom") {
     throw new Error("Solo se pueden eliminar instancias creadas localmente.");
   }
-  await fs.rm(instanceDir, { recursive: true, force: true });
+  if (keepFiles) {
+    // "Forget" the instance without touching mods/saves/config: every scan
+    // that lists instances (mc:get-installed-modpacks, generateInstanceId's
+    // collision check) keys off alaunchi-meta.json existing, so removing just
+    // that one file is enough to make it disappear from the app while the
+    // folder itself stays exactly where it was.
+    await fs.unlink(metaPath);
+  } else {
+    await fs.rm(instanceDir, { recursive: true, force: true });
+  }
   return { success: true };
 });
 
