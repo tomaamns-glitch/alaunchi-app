@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -24,6 +25,9 @@ import {
   Unlock,
   Plus,
   Save,
+  Copy,
+  KeyRound,
+  UserX,
 } from "lucide-react";
 import {
   fetchSnapshot,
@@ -39,6 +43,14 @@ import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { formatBytes } from "@/lib/format";
 import { ChangelogEditor } from "@/components/changelog-editor";
+import {
+  createAccessCode,
+  regenerateAccessCode,
+  getAccessCode,
+  subscribeAccessGrants,
+  revokeAccess,
+  type AccessGrant,
+} from "@/services/access-codes";
 
 // Minecraft instance top-level folders. When the picked/dropped folder's own name
 // matches one of these, it IS the destination folder (e.g. dragging in "shaderpacks"
@@ -156,7 +168,7 @@ async function walkDroppedEntry(entry: any, basePath: string): Promise<WalkedFil
 
 export default function AdminModpack() {
   const { id } = useParams<{ id: string }>();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, uuid, username } = useAuth();
   const isAdmin = useIsAdmin();
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks } = useModpacks();
@@ -178,7 +190,7 @@ export default function AdminModpack() {
   const [publishing, setPublishing] = useState(false);
   const [publishProgress, setPublishProgress] = useState<PublishProgress | null>(null);
 
-  const [activeTab, setActiveTab] = useState<"files" | "content" | "changelog" | "settings">("files");
+  const [activeTab, setActiveTab] = useState<"files" | "content" | "changelog" | "settings" | "access">("files");
   const [optionalGroups, setOptionalGroups] = useState<OptionalGroup[]>([]);
   const [initialOptionalGroups, setInitialOptionalGroups] = useState<OptionalGroup[]>([]);
   const [newGroupName, setNewGroupName] = useState("");
@@ -193,6 +205,10 @@ export default function AdminModpack() {
   });
   const [settingsSaving, setSettingsSaving] = useState(false);
 
+  const [accessCode, setAccessCode] = useState<string | null>(null);
+  const [accessCodeLoading, setAccessCodeLoading] = useState(false);
+  const [accessGrants, setAccessGrants] = useState<Record<string, AccessGrant>>({});
+
   const replaceTargetPath = useRef<string | null>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
 
@@ -204,6 +220,19 @@ export default function AdminModpack() {
   useEffect(() => {
     if (isAdmin && modpacks.length === 0) loadModpacks();
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    getAccessCode(id).then((code) => {
+      if (!cancelled) setAccessCode(code);
+    });
+    const unsubscribe = subscribeAccessGrants(id, setAccessGrants);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [id]);
 
   useEffect(() => {
     if (!id || !pack) return;
@@ -510,6 +539,40 @@ export default function AdminModpack() {
     }
   };
 
+  const handleGenerateOrRegenerateCode = async () => {
+    if (!id || !uuid || !username) return;
+    setAccessCodeLoading(true);
+    try {
+      const code = accessCode
+        ? await regenerateAccessCode(id)
+        : await createAccessCode(id, uuid, username);
+      setAccessCode(code);
+      toast.success(accessCode ? "Código regenerado." : "Código creado.");
+    } catch (e: any) {
+      toast.error(e?.message ?? "No se pudo generar el código.");
+    } finally {
+      setAccessCodeLoading(false);
+    }
+  };
+
+  const handleCopyCode = () => {
+    if (!accessCode) return;
+    navigator.clipboard.writeText(accessCode).then(
+      () => toast.success("Código copiado."),
+      () => toast.error("No se pudo copiar.")
+    );
+  };
+
+  const handleRevokeAccess = async (grantUuid: string, grantUsername: string) => {
+    if (!id) return;
+    try {
+      await revokeAccess(id, grantUuid);
+      toast.success(`Acceso de ${grantUsername} eliminado.`);
+    } catch (e: any) {
+      toast.error(e?.message ?? "No se pudo quitar el acceso.");
+    }
+  };
+
   const stageLabel: Record<PublishProgress["stage"], string> = {
     hashing: "Calculando hashes (SHA-256)",
     uploading: "Subiendo archivos nuevos a GitHub",
@@ -643,6 +706,7 @@ export default function AdminModpack() {
               </TabsTrigger>
               <TabsTrigger value="changelog">ChangeLog</TabsTrigger>
               <TabsTrigger value="settings">Ajustes</TabsTrigger>
+              <TabsTrigger value="access">Acceso</TabsTrigger>
             </TabsList>
 
             <TabsContent value="files" className="flex-1 min-h-0 flex flex-col gap-3 mt-0">
@@ -994,6 +1058,87 @@ export default function AdminModpack() {
                   {settingsSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                   {settingsSaving ? "Guardando..." : "Guardar ajustes"}
                 </Button>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="access" className="flex-1 min-h-0 overflow-y-auto mt-0">
+              <div className="space-y-4 max-w-xl">
+                <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 space-y-3">
+                  <Label className="text-gray-200">Código de acceso</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Quien lo introduzca en "Añadir" verá este modpack en su carrusel. Sin código, el
+                    modpack es visible para todos (como antes de este sistema).
+                  </p>
+                  {accessCode ? (
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-lg tracking-[0.3em] bg-background/50 border border-white/10 rounded px-3 py-1.5 text-white">
+                        {accessCode}
+                      </span>
+                      <Button variant="outline" size="icon" onClick={handleCopyCode} aria-label="Copiar código">
+                        <Copy className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleGenerateOrRegenerateCode}
+                        disabled={accessCodeLoading}
+                      >
+                        {accessCodeLoading ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="mr-2 h-4 w-4" />
+                        )}
+                        Regenerar
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button onClick={handleGenerateOrRegenerateCode} disabled={accessCodeLoading}>
+                      {accessCodeLoading ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <KeyRound className="mr-2 h-4 w-4" />
+                      )}
+                      Crear código
+                    </Button>
+                  )}
+                </div>
+
+                <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4">
+                  <Label className="text-gray-200 mb-3 block">Personas con acceso</Label>
+                  {Object.keys(accessGrants).length === 0 ? (
+                    <p className="text-sm text-muted-foreground">Nadie ha usado este código todavía.</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Usuario</TableHead>
+                          <TableHead>Desde</TableHead>
+                          <TableHead className="w-10" />
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {Object.entries(accessGrants).map(([grantUuid, grant]) => (
+                          <TableRow key={grantUuid}>
+                            <TableCell>{grant.username}</TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {grant.grantedAt ? new Date(grant.grantedAt).toLocaleDateString() : "—"}
+                            </TableCell>
+                            <TableCell>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleRevokeAccess(grantUuid, grant.username)}
+                                aria-label={`Quitar acceso a ${grant.username}`}
+                              >
+                                <UserX className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </div>
               </div>
             </TabsContent>
           </Tabs>

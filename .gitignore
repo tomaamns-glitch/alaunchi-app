@@ -4,6 +4,12 @@ release/
 *.log
 .DS_Store
 
+# electron-updater's own dev-mode convention — makes `electron .` (unpacked,
+# no NODE_ENV=development) actually run a real update check against the
+# public release feed instead of silently skipping forever. Local-only, never
+# read by the packaged app (which uses its own generated app-update.yml).
+dev-app-update.yml
+
 # Embedded read-only/crash-report tokens for the packaged build — real values
 # live only in the local .env, never committed (this source repo is public).
 .env

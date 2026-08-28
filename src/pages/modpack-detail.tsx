@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useLocation, useParams } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import { useModpacks } from "@/hooks/use-modpacks";
+import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -33,6 +34,7 @@ import {
   WifiOff,
   UploadCloud,
   Camera,
+  Trash2,
 } from "lucide-react";
 import { SnapshotEntry, fetchSnapshot } from "@/services/github";
 import {
@@ -61,6 +63,16 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -79,6 +91,7 @@ import {
   readInstanceFile,
   classifyDroppedFile,
   writeInstanceFile,
+  deleteInstance as deleteInstanceIpc,
   type InstanceFile,
   type EmoteFile,
   type SchematicFile,
@@ -176,8 +189,9 @@ export default function ModpackDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks } = useModpacks();
+  const { instances, loadInstances } = useCustomInstances();
 
-  const pack = modpacks.find((p) => p.id === id);
+  const pack = modpacks.find((p) => p.id === id) ?? instances.find((p) => p.id === id);
   const { launching: playLaunching, launch: playLaunch } = useLaunchModpack(pack);
   useDynamicAccent(pack?.bannerUrl || pack?.imageUrl);
 
@@ -193,6 +207,8 @@ export default function ModpackDetail() {
   const [showInstalledFirst, setShowInstalledFirst] = useState(false);
   const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
   const [totalPlaytimeMs, setTotalPlaytimeMs] = useState(0);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deletingInstance, setDeletingInstance] = useState(false);
 
   // Drag-and-drop / file-picker content adding — works from anywhere on the page,
   // auto-detecting mod/shader/resourcepack/emote/schematic and routing accordingly.
@@ -480,6 +496,7 @@ export default function ModpackDetail() {
 
   useEffect(() => {
     if (modpacks.length === 0) loadModpacks();
+    if (instances.length === 0) loadInstances();
   }, []);
 
   // Refetched on window focus too, so coming back from playing (alt-tab, or the
@@ -1273,13 +1290,18 @@ export default function ModpackDetail() {
                   <div className="min-w-0 space-y-2">
                     <div className="flex items-baseline gap-2 min-w-0">
                       <h2 className="text-3xl font-bold text-white truncate">{pack.name}</h2>
-                      <span className="text-sm font-normal text-muted-foreground shrink-0">{pack.version}v</span>
+                      {pack.source !== "custom" && (
+                        <span className="text-sm font-normal text-muted-foreground shrink-0">{pack.version}v</span>
+                      )}
                     </div>
-                    <p className="text-sm text-gray-300 max-w-3xl">{pack.description}</p>
+                    {!!pack.description && <p className="text-sm text-gray-300 max-w-3xl">{pack.description}</p>}
                     <div className="flex flex-wrap gap-2">
                       <Badge variant="secondary">{pack.minecraftVersion}</Badge>
                       <Badge variant="secondary" className="uppercase">{pack.loaderType}</Badge>
-                      <Badge variant="outline">{pack.totalSizeMb} MB</Badge>
+                      {pack.source === "custom" && pack.loaderVersion && (
+                        <Badge variant="secondary">{pack.loaderVersion}</Badge>
+                      )}
+                      {pack.totalSizeMb > 0 && <Badge variant="outline">{pack.totalSizeMb} MB</Badge>}
                     </div>
                   </div>
                 </motion.div>
@@ -1340,6 +1362,15 @@ export default function ModpackDetail() {
                       <FolderOpen className="mr-2 h-4 w-4" />
                       Abrir carpeta
                     </DropdownMenuItem>
+                    {pack.source === "custom" && (
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => setDeleteConfirmOpen(true)}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Eliminar instancia
+                      </DropdownMenuItem>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <div className="flex flex-col items-center gap-1 shrink-0">
@@ -1361,6 +1392,48 @@ export default function ModpackDetail() {
                     </span>
                   )}
                 </div>
+                <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>¿Eliminar "{pack.name}"?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Se borrará toda la instancia (mods, partidas guardadas, configuración) de este equipo.
+                        Esta acción no se puede deshacer.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={deletingInstance}>Cancelar</AlertDialogCancel>
+                      <AlertDialogAction
+                        disabled={deletingInstance}
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        onClick={async (e) => {
+                          e.preventDefault();
+                          setDeletingInstance(true);
+                          try {
+                            // Call the IPC directly rather than the store's deleteInstance
+                            // action — that also removes the instance from the shared
+                            // Zustand array, which would flip `pack` to undefined while
+                            // this page is still mounted and crash the hook count (there
+                            // are hooks declared after the `if (!pack) return` above).
+                            // Navigating away first, then letting the Hub's own mount
+                            // effect reload the list, sidesteps that entirely.
+                            await deleteInstanceIpc(pack.id);
+                            toast.success(`${pack.name} eliminada.`);
+                            setLocation("/hub");
+                          } catch (err: any) {
+                            toast.error(err?.message || "No se pudo eliminar la instancia.");
+                          } finally {
+                            setDeletingInstance(false);
+                            setDeleteConfirmOpen(false);
+                          }
+                        }}
+                      >
+                        {deletingInstance && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Eliminar
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </div>
             )}
           </div>
