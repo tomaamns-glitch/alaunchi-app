@@ -29,6 +29,7 @@ function metaToModpack(meta: Record<string, any>): Modpack {
     fileCount: 0,
     totalSizeMb: 0,
     source: "custom",
+    installedAt: meta.installedAt,
   };
 }
 

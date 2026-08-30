@@ -1,7 +1,12 @@
 // Favorite mods/shaders/resourcepacks — a bookmark list independent of any one
 // instance (a mod stays favorited regardless of which pack you found it in).
-// Plain localStorage: no cross-device sync needed for this, and it avoids
-// adding yet another Firebase RTDB path/rule for something purely personal.
+// localStorage is still the source of truth for your OWN reads (fast,
+// synchronous, works offline) — toggleFavorite additionally mirrors the
+// updated list to Firebase (fire-and-forget) so friends can see it on your
+// public profile. See services/public-profile.ts.
+
+import { useAuth } from "@/hooks/use-auth";
+import { publishFavorites } from "./public-profile";
 
 export type FavoriteCategory = "mods" | "shaderpacks" | "resourcepacks";
 
@@ -43,12 +48,19 @@ export function isFavorite(projectId: string): boolean {
 export function toggleFavorite(entry: Omit<FavoriteEntry, "addedAt">): boolean {
   const all = readAll();
   const idx = all.findIndex((f) => f.projectId === entry.projectId);
+  let result: boolean;
   if (idx >= 0) {
     all.splice(idx, 1);
     writeAll(all);
-    return false;
+    result = false;
+  } else {
+    all.push({ ...entry, addedAt: Date.now() });
+    writeAll(all);
+    result = true;
   }
-  all.push({ ...entry, addedAt: Date.now() });
-  writeAll(all);
-  return true;
+
+  const uuid = useAuth.getState().uuid;
+  if (uuid) publishFavorites(uuid, all).catch(() => {});
+
+  return result;
 }

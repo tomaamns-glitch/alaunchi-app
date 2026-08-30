@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { Shirt, Settings, User, ChevronLeft } from "lucide-react";
+import { Shirt, Settings, User, Users, ChevronLeft } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { SkinManagerPanel } from "@/components/skin-manager-panel";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
 import { useHeaderOverlay } from "@/hooks/use-chat-heads";
+import { subscribeIncomingRequests } from "@/services/friends";
 
 interface AccountMenuButtonProps {
   uuid: string | null;
@@ -26,6 +27,12 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
   // on, or the skin manager after picking "Skin". Reset back to the menu
   // whenever the popup closes, so it never reopens mid-skin-editing.
   const [profileView, setProfileView] = useState<"menu" | "skin">("menu");
+  const [pendingRequests, setPendingRequests] = useState(0);
+
+  useEffect(() => {
+    if (!uuid) return;
+    return subscribeIncomingRequests(uuid, (requests) => setPendingRequests(Object.keys(requests).length));
+  }, [uuid]);
 
   const setProfileOpen = (next: boolean | ((prev: boolean) => boolean)) => {
     const wasOpen = profileOpen;
@@ -68,6 +75,22 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                 >
                   <User className="h-4 w-4 text-accent" />
                   Perfil
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileOpen(false);
+                    setLocation("/friends");
+                  }}
+                  className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-gray-200 hover:bg-white/10 transition-colors"
+                >
+                  <Users className="h-4 w-4 text-accent" />
+                  Amigos
+                  {pendingRequests > 0 && (
+                    <span className="ml-auto h-4 min-w-4 px-1 rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground flex items-center justify-center">
+                      {pendingRequests}
+                    </span>
+                  )}
                 </button>
                 <button
                   type="button"

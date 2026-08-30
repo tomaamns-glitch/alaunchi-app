@@ -1,12 +1,17 @@
 import { create } from "zustand";
 
 // Purely organizational metadata (folders, which instance is in which folder,
-// drag-reorder position) for the Hub's private-instances grid. Kept entirely
-// separate from the instances themselves (use-custom-instances.ts / the
-// instance's own alaunchi-meta.json on disk) — this is just "how the user
-// likes them arranged on THIS device", localStorage is the right fit, same
-// reasoning as the carousel-position/modpack-install-state localStorage keys
-// elsewhere in the app.
+// drag-reorder position, starred instances) for the Hub's private-instances
+// grid. Kept entirely separate from the instances themselves
+// (use-custom-instances.ts / the instance's own alaunchi-meta.json on disk) —
+// this is just "how the user likes them arranged on THIS device", localStorage
+// is the right fit, same reasoning as the carousel-position/modpack-install-
+// state localStorage keys elsewhere in the app.
+//
+// Folders are a pure tag, not a container in the display order: `order` always
+// holds every instance the user has (that's what "Todas" in the sidebar shows,
+// and what drag-reordering acts on) — `placement` separately says which one
+// folder (if any) an instance is filed under, for the sidebar's per-folder view.
 
 export interface InstanceFolder {
   id: string;
@@ -15,9 +20,10 @@ export interface InstanceFolder {
 
 interface PersistedShape {
   folders: InstanceFolder[];
-  placement: Record<string, string>; // instanceId -> folderId
-  rootOrder: string[]; // "folder:<id>" | "instance:<id>", root-level items only
-  folderOrder: Record<string, string[]>; // folderId -> ordered instance ids
+  placement: Record<string, string>; // instanceId -> folderId (absent = unfiled)
+  order: string[]; // every instance id, master display/drag order ("Todas")
+  folderOrder: Record<string, string[]>; // folderId -> ordered instance ids within it
+  pinned: string[]; // instanceIds starred in the Hub sidebar/grid
 }
 
 const STORAGE_KEY = "alaunchi_instance_folders";
@@ -30,11 +36,12 @@ function readPersisted(): PersistedShape {
     return {
       folders: parsed.folders ?? [],
       placement: parsed.placement ?? {},
-      rootOrder: parsed.rootOrder ?? [],
+      order: parsed.order ?? parsed.rootOrder?.map((e: string) => e.replace(/^instance:/, "")).filter((e: string) => !e.startsWith("folder:")) ?? [],
       folderOrder: parsed.folderOrder ?? {},
+      pinned: parsed.pinned ?? [],
     };
   } catch {
-    return { folders: [], placement: {}, rootOrder: [], folderOrder: {} };
+    return { folders: [], placement: {}, order: [], folderOrder: {}, pinned: [] };
   }
 }
 
@@ -44,27 +51,26 @@ function persist(state: PersistedShape) {
     JSON.stringify({
       folders: state.folders,
       placement: state.placement,
-      rootOrder: state.rootOrder,
+      order: state.order,
       folderOrder: state.folderOrder,
+      pinned: state.pinned,
     })
   );
 }
 
-export const FOLDER_PREFIX = "folder:";
-export const INSTANCE_PREFIX = "instance:";
-
 interface FoldersState extends PersistedShape {
   createFolder: (name: string) => string;
   renameFolder: (id: string, name: string) => void;
-  /** Ungroups the folder's instances back to root; never deletes the instances. */
+  /** Ungroups the folder's instances (they stay in `order`, just untagged); never deletes the instances. */
   deleteFolder: (id: string) => void;
-  /** Moves an instance into a folder (targetFolderId) or back to root (null). */
+  /** Files an instance under a folder (targetFolderId) or clears its folder (null). Never touches `order`. */
   moveInstance: (instanceId: string, targetFolderId: string | null, atIndex?: number) => void;
-  reorderRoot: (newOrder: string[]) => void;
+  reorderAll: (newOrder: string[]) => void;
   reorderInFolder: (folderId: string, newOrder: string[]) => void;
+  togglePin: (instanceId: string) => void;
   /** Call with the live list of instance ids whenever the Hub loads — adds
-   *  newly-created instances to root (so they show up without extra wiring)
-   *  and prunes anything that no longer exists (deleted instances). */
+   *  newly-created instances (so they show up without extra wiring) and
+   *  prunes anything that no longer exists (deleted instances). */
   syncInstances: (liveInstanceIds: string[]) => void;
 }
 
@@ -74,9 +80,8 @@ export const useInstanceFolders = create<FoldersState>((set, get) => ({
   createFolder: (name) => {
     const id = `f-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const folders = [...get().folders, { id, name }];
-    const rootOrder = [...get().rootOrder, `${FOLDER_PREFIX}${id}`];
     const folderOrder = { ...get().folderOrder, [id]: [] };
-    set({ folders, rootOrder, folderOrder });
+    set({ folders, folderOrder });
     persist(get());
     return id;
   },
@@ -88,35 +93,26 @@ export const useInstanceFolders = create<FoldersState>((set, get) => ({
   },
 
   deleteFolder: (id) => {
-    const { folders, placement, rootOrder, folderOrder } = get();
-    const instanceIds = folderOrder[id] ?? [];
+    const { folders, placement, folderOrder } = get();
     const newPlacement = { ...placement };
-    for (const instId of instanceIds) delete newPlacement[instId];
+    for (const [instId, fid] of Object.entries(placement)) {
+      if (fid === id) delete newPlacement[instId];
+    }
     const newFolderOrder = { ...folderOrder };
     delete newFolderOrder[id];
-    const newRootOrder = rootOrder
-      .filter((entry) => entry !== `${FOLDER_PREFIX}${id}`)
-      .concat(instanceIds.map((instId) => `${INSTANCE_PREFIX}${instId}`));
-    set({
-      folders: folders.filter((f) => f.id !== id),
-      placement: newPlacement,
-      rootOrder: newRootOrder,
-      folderOrder: newFolderOrder,
-    });
+    set({ folders: folders.filter((f) => f.id !== id), placement: newPlacement, folderOrder: newFolderOrder });
     persist(get());
   },
 
   moveInstance: (instanceId, targetFolderId, atIndex) => {
-    const { placement, rootOrder, folderOrder } = get();
+    const { placement, folderOrder } = get();
     const currentFolderId = placement[instanceId] ?? null;
     if (currentFolderId === targetFolderId) return;
 
-    const newRootOrder = rootOrder.filter((e) => e !== `${INSTANCE_PREFIX}${instanceId}`);
     const newFolderOrder = { ...folderOrder };
     if (currentFolderId) {
       newFolderOrder[currentFolderId] = (newFolderOrder[currentFolderId] ?? []).filter((id) => id !== instanceId);
     }
-
     const newPlacement = { ...placement };
     if (targetFolderId) {
       newPlacement[instanceId] = targetFolderId;
@@ -125,16 +121,14 @@ export const useInstanceFolders = create<FoldersState>((set, get) => ({
       newFolderOrder[targetFolderId] = list;
     } else {
       delete newPlacement[instanceId];
-      const entry = `${INSTANCE_PREFIX}${instanceId}`;
-      newRootOrder.splice(atIndex ?? newRootOrder.length, 0, entry);
     }
 
-    set({ placement: newPlacement, rootOrder: newRootOrder, folderOrder: newFolderOrder });
+    set({ placement: newPlacement, folderOrder: newFolderOrder });
     persist(get());
   },
 
-  reorderRoot: (newOrder) => {
-    set({ rootOrder: newOrder });
+  reorderAll: (newOrder) => {
+    set({ order: newOrder });
     persist(get());
   },
 
@@ -143,22 +137,21 @@ export const useInstanceFolders = create<FoldersState>((set, get) => ({
     persist(get());
   },
 
+  togglePin: (instanceId) => {
+    const { pinned } = get();
+    const next = pinned.includes(instanceId) ? pinned.filter((id) => id !== instanceId) : [...pinned, instanceId];
+    set({ pinned: next });
+    persist(get());
+  },
+
   syncInstances: (liveInstanceIds) => {
     const live = new Set(liveInstanceIds);
-    const { placement, rootOrder, folderOrder } = get();
+    const { placement, order, folderOrder, pinned } = get();
 
-    const knownRootInstances = new Set(
-      rootOrder.filter((e) => e.startsWith(INSTANCE_PREFIX)).map((e) => e.slice(INSTANCE_PREFIX.length))
-    );
-    const knownFolderInstances = new Set(Object.values(folderOrder).flat());
-    const known = new Set([...knownRootInstances, ...knownFolderInstances]);
-
-    // New instances the store has never seen — append to root.
+    const known = new Set(order);
     const additions = liveInstanceIds.filter((id) => !known.has(id));
-    const newRootOrder = [...rootOrder.filter((e) => !e.startsWith(INSTANCE_PREFIX) || live.has(e.slice(INSTANCE_PREFIX.length)))];
-    for (const id of additions) newRootOrder.push(`${INSTANCE_PREFIX}${id}`);
+    const newOrder = [...order.filter((id) => live.has(id)), ...additions];
 
-    // Deleted instances — drop from wherever they were tracked.
     const newFolderOrder: Record<string, string[]> = {};
     for (const [fid, ids] of Object.entries(folderOrder)) {
       newFolderOrder[fid] = ids.filter((id) => live.has(id));
@@ -167,8 +160,9 @@ export const useInstanceFolders = create<FoldersState>((set, get) => ({
     for (const [id, fid] of Object.entries(placement)) {
       if (live.has(id)) newPlacement[id] = fid;
     }
+    const newPinned = pinned.filter((id) => live.has(id));
 
-    set({ rootOrder: newRootOrder, folderOrder: newFolderOrder, placement: newPlacement });
+    set({ order: newOrder, folderOrder: newFolderOrder, placement: newPlacement, pinned: newPinned });
     persist(get());
   },
 }));

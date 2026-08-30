@@ -17,8 +17,10 @@ export function Titlebar() {
   const [onModpackDetail] = useRoute("/modpack/:id");
   const [onHub] = useRoute("/hub");
   const [onProfile] = useRoute("/profile");
+  const [onPublicProfile] = useRoute("/profile/:uuid");
+  const [onFriends] = useRoute("/friends");
   const [onHome] = useRoute("/");
-  const showBack = onModpackDetail || onHub || onProfile;
+  const showBack = onModpackDetail || onHub || onProfile || onPublicProfile || onFriends;
   const isAdmin = useIsAdmin();
   const [redeemOpen, setRedeemOpen] = useState(false);
   const { loadModpacks } = useModpacks();
