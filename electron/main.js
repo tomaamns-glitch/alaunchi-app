@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, Tray, Menu, nativeImage } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, dialog, Tray, Menu, nativeImage, safeStorage } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs/promises");
@@ -10,7 +10,10 @@ const { promisify } = require("util");
 const crypto = require("crypto");
 const os = require("os");
 const dns = require("dns");
+const { Readable, Writable } = require("stream");
 const AdmZip = require("adm-zip");
+const ftp = require("basic-ftp");
+const SftpClient = require("ssh2-sftp-client");
 
 const execAsync = promisify(exec);
 
@@ -120,6 +123,9 @@ const UPDATE_READY_FLAG = path.join(APP_DATA_DIR, "update-ready.flag");
 // ensureSchematicAssetsCached(). Never redistribute these ourselves; they're pulled
 // from a jar the user already legitimately downloaded, same as the game itself does.
 const SCHEMATIC_CACHE_DIR = path.join(CACHE_DIR, "schematic-assets");
+// Saved Minecraft SERVER (not local instance) FTP/SFTP connections — see the
+// "Servers" IPC section near the end of this file.
+const SERVERS_FILE = path.join(APP_DATA_DIR, "servers.json");
 
 async function ensureDirs() {
   await fs.mkdir(APP_DATA_DIR, { recursive: true });
@@ -3213,5 +3219,247 @@ ipcMain.handle("github:fetch-modpacks", async (_, { repoUrl }) => {
 });
 
 ipcMain.handle("github:create-release", async () => {
+  return { success: true };
+});
+
+// ============================================================
+// Servers (FTP/SFTP) — manage a real Minecraft SERVER's remote files, kept
+// entirely separate from the local instances above. Saved connections live
+// in SERVERS_FILE; each password is encrypted at rest via Electron's
+// safeStorage (OS-level — DPAPI on Windows) and never leaves this process:
+// the renderer only ever sees the redacted entry (redactServer), and a
+// "connect" call decrypts internally to open the real session. A live
+// session is a real basic-ftp / ssh2-sftp-client client kept in memory here,
+// keyed by server id — nothing about it is persisted.
+// ============================================================
+
+const liveServerConnections = new Map(); // serverId -> { protocol: "ftp" | "sftp", client }
+
+async function readServers() {
+  try {
+    return JSON.parse(await fs.readFile(SERVERS_FILE, "utf-8"));
+  } catch {
+    return [];
+  }
+}
+
+async function writeServers(list) {
+  await fs.writeFile(SERVERS_FILE, JSON.stringify(list, null, 2));
+}
+
+/** Never send the encrypted password blob (or anything derived from it) to
+ *  the renderer — only whether one is saved, so the UI can tell "needs a
+ *  password" apart from "already has one" without ever seeing it. */
+function redactServer(s) {
+  const { encryptedPassword, ...rest } = s;
+  return { ...rest, hasPassword: !!encryptedPassword };
+}
+
+function encryptPassword(password) {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error("El cifrado de Windows no está disponible en este equipo — no se puede guardar la contraseña de forma segura.");
+  }
+  return safeStorage.encryptString(password).toString("base64");
+}
+
+function decryptPassword(encryptedBase64) {
+  return safeStorage.decryptString(Buffer.from(encryptedBase64, "base64"));
+}
+
+async function findServerOrThrow(id) {
+  const server = (await readServers()).find((s) => s.id === id);
+  if (!server) throw new Error("Servidor no encontrado.");
+  return server;
+}
+
+async function disconnectServerConnection(id) {
+  const conn = liveServerConnections.get(id);
+  if (!conn) return;
+  liveServerConnections.delete(id);
+  try {
+    if (conn.protocol === "sftp") await conn.client.end();
+    else conn.client.close();
+  } catch {
+    // Best-effort — the socket may already be dead.
+  }
+}
+
+function getLiveConnection(id) {
+  const conn = liveServerConnections.get(id);
+  if (!conn) throw new Error("No hay conexión activa con este servidor. Conéctate primero.");
+  return conn;
+}
+
+// Every live FTP/SFTP session is an in-memory-only socket — never leave one
+// dangling when the app actually exits.
+app.on("will-quit", () => {
+  for (const id of Array.from(liveServerConnections.keys())) {
+    disconnectServerConnection(id).catch(() => {});
+  }
+});
+
+ipcMain.handle("servers:list", async () => (await readServers()).map(redactServer));
+
+ipcMain.handle("servers:add", async (_, { name, protocol, host, port, username, password, rootPath }) => {
+  const servers = await readServers();
+  const entry = {
+    id: crypto.randomBytes(6).toString("hex"),
+    name,
+    protocol,
+    host,
+    port: Number(port),
+    username,
+    rootPath: rootPath || "/",
+    encryptedPassword: password ? encryptPassword(password) : null,
+  };
+  servers.push(entry);
+  await writeServers(servers);
+  return redactServer(entry);
+});
+
+ipcMain.handle("servers:update", async (_, { id, name, protocol, host, port, username, password, rootPath }) => {
+  const servers = await readServers();
+  const idx = servers.findIndex((s) => s.id === id);
+  if (idx === -1) throw new Error("Servidor no encontrado.");
+  const existing = servers[idx];
+  servers[idx] = {
+    ...existing,
+    name,
+    protocol,
+    host,
+    port: Number(port),
+    username,
+    rootPath: rootPath || "/",
+    // Only re-encrypt if a new password was actually typed — an empty field
+    // when editing means "keep the one already saved".
+    encryptedPassword: password ? encryptPassword(password) : existing.encryptedPassword,
+  };
+  await writeServers(servers);
+  // A stale connection under the old credentials/host must not linger.
+  await disconnectServerConnection(id);
+  return redactServer(servers[idx]);
+});
+
+ipcMain.handle("servers:delete", async (_, { id }) => {
+  await disconnectServerConnection(id);
+  const servers = await readServers();
+  await writeServers(servers.filter((s) => s.id !== id));
+  return { success: true };
+});
+
+ipcMain.handle("servers:connect", async (_, { id }) => {
+  const server = await findServerOrThrow(id);
+  if (!server.encryptedPassword) throw new Error("Este servidor no tiene contraseña guardada.");
+  const password = decryptPassword(server.encryptedPassword);
+  await disconnectServerConnection(id); // clean reconnect, never two live sockets for one id
+
+  try {
+    if (server.protocol === "sftp") {
+      const client = new SftpClient();
+      await client.connect({ host: server.host, port: server.port, username: server.username, password, readyTimeout: 15000 });
+      liveServerConnections.set(id, { protocol: "sftp", client });
+    } else {
+      const client = new ftp.Client(15000);
+      await client.access({ host: server.host, port: server.port, user: server.username, password, secure: false });
+      liveServerConnections.set(id, { protocol: "ftp", client });
+    }
+    return { success: true };
+  } catch (e) {
+    throw new Error(`No se pudo conectar: ${e.message}`);
+  }
+});
+
+ipcMain.handle("servers:disconnect", async (_, { id }) => {
+  await disconnectServerConnection(id);
+  return { success: true };
+});
+
+function sortServerEntries(a, b) {
+  if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+  return a.name.localeCompare(b.name);
+}
+
+ipcMain.handle("servers:list-directory", async (_, { id, remotePath }) => {
+  const conn = getLiveConnection(id);
+  const list = await conn.client.list(remotePath);
+  const mapped =
+    conn.protocol === "sftp"
+      ? list.map((e) => ({ name: e.name, type: e.type === "-" ? "file" : "dir", size: e.size, modifiedAt: e.modifyTime ?? null }))
+      : list.map((e) => ({ name: e.name, type: e.isDirectory ? "dir" : "file", size: e.size, modifiedAt: e.modifiedAt ? e.modifiedAt.getTime() : null }));
+  return mapped.sort(sortServerEntries);
+});
+
+ipcMain.handle("servers:download-file", async (_, { id, remotePath }) => {
+  const conn = getLiveConnection(id);
+  const result = await dialog.showSaveDialog(mainWindow, { defaultPath: path.basename(remotePath) });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  if (conn.protocol === "sftp") await conn.client.fastGet(remotePath, result.filePath);
+  else await conn.client.downloadTo(result.filePath, remotePath);
+  return { canceled: false, path: result.filePath };
+});
+
+ipcMain.handle("servers:upload-file", async (_, { id, remoteDir }) => {
+  const conn = getLiveConnection(id);
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ["openFile"] });
+  if (result.canceled || result.filePaths.length === 0) return { canceled: true };
+  const localPath = result.filePaths[0];
+  const remotePath = `${remoteDir.replace(/\/+$/, "")}/${path.basename(localPath)}`;
+  if (conn.protocol === "sftp") await conn.client.fastPut(localPath, remotePath);
+  else await conn.client.uploadFrom(localPath, remotePath);
+  return { canceled: false, name: path.basename(localPath) };
+});
+
+// Small text files (server.properties, plugin/mod configs) — read/write as a
+// plain string in memory, no local temp file or save dialog, for the in-app
+// editor. Not meant for large files; the toolbar's Descargar/Subir handle those.
+ipcMain.handle("servers:read-text-file", async (_, { id, remotePath }) => {
+  const conn = getLiveConnection(id);
+  if (conn.protocol === "sftp") {
+    const buf = await conn.client.get(remotePath);
+    return buf.toString("utf-8");
+  }
+  const chunks = [];
+  const sink = new Writable({
+    write(chunk, _enc, cb) {
+      chunks.push(chunk);
+      cb();
+    },
+  });
+  await conn.client.downloadTo(sink, remotePath);
+  return Buffer.concat(chunks).toString("utf-8");
+});
+
+ipcMain.handle("servers:write-text-file", async (_, { id, remotePath, content }) => {
+  const conn = getLiveConnection(id);
+  const buf = Buffer.from(content, "utf-8");
+  if (conn.protocol === "sftp") await conn.client.put(buf, remotePath);
+  else await conn.client.uploadFrom(Readable.from(buf), remotePath);
+  return { success: true };
+});
+
+ipcMain.handle("servers:delete-file", async (_, { id, remotePath }) => {
+  const conn = getLiveConnection(id);
+  if (conn.protocol === "sftp") await conn.client.delete(remotePath);
+  else await conn.client.remove(remotePath);
+  return { success: true };
+});
+
+ipcMain.handle("servers:delete-directory", async (_, { id, remotePath }) => {
+  const conn = getLiveConnection(id);
+  if (conn.protocol === "sftp") await conn.client.rmdir(remotePath, true);
+  else await conn.client.removeDir(remotePath);
+  return { success: true };
+});
+
+ipcMain.handle("servers:create-directory", async (_, { id, remotePath }) => {
+  const conn = getLiveConnection(id);
+  if (conn.protocol === "sftp") await conn.client.mkdir(remotePath, true);
+  else await conn.client.ensureDir(remotePath);
+  return { success: true };
+});
+
+ipcMain.handle("servers:rename", async (_, { id, fromPath, toPath }) => {
+  const conn = getLiveConnection(id);
+  await conn.client.rename(fromPath, toPath);
   return { success: true };
 });
