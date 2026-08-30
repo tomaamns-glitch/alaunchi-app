@@ -126,4 +126,21 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("schematic-assets-progress", handler);
     return () => ipcRenderer.removeListener("schematic-assets-progress", handler);
   },
+
+  // Servers (FTP/SFTP) — remote Minecraft server file management
+  listServers: () => ipcRenderer.invoke("servers:list"),
+  addServer: (args) => ipcRenderer.invoke("servers:add", args),
+  updateServer: (args) => ipcRenderer.invoke("servers:update", args),
+  deleteServer: (args) => ipcRenderer.invoke("servers:delete", args),
+  connectServer: (args) => ipcRenderer.invoke("servers:connect", args),
+  disconnectServer: (args) => ipcRenderer.invoke("servers:disconnect", args),
+  listServerDirectory: (args) => ipcRenderer.invoke("servers:list-directory", args),
+  downloadServerFile: (args) => ipcRenderer.invoke("servers:download-file", args),
+  uploadServerFile: (args) => ipcRenderer.invoke("servers:upload-file", args),
+  readServerTextFile: (args) => ipcRenderer.invoke("servers:read-text-file", args),
+  writeServerTextFile: (args) => ipcRenderer.invoke("servers:write-text-file", args),
+  deleteServerFile: (args) => ipcRenderer.invoke("servers:delete-file", args),
+  deleteServerDirectory: (args) => ipcRenderer.invoke("servers:delete-directory", args),
+  createServerDirectory: (args) => ipcRenderer.invoke("servers:create-directory", args),
+  renameServerPath: (args) => ipcRenderer.invoke("servers:rename", args),
 });

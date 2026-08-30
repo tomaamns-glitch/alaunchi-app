@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useRoute } from "wouter";
-import { ArrowLeft, GalleryHorizontal, Home, KeyRound, Minus, Square, Copy, X } from "lucide-react";
+import { ArrowLeft, GalleryHorizontal, Home, KeyRound, Minus, Server, Square, Copy, X } from "lucide-react";
 import { isElectron } from "@/services/electron";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { useModpacks } from "@/hooks/use-modpacks";
@@ -19,8 +19,9 @@ export function Titlebar() {
   const [onProfile] = useRoute("/profile");
   const [onPublicProfile] = useRoute("/profile/:uuid");
   const [onFriends] = useRoute("/friends");
+  const [onServers] = useRoute("/servers");
   const [onHome] = useRoute("/");
-  const showBack = onModpackDetail || onHub || onProfile || onPublicProfile || onFriends;
+  const showBack = onModpackDetail || onHub || onProfile || onPublicProfile || onFriends || onServers;
   const isAdmin = useIsAdmin();
   const [redeemOpen, setRedeemOpen] = useState(false);
   const { loadModpacks } = useModpacks();
@@ -60,6 +61,16 @@ export function Titlebar() {
           </span>
         </div>
         <div style={noDragStyle} className="flex items-center h-full">
+          <button
+            onClick={() => setLocation("/servers")}
+            className={`h-full px-3 flex items-center gap-1.5 text-[10px] font-mono font-bold transition-colors ${
+              onServers ? "text-accent bg-white/5" : "text-gray-400 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            <Server className="h-3 w-3" />
+            SERVER
+          </button>
+          <div className="w-px h-4 bg-white/10" />
           {isAdmin && (
             <>
               <button

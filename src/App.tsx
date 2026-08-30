@@ -10,6 +10,7 @@ import Login from "@/pages/login";
 import Home from "@/pages/home";
 import Admin from "@/pages/admin";
 import AdminModpack from "@/pages/admin-modpack";
+import Servers from "@/pages/servers";
 import Settings from "@/pages/settings";
 import Profile from "@/pages/profile";
 import PublicProfile from "@/pages/public-profile";
@@ -49,6 +50,7 @@ function Router() {
       <Route path="/login" component={Login} />
       <Route path="/admin" component={Admin} />
       <Route path="/admin/:id" component={AdminModpack} />
+      <Route path="/servers" component={Servers} />
       <Route path="/settings" component={Settings} />
       <Route path="/profile" component={Profile} />
       <Route path="/profile/:uuid" component={PublicProfile} />
