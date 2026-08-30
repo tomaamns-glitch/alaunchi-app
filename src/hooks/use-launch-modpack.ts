@@ -80,6 +80,7 @@ export function useLaunchModpack(pack: Modpack | undefined) {
       markOnline(pack.id, auth.uuid, auth.username).catch(() => {});
       toast.success(`¡${pack.name} iniciado!`);
     } catch (e: any) {
+      reportCaughtError(`modpack:launching:${pack.id}`, e);
       toast.error(e?.message || "Error al iniciar.");
     } finally {
       setStage("idle");

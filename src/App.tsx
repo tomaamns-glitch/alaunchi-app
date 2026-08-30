@@ -12,6 +12,8 @@ import Admin from "@/pages/admin";
 import AdminModpack from "@/pages/admin-modpack";
 import Settings from "@/pages/settings";
 import Profile from "@/pages/profile";
+import PublicProfile from "@/pages/public-profile";
+import Friends from "@/pages/friends";
 import Hub from "@/pages/hub";
 import ModpackDetail from "@/pages/modpack-detail";
 import { Titlebar } from "@/components/titlebar";
@@ -49,6 +51,8 @@ function Router() {
       <Route path="/admin/:id" component={AdminModpack} />
       <Route path="/settings" component={Settings} />
       <Route path="/profile" component={Profile} />
+      <Route path="/profile/:uuid" component={PublicProfile} />
+      <Route path="/friends" component={Friends} />
       <Route path="/hub" component={Hub} />
       <Route path="/modpack/:id" component={ModpackDetail} />
       <Route component={NotFound} />

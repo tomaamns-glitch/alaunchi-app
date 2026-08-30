@@ -20,6 +20,8 @@ export interface Modpack {
   source?: "github" | "custom";
   /** Only set for source === "custom" — the resolved Forge/NeoForge/Fabric build, e.g. "47.4.0". */
   loaderVersion?: string;
+  /** Only set for source === "custom" — epoch ms from alaunchi-meta.json, for "recientes" sorting. */
+  installedAt?: number;
 }
 
 export interface NewModpackData {
