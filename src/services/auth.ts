@@ -173,7 +173,19 @@ async function pollForToken(
 
   while (Date.now() < deadline) {
     await delay(intervalMs);
-    const res = await eAPI.pollToken({ deviceCode, clientId });
+
+    let res;
+    try {
+      res = await eAPI.pollToken({ deviceCode, clientId });
+    } catch (e) {
+      // A single transient network hiccup (the dev network's known intermittent
+      // IPv6 timeouts, a dropped connection, ...) used to abort the whole ~15min
+      // login instead of just waiting for the next interval like a real poll error
+      // would. Nothing here is distinguishable from "still pending" from the user's
+      // point of view, so just retry until the deadline.
+      console.warn("[Auth] Fallo de red durante el sondeo de login, reintentando...", e);
+      continue;
+    }
 
     if (res.access_token) return res;
     if (res.error === "authorization_declined") throw new Error("El inicio de sesión fue rechazado.");

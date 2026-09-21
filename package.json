@@ -1,6 +1,6 @@
 {
   "name": "alaunchi",
-  "version": "1.4.0",
+  "version": "1.5.1",
   "description": "ALaunchi - Minecraft Modpack Launcher",
   "private": true,
   "type": "module",
@@ -48,6 +48,7 @@
     "@types/node": "^22.10.5",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "@types/three": "0.156.0",
     "@vitejs/plugin-react": "^5.0.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -98,6 +99,7 @@
     "gl-matrix": "^3.4.4",
     "skinview3d": "^3.4.2",
     "ssh2-sftp-client": "^12.1.1",
+    "three": "0.156.1",
     "zustand": "^5.0.12"
   },
   "allowScripts": {

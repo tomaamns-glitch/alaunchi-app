@@ -253,13 +253,20 @@ export default function AdminModpack() {
     });
     const repoUrl = getGithubRepo();
     const token = getModpacksToken();
-    fetchSnapshot(repoUrl, id, token || undefined).then((manifest) => {
-      if (cancelled) return;
-      setExisting(manifest?.files ?? []);
-      setOptionalGroups(manifest?.optionalGroups ?? []);
-      setInitialOptionalGroups(manifest?.optionalGroups ?? []);
-      setLoadingManifest(false);
-    });
+    fetchSnapshot(repoUrl, id, token || undefined)
+      .then((manifest) => {
+        if (cancelled) return;
+        setExisting(manifest?.files ?? []);
+        setOptionalGroups(manifest?.optionalGroups ?? []);
+        setInitialOptionalGroups(manifest?.optionalGroups ?? []);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        toast.error(e?.message || "No se pudo cargar el manifiesto publicado.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingManifest(false);
+      });
     const parts = pack.version.split(".").map((n) => parseInt(n, 10));
     const major = Number.isFinite(parts[0]) ? parts[0] : 1;
     const minor = Number.isFinite(parts[1]) ? parts[1] : 0;

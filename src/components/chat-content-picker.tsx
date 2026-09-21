@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Package, Sparkles, Image as ImageIcon, Smile, Loader2, ArrowLeft, Send, Box, Shirt, Camera } from "lucide-react";
+import { Package, Sparkles, Image as ImageIcon, Smile, Loader2, ArrowLeft, Send, Box, Shirt, Camera, Star } from "lucide-react";
 import { listInstanceFiles, listEmotes, listSchematics, listScreenshots, readInstanceFile } from "@/services/electron";
 import { identifyModrinthFiles, categoryOf, fileName, guessTitle } from "@/services/modrinth";
 import { uploadSharedContent, type ContentCategory, type SharedContent } from "@/services/content-share";
 import { sendSharedContent } from "@/services/chat";
 import { listSkinLibrary } from "@/services/skin";
+import { getFavorites } from "@/services/favorites";
+import { useModpacks } from "@/hooks/use-modpacks";
+import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { usePlayerSkinUrl } from "@/hooks/use-player-head";
 import { useEmotePreview } from "@/hooks/use-emote-preview";
 import { EmoteAnimation } from "@/lib/emote-animation";
 import { SkinViewer3D } from "@/components/skin-viewer-3d";
+import type { ChatMode } from "@/components/chat-window";
+import type { Modpack } from "@/services/github";
 import { toast } from "sonner";
 
 interface ChatContentPickerProps {
@@ -17,7 +22,7 @@ interface ChatContentPickerProps {
   myUsername: string;
   otherUuid: string;
   otherUsername: string;
-  currentPackId: string;
+  mode: ChatMode;
   onClose: () => void;
 }
 
@@ -30,6 +35,16 @@ const CATEGORY_META: Record<ContentCategory, { label: string; icon: typeof Packa
   skins: { label: "Skins", icon: Shirt },
   screenshots: { label: "Capturas", icon: Camera },
 };
+
+const INSTALLABLE_CATEGORIES = new Set<ContentCategory>(["mods", "shaderpacks", "resourcepacks"]);
+
+// General mode can list the same relative path (e.g. "mods/jei.jar") from
+// several different source instances — item.path alone is no longer a unique
+// identity on its own, so every place that keys off "which item is this"
+// (React's key, the sending/disabled spinner) uses this composite instead.
+function itemKey(item: { sourceInstanceId?: string; path: string }): string {
+  return `${item.sourceInstanceId ?? ""}:${item.path}`;
+}
 
 interface PickerItem {
   path: string;
@@ -44,16 +59,33 @@ interface PickerItem {
    *  listSkinLibrary(), no readInstanceFile needed at share time. */
   skinFileBase64?: string;
   skinVariant?: "slim" | "classic";
+  /** Which of the user's own instances this item's bytes live in — absent for
+   *  skins (account-wide) and favorites (no local file at all). In carousel
+   *  mode this is always that one instance; in general mode it varies per item
+   *  since content is aggregated across every instance the user has. */
+  sourceInstanceId?: string;
+  sourceInstanceName?: string;
+  /** Modrinth project id, when identifyModrinthFiles found a match (or this
+   *  is a favorite, which is nothing BUT a project id). Carried into the
+   *  shared message so the recipient can run compatibility detection. */
+  modrinthProjectId?: string;
+  /** A favorites.ts bookmark rather than something actually installed — no
+   *  local bytes, shared as a Modrinth reference instead (content-compat.ts
+   *  resolves the real file once the recipient picks a destination). */
+  isFavorite?: boolean;
 }
 
-/** Popup (opens upward, next to "Enviar contenido") to browse the current
- *  modpack's local mods/shaders/textures/emotes and share one in the chat. */
+/** Popup (opens upward, next to "Enviar contenido") to browse local content
+ *  and share one item in the chat. In carousel mode, scoped to that one
+ *  instance exactly like before. In general mode, aggregates across every
+ *  instance the user owns (catalog + local/custom) plus their Modrinth
+ *  favorites — there's no single "current modpack" to scope to. */
 export function ChatContentPicker({
   myUuid,
   myUsername,
   otherUuid,
   otherUsername,
-  currentPackId,
+  mode,
   onClose,
 }: ChatContentPickerProps) {
   const [category, setCategory] = useState<ContentCategory | null>(null);
@@ -62,8 +94,30 @@ export function ChatContentPicker({
   const [sendingPath, setSendingPath] = useState<string | null>(null);
   const [previewingEmote, setPreviewingEmote] = useState<PickerItem | null>(null);
 
+  // Select the raw array (a stable reference that only changes when the store
+  // actually updates) and filter separately — selecting `s.modpacks.filter(...)`
+  // directly returns a brand-new array on every single render regardless of
+  // whether the underlying data changed, which fed into scopedInstances' and
+  // the fetch effect's dependency arrays below and caused an infinite
+  // render → effect → setState → render loop (crashed the whole picker).
+  const modpacks = useModpacks((s) => s.modpacks);
+  const catalogInstalled = useMemo(() => modpacks.filter((p) => p.installed), [modpacks]);
+  const customInstances = useCustomInstances((s) => s.instances);
+
+  // Custom instances only load reliably once the Hub has been visited this
+  // session — force it here too so general-mode sharing works from a chat
+  // opened straight from the home carousel, which never touches that store.
+  useEffect(() => {
+    useCustomInstances.getState().loadInstances().catch(() => {});
+  }, []);
+
+  const scopedInstances: Modpack[] = useMemo(
+    () => (mode.type === "carousel" ? [mode.pack] : [...catalogInstalled, ...customInstances]),
+    [mode, catalogInstalled, customInstances]
+  );
+
   const myPreviewSkinUrl = usePlayerSkinUrl(myUuid);
-  const previewEmoteData = useEmotePreview(currentPackId, previewingEmote?.fileName);
+  const previewEmoteData = useEmotePreview(previewingEmote?.sourceInstanceId, previewingEmote?.fileName);
   const previewAnimation = useMemo(
     () => (previewEmoteData ? new EmoteAnimation(previewEmoteData) : null),
     [previewEmoteData]
@@ -79,38 +133,8 @@ export function ChatContentPicker({
     setLoading(true);
 
     (async () => {
-      if (category === "emotes") {
-        const emotes = await listEmotes(currentPackId);
-        if (cancelled) return;
-        setItems(
-          emotes
-            .filter((e) => e.sha1)
-            .map((e) => ({
-              path: `emotes/${e.fileName}`,
-              fileName: e.fileName,
-              displayName: e.displayName,
-              iconUrl: e.thumbnailBase64 ? `data:image/png;base64,${e.thumbnailBase64}` : null,
-              sha1: e.sha1 as string,
-              size: 0,
-            }))
-        );
-      } else if (category === "schematics") {
-        const files = await listSchematics(currentPackId);
-        if (cancelled) return;
-        setItems(
-          files
-            .filter((s) => s.sha1)
-            .map((s) => ({
-              path: s.path,
-              fileName: s.path.slice(s.path.lastIndexOf("/") + 1),
-              displayName: s.path.slice(s.path.lastIndexOf("/") + 1),
-              iconUrl: null,
-              sha1: s.sha1 as string,
-              size: s.size,
-              schematicSource: s.source,
-            }))
-        );
-      } else if (category === "skins") {
+      if (category === "skins") {
+        // Account-wide — ignores mode/scopedInstances entirely, same as before.
         const skins = await listSkinLibrary();
         if (cancelled) return;
         setItems(
@@ -127,40 +151,102 @@ export function ChatContentPicker({
               skinVariant: s.variant,
             }))
         );
-      } else if (category === "screenshots") {
-        const shots = await listScreenshots(currentPackId);
-        if (cancelled) return;
-        setItems(
-          shots
-            .filter((s) => s.sha1)
-            .map((s) => ({
-              path: `screenshots/${s.fileName}`,
-              fileName: s.fileName,
-              displayName: s.fileName,
-              iconUrl: s.thumbnailDataUrl,
-              sha1: s.sha1 as string,
-              size: s.size,
-            }))
-        );
-      } else {
-        const files = await listInstanceFiles(currentPackId);
-        const catFiles = files.filter((f) => categoryOf(f.path) === category && f.sha1);
-        const matches = await identifyModrinthFiles(catFiles);
-        if (cancelled) return;
-        setItems(
-          catFiles.map((f) => {
-            const match = matches.get(f.path);
-            const name = fileName(f.path);
-            return {
-              path: f.path,
-              fileName: name,
-              displayName: match?.title ?? guessTitle(name),
-              iconUrl: match?.iconUrl ?? null,
-              sha1: f.sha1 as string,
-              size: f.size,
-            };
+      } else if (category === "emotes" || category === "schematics" || category === "screenshots") {
+        // No Modrinth-based compatibility concept for these — aggregated across
+        // every scoped instance (just this one in carousel mode), tagged with
+        // their source so a general-mode share still knows which instance to
+        // read the bytes from.
+        const perInstance = await Promise.all(
+          scopedInstances.map(async (pack): Promise<PickerItem[]> => {
+            if (category === "emotes") {
+              const emotes = await listEmotes(pack.id);
+              return emotes
+                .filter((e) => e.sha1)
+                .map((e) => ({
+                  path: `emotes/${e.fileName}`,
+                  fileName: e.fileName,
+                  displayName: e.displayName,
+                  iconUrl: e.thumbnailBase64 ? `data:image/png;base64,${e.thumbnailBase64}` : null,
+                  sha1: e.sha1 as string,
+                  size: 0,
+                  sourceInstanceId: pack.id,
+                  sourceInstanceName: pack.name,
+                }));
+            }
+            if (category === "schematics") {
+              const files = await listSchematics(pack.id);
+              return files
+                .filter((s) => s.sha1)
+                .map((s) => ({
+                  path: s.path,
+                  fileName: s.path.slice(s.path.lastIndexOf("/") + 1),
+                  displayName: s.path.slice(s.path.lastIndexOf("/") + 1),
+                  iconUrl: null,
+                  sha1: s.sha1 as string,
+                  size: s.size,
+                  schematicSource: s.source,
+                  sourceInstanceId: pack.id,
+                  sourceInstanceName: pack.name,
+                }));
+            }
+            const shots = await listScreenshots(pack.id);
+            return shots
+              .filter((s) => s.sha1)
+              .map((s) => ({
+                path: `screenshots/${s.fileName}`,
+                fileName: s.fileName,
+                displayName: s.fileName,
+                iconUrl: s.thumbnailDataUrl,
+                sha1: s.sha1 as string,
+                size: s.size,
+                sourceInstanceId: pack.id,
+                sourceInstanceName: pack.name,
+              }));
           })
         );
+        if (!cancelled) setItems(perInstance.flat());
+      } else {
+        // mods / shaderpacks / resourcepacks — identified against Modrinth
+        // (for compatibility detection on the receiving end) and, in general
+        // mode, joined with favorited-but-not-installed projects too.
+        const perInstance = await Promise.all(
+          scopedInstances.map(async (pack): Promise<PickerItem[]> => {
+            const files = await listInstanceFiles(pack.id);
+            const catFiles = files.filter((f) => categoryOf(f.path) === category && f.sha1);
+            const matches = await identifyModrinthFiles(catFiles);
+            return catFiles.map((f) => {
+              const match = matches.get(f.path);
+              const name = fileName(f.path);
+              return {
+                path: f.path,
+                fileName: name,
+                displayName: match?.title ?? guessTitle(name),
+                iconUrl: match?.iconUrl ?? null,
+                sha1: f.sha1 as string,
+                size: f.size,
+                sourceInstanceId: pack.id,
+                sourceInstanceName: pack.name,
+                modrinthProjectId: match?.projectId,
+              };
+            });
+          })
+        );
+        const installedItems = perInstance.flat();
+
+        let favoriteItems: PickerItem[] = [];
+        if (mode.type === "general" && category !== undefined && INSTALLABLE_CATEGORIES.has(category)) {
+          favoriteItems = getFavorites(category as "mods" | "shaderpacks" | "resourcepacks").map((f) => ({
+            path: `favorite:${f.projectId}`,
+            fileName: f.title,
+            displayName: f.title,
+            iconUrl: f.iconUrl ?? null,
+            sha1: "",
+            size: 0,
+            modrinthProjectId: f.projectId,
+            isFavorite: true,
+          }));
+        }
+        if (!cancelled) setItems([...installedItems, ...favoriteItems]);
       }
       if (!cancelled) setLoading(false);
     })();
@@ -168,29 +254,60 @@ export function ChatContentPicker({
     return () => {
       cancelled = true;
     };
-  }, [category, currentPackId]);
+  }, [category, scopedInstances, mode.type]);
 
   const handleShare = async (item: PickerItem) => {
     if (!category) return;
-    setSendingPath(item.path);
+    setSendingPath(itemKey(item));
     try {
-      const base64 = category === "skins" ? item.skinFileBase64! : await readInstanceFile(currentPackId, item.path);
-      const downloadUrl = await uploadSharedContent(base64, item.sha1);
-      // RTDB rejects `undefined` field values at write time — every optional
-      // field below is added via conditional spread, never left undefined.
-      const content: SharedContent = {
-        category,
-        fileName: item.fileName,
-        displayName: item.displayName,
-        iconUrl: item.iconUrl,
-        sha1: item.sha1,
-        size: item.size,
-        downloadUrl,
-        ...(category !== "skins" ? { modpackId: currentPackId } : {}),
-        ...(item.schematicSource ? { schematicSource: item.schematicSource } : {}),
-        ...(item.skinVariant ? { skinVariant: item.skinVariant } : {}),
-      };
-      await sendSharedContent(myUuid, myUsername, otherUuid, otherUsername, content);
+      const carouselInstanceId = mode.type === "carousel" ? mode.pack.id : undefined;
+      let content: SharedContent;
+
+      if (category === "skins") {
+        const downloadUrl = await uploadSharedContent(item.skinFileBase64!, item.sha1);
+        content = {
+          category,
+          fileName: item.fileName,
+          displayName: item.displayName,
+          iconUrl: item.iconUrl,
+          sha1: item.sha1,
+          size: item.size,
+          downloadUrl,
+          ...(item.skinVariant ? { skinVariant: item.skinVariant } : {}),
+        };
+      } else if (item.isFavorite) {
+        // No bytes to upload — just the Modrinth reference. The recipient's
+        // client resolves and downloads the real file once they pick where
+        // to install it (see content-compat.ts + SharedContentCard).
+        content = {
+          category,
+          fileName: item.fileName,
+          displayName: item.displayName,
+          iconUrl: item.iconUrl,
+          sha1: "",
+          size: 0,
+          downloadUrl: "",
+          modrinthProjectId: item.modrinthProjectId,
+          isReference: true,
+        };
+      } else {
+        const base64 = await readInstanceFile(item.sourceInstanceId!, item.path);
+        const downloadUrl = await uploadSharedContent(base64, item.sha1);
+        content = {
+          category,
+          fileName: item.fileName,
+          displayName: item.displayName,
+          iconUrl: item.iconUrl,
+          sha1: item.sha1,
+          size: item.size,
+          downloadUrl,
+          ...(item.sourceInstanceId ? { modpackId: item.sourceInstanceId } : {}),
+          ...(item.schematicSource ? { schematicSource: item.schematicSource } : {}),
+          ...(item.modrinthProjectId ? { modrinthProjectId: item.modrinthProjectId } : {}),
+        };
+      }
+
+      await sendSharedContent(myUuid, myUsername, otherUuid, otherUsername, content, carouselInstanceId);
       toast.success(`${item.displayName} compartido.`);
       onClose();
     } catch (e: any) {
@@ -264,11 +381,11 @@ export function ChatContentPicker({
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.96 }}
                 type="button"
-                disabled={sendingPath === previewingEmote.path}
+                disabled={sendingPath === itemKey(previewingEmote)}
                 onClick={() => handleShare(previewingEmote)}
                 className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-accent hover:bg-accent/90 text-accent-foreground text-xs font-bold disabled:opacity-60 transition-colors"
               >
-                {sendingPath === previewingEmote.path ? (
+                {sendingPath === itemKey(previewingEmote) ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <Send className="h-3.5 w-3.5" />
@@ -284,15 +401,17 @@ export function ChatContentPicker({
               </div>
             ) : items.length === 0 ? (
               <p className="text-xs text-muted-foreground text-center py-8 px-4">
-                No tienes nada de esto instalado en este modpack.
+                {mode.type === "general"
+                  ? "No tienes nada de esto instalado en ninguna instancia."
+                  : "No tienes nada de esto instalado en este modpack."}
               </p>
             ) : (
               items.map((item) => (
                 <motion.button
-                  key={item.path}
+                  key={itemKey(item)}
                   whileTap={{ scale: 0.98 }}
                   type="button"
-                  disabled={sendingPath === item.path}
+                  disabled={sendingPath === itemKey(item)}
                   onClick={() => (category === "emotes" ? setPreviewingEmote(item) : handleShare(item))}
                   className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 transition-colors disabled:opacity-50"
                 >
@@ -308,8 +427,21 @@ export function ChatContentPicker({
                       ?
                     </div>
                   )}
-                  <span className="text-xs text-gray-200 truncate flex-1">{item.displayName}</span>
-                  {sendingPath === item.path && <Loader2 className="h-3.5 w-3.5 animate-spin text-accent shrink-0" />}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs text-gray-200 truncate">{item.displayName}</p>
+                    {mode.type === "general" && (item.isFavorite || item.sourceInstanceName) && (
+                      <p className="text-[9px] text-muted-foreground truncate flex items-center gap-1">
+                        {item.isFavorite ? (
+                          <>
+                            <Star className="h-2.5 w-2.5 shrink-0 fill-current" /> Favorito
+                          </>
+                        ) : (
+                          item.sourceInstanceName
+                        )}
+                      </p>
+                    )}
+                  </div>
+                  {sendingPath === itemKey(item) && <Loader2 className="h-3.5 w-3.5 animate-spin text-accent shrink-0" />}
                 </motion.button>
               ))
             )}

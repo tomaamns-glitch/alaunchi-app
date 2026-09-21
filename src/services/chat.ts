@@ -8,6 +8,12 @@ export interface ChatMessage {
   text: string;
   timestamp: number;
   content?: SharedContent;
+  /** Set when sent from the chat's "carousel instance" mode instead of
+   *  "general" — the id of that catalog modpack. Absent = general mode
+   *  (covers every message sent before this field existed too). The sender
+   *  doesn't know whether the recipient even has this modpack; that's decided
+   *  at render time by whoever's reading the message. */
+  carouselInstanceId?: string;
 }
 
 export interface ChatIndexEntry {
@@ -83,7 +89,7 @@ async function pushMessageAndUpdateIndex(
   myUsername: string,
   otherUuid: string,
   otherUsername: string,
-  body: { text: string; content?: SharedContent },
+  body: { text: string; content?: SharedContent; carouselInstanceId?: string },
   indexPreview: string
 ): Promise<void> {
   const conversationId = getConversationId(myUuid, otherUuid);
@@ -94,6 +100,7 @@ async function pushMessageAndUpdateIndex(
     senderUsername: myUsername,
     text: body.text,
     ...(body.content ? { content: body.content } : {}),
+    ...(body.carouselInstanceId ? { carouselInstanceId: body.carouselInstanceId } : {}),
     timestamp: serverTimestamp(),
   });
 
@@ -120,11 +127,12 @@ export async function sendMessage(
   myUsername: string,
   otherUuid: string,
   otherUsername: string,
-  text: string
+  text: string,
+  carouselInstanceId?: string
 ): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) return;
-  await pushMessageAndUpdateIndex(myUuid, myUsername, otherUuid, otherUsername, { text: trimmed }, trimmed);
+  await pushMessageAndUpdateIndex(myUuid, myUsername, otherUuid, otherUsername, { text: trimmed, carouselInstanceId }, trimmed);
 }
 
 /** Shares a piece of local content (mod/shader/texture pack/emote) as a
@@ -135,14 +143,15 @@ export async function sendSharedContent(
   myUsername: string,
   otherUuid: string,
   otherUsername: string,
-  content: SharedContent
+  content: SharedContent,
+  carouselInstanceId?: string
 ): Promise<void> {
   await pushMessageAndUpdateIndex(
     myUuid,
     myUsername,
     otherUuid,
     otherUsername,
-    { text: "", content },
+    { text: "", content, carouselInstanceId },
     `📎 ${content.displayName}`
   );
 }

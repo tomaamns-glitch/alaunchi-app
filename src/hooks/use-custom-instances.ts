@@ -22,7 +22,7 @@ function metaToModpack(meta: Record<string, any>): Modpack {
     loaderVersion: meta.loaderVersion,
     version: meta.version ?? "1",
     imageUrl: meta.iconDataUrl ?? "",
-    bannerUrl: "",
+    bannerUrl: meta.bannerDataUrl ?? "",
     installed: true,
     installedVersion: meta.version,
     updateAvailable: false,

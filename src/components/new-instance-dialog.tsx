@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { ImagePlus, Loader2, X } from "lucide-react";
+import { ImagePlus, Loader2, Pencil, X } from "lucide-react";
 import { toast } from "sonner";
+import instanceVanillaIcon from "@/assets/instance-vanilla.png";
+import instanceModdedIcon from "@/assets/instance-modded.png";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,7 +26,29 @@ const LOADER_LABELS: Record<LoaderType, string> = {
   fabric: "Fabric",
 };
 
-const ICON_SIZE = 128;
+const ICON_SIZE = 192;
+
+// Default cover for a new instance when the user doesn't pick one — one look for
+// vanilla, another for anything with a modloader.
+const DEFAULT_ICONS: Record<LoaderType, string> = {
+  vanilla: instanceVanillaIcon,
+  forge: instanceModdedIcon,
+  neoforge: instanceModdedIcon,
+  fabric: instanceModdedIcon,
+};
+
+function drawSquareIcon(img: HTMLImageElement): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = ICON_SIZE;
+  canvas.height = ICON_SIZE;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("No se pudo procesar la imagen.");
+  const side = Math.min(img.width, img.height);
+  const sx = (img.width - side) / 2;
+  const sy = (img.height - side) / 2;
+  ctx.drawImage(img, sx, sy, side, side, 0, 0, ICON_SIZE, ICON_SIZE);
+  return canvas.toDataURL("image/png");
+}
 
 /** Crops to a centered square and downscales — keeps alaunchi-meta.json (which
  *  embeds this as a data URL, same as every other instance field) small. */
@@ -36,16 +60,60 @@ function resizeImageToDataUrl(file: File): Promise<string> {
       const img = new Image();
       img.onerror = () => reject(new Error("Imagen no válida."));
       img.onload = () => {
+        try {
+          resolve(drawSquareIcon(img));
+        } catch (err) {
+          reject(err);
+        }
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Same square-crop pipeline for a bundled default image (referenced by URL). */
+function urlToIconDataUrl(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onerror = () => reject(new Error("No se pudo cargar la imagen por defecto."));
+    img.onload = () => {
+      try {
+        resolve(drawSquareIcon(img));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    img.src = url;
+  });
+}
+
+const BANNER_W = 1024;
+const BANNER_H = 384;
+
+/** Center-crops to a wide banner and re-encodes as JPEG — banners are photos/
+ *  art, so the lossy pass keeps alaunchi-meta.json far smaller than a PNG would. */
+function resizeBannerToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("No se pudo leer la imagen."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Imagen no válida."));
+      img.onload = () => {
         const canvas = document.createElement("canvas");
-        canvas.width = ICON_SIZE;
-        canvas.height = ICON_SIZE;
+        canvas.width = BANNER_W;
+        canvas.height = BANNER_H;
         const ctx = canvas.getContext("2d");
         if (!ctx) return reject(new Error("No se pudo procesar la imagen."));
-        const side = Math.min(img.width, img.height);
-        const sx = (img.width - side) / 2;
-        const sy = (img.height - side) / 2;
-        ctx.drawImage(img, sx, sy, side, side, 0, 0, ICON_SIZE, ICON_SIZE);
-        resolve(canvas.toDataURL("image/png"));
+        const targetRatio = BANNER_W / BANNER_H;
+        const srcRatio = img.width / img.height;
+        let sw = img.width;
+        let sh = img.height;
+        if (srcRatio > targetRatio) sw = img.height * targetRatio;
+        else sh = img.width / targetRatio;
+        ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, 0, 0, BANNER_W, BANNER_H);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
       };
       img.src = reader.result as string;
     };
@@ -62,9 +130,11 @@ interface NewInstanceDialogProps {
 export function NewInstanceDialog({ open, onOpenChange, onCreated }: NewInstanceDialogProps) {
   const { createInstance } = useCustomInstances();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const bannerInputRef = useRef<HTMLInputElement | null>(null);
 
   const [name, setName] = useState("");
   const [icon, setIcon] = useState<string | null>(null);
+  const [banner, setBanner] = useState<string | null>(null);
   const [loaderType, setLoaderType] = useState<LoaderType>("vanilla");
   const [mcVersion, setMcVersion] = useState<string | null>(null);
   const [loaderVersion, setLoaderVersion] = useState<string | null>(null);
@@ -78,6 +148,7 @@ export function NewInstanceDialog({ open, onOpenChange, onCreated }: NewInstance
   const resetForm = () => {
     setName("");
     setIcon(null);
+    setBanner(null);
     setLoaderType("vanilla");
     setMcVersion(null);
     setLoaderVersion(null);
@@ -157,6 +228,17 @@ export function NewInstanceDialog({ open, onOpenChange, onCreated }: NewInstance
     }
   };
 
+  const handleBannerPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      setBanner(await resizeBannerToDataUrl(file));
+    } catch (err: any) {
+      toast.error(err?.message || "No se pudo procesar la imagen.");
+    }
+  };
+
   const needsLoaderVersion = loaderType !== "vanilla";
   const canSubmit = name.trim().length > 0 && !!mcVersion && (!needsLoaderVersion || !!loaderVersion) && !creating;
 
@@ -164,12 +246,14 @@ export function NewInstanceDialog({ open, onOpenChange, onCreated }: NewInstance
     if (!canSubmit || !mcVersion) return;
     setCreating(true);
     try {
+      const iconDataUrl = icon ?? (await urlToIconDataUrl(DEFAULT_ICONS[loaderType]).catch(() => undefined));
       const instance = await createInstance({
         name: name.trim(),
         loaderType,
         minecraftVersion: mcVersion,
         loaderVersion: needsLoaderVersion ? loaderVersion ?? undefined : undefined,
-        iconDataUrl: icon ?? undefined,
+        iconDataUrl,
+        bannerDataUrl: banner ?? undefined,
       });
       toast.success(`${instance.name} creada.`);
       onOpenChange(false);
@@ -195,14 +279,13 @@ export function NewInstanceDialog({ open, onOpenChange, onCreated }: NewInstance
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="relative h-16 w-16 shrink-0 rounded-md border border-white/10 bg-black/40 overflow-hidden flex items-center justify-center text-muted-foreground hover:border-accent/50 transition-colors"
+              className="group relative h-16 w-16 shrink-0 rounded-md border border-white/10 bg-black/40 overflow-hidden hover:border-accent/50 transition-colors"
               aria-label="Elegir icono"
             >
-              {icon ? (
-                <img src={icon} alt="" className="h-full w-full object-cover" />
-              ) : (
-                <ImagePlus className="h-6 w-6" />
-              )}
+              <img src={icon ?? DEFAULT_ICONS[loaderType]} alt="" className="h-full w-full object-cover" />
+              <span className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity">
+                <Pencil className="h-4 w-4 text-white" />
+              </span>
             </button>
             <div className="flex-1 space-y-1.5">
               <Label htmlFor="instance-name">Nombre</Label>
@@ -217,6 +300,39 @@ export function NewInstanceDialog({ open, onOpenChange, onCreated }: NewInstance
             {icon && (
               <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setIcon(null)} aria-label="Quitar icono">
                 <X className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Banner (opcional)</Label>
+            <input ref={bannerInputRef} type="file" accept="image/*" className="hidden" onChange={handleBannerPick} />
+            <button
+              type="button"
+              onClick={() => bannerInputRef.current?.click()}
+              className="group relative w-full h-24 rounded-md border border-white/10 bg-black/40 overflow-hidden hover:border-accent/50 transition-colors flex items-center justify-center text-xs text-muted-foreground"
+            >
+              {banner ? (
+                <>
+                  <img src={banner} alt="" className="h-full w-full object-cover" />
+                  <span className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Pencil className="h-4 w-4 text-white" />
+                  </span>
+                </>
+              ) : (
+                <span className="flex items-center gap-1.5">
+                  <ImagePlus className="h-4 w-4" />
+                  Elegir banner
+                </span>
+              )}
+            </button>
+            <p className="text-[11px] text-muted-foreground">
+              Sin banner, se usa un degradado del color del icono al entrar en la instancia.
+            </p>
+            {banner && (
+              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setBanner(null)}>
+                <X className="mr-1 h-3.5 w-3.5" />
+                Quitar banner
               </Button>
             )}
           </div>

@@ -31,6 +31,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   searchSchematicsOnline: (args) => ipcRenderer.invoke("mc:search-schematics-online", args),
   getSchematicPost: (args) => ipcRenderer.invoke("mc:get-schematic-post", args),
   getSchematicFiles: (args) => ipcRenderer.invoke("mc:get-schematic-files", args),
+  getCherryPetalFrames: () => ipcRenderer.invoke("mc:get-cherry-petal-frames"),
+  getLoaderIcons: () => ipcRenderer.invoke("mc:get-loader-icons"),
   launchMinecraft: (args) => ipcRenderer.invoke("mc:launch", args),
   checkJava: () => ipcRenderer.invoke("mc:check-java"),
   installJava: () => ipcRenderer.invoke("mc:install-java"),

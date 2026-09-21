@@ -3,6 +3,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { installSnapshot, launchMinecraft } from "@/services/electron";
 import { markOnline } from "@/services/presence";
+import { markPlayingInstance } from "@/services/user-activity";
 import { getAzureClientId } from "@/services/auth";
 import { Modpack, fetchSnapshot, snapshotBaseUrl } from "@/services/github";
 import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
@@ -78,6 +79,7 @@ export function useLaunchModpack(pack: Modpack | undefined) {
         clientId: getAzureClientId(),
       });
       markOnline(pack.id, auth.uuid, auth.username).catch(() => {});
+      markPlayingInstance(auth.uuid, auth.username, pack.id, pack.name, pack.source === "custom" ? "custom" : "github").catch(() => {});
       toast.success(`¡${pack.name} iniciado!`);
     } catch (e: any) {
       reportCaughtError(`modpack:launching:${pack.id}`, e);

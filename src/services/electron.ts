@@ -119,6 +119,7 @@ export interface CreateInstanceInput {
   minecraftVersion: string;
   loaderVersion?: string;
   iconDataUrl?: string;
+  bannerDataUrl?: string;
 }
 
 /** Creates a brand-new local instance (not backed by any GitHub catalog) and
@@ -270,6 +271,38 @@ export interface SchematicAssetsProgress {
   mcVersion: string;
   stage: "downloading_client" | "extracting" | "ready";
   progress: number;
+}
+
+/** The 12 frames of Minecraft's falling cherry-petal particle as base64 PNG data
+ *  URLs, read from a cached >=1.20 client jar. `null` when no such jar exists yet
+ *  (or outside Electron) — callers should have their own petal fallback. */
+export async function getCherryPetalFrames(): Promise<string[] | null> {
+  if (!isElectron) return null;
+  try {
+    return (await eAPI.getCherryPetalFrames()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export interface LoaderIcons {
+  minecraft: string | null;
+  fabric: string | null;
+  forge: string | null;
+  neoforge: string | null;
+}
+
+/** Loader / Minecraft marks as base64 PNG data URLs, extracted from the loader
+ *  jars the launcher already downloaded. Any entry is `null` if that loader's
+ *  jar hasn't been fetched yet — the caller keeps its drawn glyph for those. */
+export async function getLoaderIcons(): Promise<LoaderIcons> {
+  const empty: LoaderIcons = { minecraft: null, fabric: null, forge: null, neoforge: null };
+  if (!isElectron) return empty;
+  try {
+    return { ...empty, ...((await eAPI.getLoaderIcons()) ?? {}) };
+  } catch {
+    return empty;
+  }
 }
 
 export function onSchematicAssetsProgress(callback: (data: SchematicAssetsProgress) => void): () => void {

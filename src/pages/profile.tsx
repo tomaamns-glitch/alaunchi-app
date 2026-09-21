@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import {
   Boxes,
-  Camera,
   Clock,
   Gamepad2,
   Heart,
@@ -11,6 +10,8 @@ import {
   Loader2,
   LogOut,
   MoreVertical,
+  Palette,
+  Pencil,
   Play,
   Shirt,
 } from "lucide-react";
@@ -19,32 +20,30 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { useInstanceFolders } from "@/hooks/use-instance-folders";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
-import { SkinViewer3D } from "@/components/skin-viewer-3d";
+import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
+import { ProfileFrame } from "@/components/profile-frame";
+import { ProfileEditDialog } from "@/components/profile-edit-dialog";
+import { ProfileCustomizeDialog } from "@/components/profile-customize-dialog";
 import { SkinManagerPanel } from "@/components/skin-manager-panel";
 import { useShowcaseSkin } from "@/hooks/use-showcase-skin";
 import { getInstalledModpacksMeta } from "@/services/electron";
-import { fileToBase64 } from "@/services/skin";
 import { getFavorites, type FavoriteCategory } from "@/services/favorites";
-import { DEFAULT_PROFILE_BANNER, uploadBanner } from "@/services/banner";
+import { DEFAULT_PROFILE_BANNER } from "@/services/banner";
 import {
-  getProfileBanner,
-  getProfileVisibility,
+  getProfileCustomization,
   publishProfile,
-  setProfileBanner,
-  setProfileVisibility,
   type ProfileVisibility,
 } from "@/services/public-profile";
+import { toSkinEffect } from "@/lib/decoration-catalog";
 import { buildInstanceRecipe } from "@/lib/instance-recipe";
 import { formatPlaytime } from "@/lib/format";
-import { toast } from "sonner";
 import type { Modpack } from "@/services/github";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Globe, Lock } from "lucide-react";
 
 function Stat({ icon, value, label }: { icon: React.ReactNode; value: string; label: string }) {
   return (
@@ -127,10 +126,14 @@ export default function Profile() {
   const [totalPlaytimeMs, setTotalPlaytimeMs] = useState(0);
   const [favFilter, setFavFilter] = useState<FavoriteCategory>("mods");
   const [skinDialogOpen, setSkinDialogOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [customizeOpen, setCustomizeOpen] = useState(false);
   const [visibility, setVisibility] = useState<ProfileVisibility>("everyone");
   const [bannerUrl, setBannerUrl] = useState<string | null>(null);
-  const [bannerUploading, setBannerUploading] = useState(false);
-  const bannerInputRef = useRef<HTMLInputElement>(null);
+  const [recentBanners, setRecentBanners] = useState<string[]>([]);
+  const [bio, setBio] = useState("");
+  const [avatarDecoration, setAvatarDecoration] = useState("none");
+  const [frame, setFrame] = useState("none");
 
   useEffect(() => {
     if (!isAuthenticated) setLocation("/login");
@@ -154,25 +157,17 @@ export default function Profile() {
 
   useEffect(() => {
     if (!uuid) return;
-    getProfileVisibility(uuid).then(setVisibility).catch(() => {});
-    getProfileBanner(uuid).then(setBannerUrl).catch(() => {});
+    getProfileCustomization(uuid)
+      .then((c) => {
+        setVisibility(c.visibility);
+        setBannerUrl(c.bannerUrl);
+        setRecentBanners(c.recentBanners);
+        setBio(c.bio);
+        setAvatarDecoration(c.avatarDecoration);
+        setFrame(c.frame);
+      })
+      .catch(() => {});
   }, [uuid]);
-
-  const handleBannerChosen = async (file: File) => {
-    if (!uuid) return;
-    setBannerUploading(true);
-    try {
-      const base64 = await fileToBase64(file);
-      const url = await uploadBanner(uuid, base64, file.type || "image/jpeg");
-      await setProfileBanner(uuid, url);
-      setBannerUrl(url);
-      toast.success("Banner actualizado.");
-    } catch (e: any) {
-      toast.error(e?.message || "No se pudo subir el banner.");
-    } finally {
-      setBannerUploading(false);
-    }
-  };
 
   const onlineInstances = modpacks.filter((mp) => mp.installed);
   // Private instances only leave your machine if you starred them in the Hub
@@ -227,88 +222,70 @@ export default function Profile() {
     <div className="min-h-full bg-background text-foreground flex flex-col">
       <main className="flex-1 overflow-y-auto px-6 py-6">
         <div className="max-w-5xl w-full mx-auto space-y-6">
+          <ProfileFrame frame={frame}>
           <div className="relative rounded-xl border border-white/10 bg-card/40 overflow-hidden">
             <div className="absolute inset-0">
               <img src={bannerUrl || DEFAULT_PROFILE_BANNER} alt="" className="w-full h-full object-cover" />
               <div className="absolute inset-0 bg-gradient-to-r from-background via-background/85 to-background/25" />
             </div>
 
-            <input
-              ref={bannerInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => e.target.files?.[0] && handleBannerChosen(e.target.files[0])}
-            />
-            <button
-              type="button"
-              onClick={() => bannerInputRef.current?.click()}
-              disabled={bannerUploading}
-              className="absolute top-3 right-3 z-10 flex items-center gap-1.5 rounded-md bg-black/50 backdrop-blur-sm px-2.5 py-1.5 text-[11px] font-medium text-gray-200 hover:bg-black/70 hover:text-white transition-colors disabled:opacity-60"
-            >
-              {bannerUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
-              Cambiar banner
-            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="absolute top-3 right-3 z-10 flex h-8 w-8 items-center justify-center rounded-md bg-black/50 backdrop-blur-sm text-gray-200 hover:bg-black/70 hover:text-white transition-colors"
+                  aria-label="Opciones del perfil"
+                >
+                  <MoreVertical className="h-4 w-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setEditOpen(true)}>
+                  <Pencil className="mr-2 h-4 w-4" />
+                  Editar perfil
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setCustomizeOpen(true)}>
+                  <Palette className="mr-2 h-4 w-4" />
+                  Personalizar
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setSkinDialogOpen(true)}>
+                  <Shirt className="mr-2 h-4 w-4" />
+                  Cambiar skin
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onClick={async () => {
+                    await logout();
+                    setLocation("/login");
+                  }}
+                >
+                  <LogOut className="mr-2 h-4 w-4" />
+                  Cerrar sesión
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-            <div className="relative p-5 flex items-start gap-5">
-              <div
-                className="rounded-lg border border-white/10 bg-black/40 overflow-hidden shrink-0"
-                style={{ width: 100, height: 145 }}
-              >
-                {skin.fullDataUrl && <SkinViewer3D skinUrl={skin.fullDataUrl} variant={skin.variant} width={100} height={145} />}
+            <div className="relative p-5 flex items-stretch gap-5">
+              <div className="shrink-0" style={{ width: 100, height: 145 }}>
+                {skin.fullDataUrl && (
+                  <SkinViewerAnimated
+                    key={avatarDecoration}
+                    skinUrl={skin.fullDataUrl}
+                    variant={skin.variant}
+                    width={100}
+                    height={145}
+                    effect={toSkinEffect(avatarDecoration)}
+                  />
+                )}
               </div>
-              <div className="flex-1 min-w-0 space-y-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h2 className="text-2xl font-bold truncate">{username}</h2>
-                    <p className="text-sm text-muted-foreground">Jugador</p>
-                    <ToggleGroup
-                      type="single"
-                      value={visibility}
-                      onValueChange={(v) => {
-                        if (!v || !uuid) return;
-                        const next = v as ProfileVisibility;
-                        setVisibility(next);
-                        setProfileVisibility(uuid, next).catch(() => {});
-                      }}
-                      className="justify-start mt-2"
-                    >
-                      <ToggleGroupItem value="everyone" className="h-6 px-2 text-[11px] gap-1 data-[state=on]:bg-accent/15 data-[state=on]:text-accent">
-                        <Globe className="h-3 w-3" />
-                        Todos
-                      </ToggleGroupItem>
-                      <ToggleGroupItem value="friends" className="h-6 px-2 text-[11px] gap-1 data-[state=on]:bg-accent/15 data-[state=on]:text-accent">
-                        <Lock className="h-3 w-3" />
-                        Solo amigos
-                      </ToggleGroupItem>
-                    </ToggleGroup>
-                  </div>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="shrink-0 text-gray-400 hover:text-white" aria-label="Más opciones">
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setSkinDialogOpen(true)}>
-                        <Shirt className="mr-2 h-4 w-4" />
-                        Cambiar skin
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        className="text-destructive focus:text-destructive"
-                        onClick={async () => {
-                          await logout();
-                          setLocation("/login");
-                        }}
-                      >
-                        <LogOut className="mr-2 h-4 w-4" />
-                        Cerrar sesión
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+              <div className="flex-1 min-w-0 flex flex-col">
+                <div className="min-w-0 pr-10">
+                  <h2 className="text-2xl font-bold truncate">{username}</h2>
+                  {bio && <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{bio}</p>}
                 </div>
 
-                <div className="flex flex-wrap items-center gap-x-8 gap-y-3 pt-3 border-t border-white/5">
+                <div className="mt-auto flex flex-wrap items-center gap-x-8 gap-y-3 pt-3 border-t border-white/5">
                   <Stat icon={<Clock className="h-4 w-4" />} value={formatPlaytime(totalPlaytimeMs)} label="Tiempo jugado" />
                   <Stat icon={<Gamepad2 className="h-4 w-4" />} value={String(totalInstances)} label="Instancias" />
                   <Stat icon={<Heart className="h-4 w-4" />} value={String(totalFavorites)} label="Favoritas" />
@@ -316,6 +293,7 @@ export default function Profile() {
               </div>
             </div>
           </div>
+          </ProfileFrame>
 
           <Tabs defaultValue="online">
             <TabsList className="h-auto w-full justify-start gap-6 rounded-none border-b border-white/10 bg-transparent p-0">
@@ -392,6 +370,39 @@ export default function Profile() {
           {uuid && <SkinManagerPanel uuid={uuid} username={username} />}
         </DialogContent>
       </Dialog>
+
+      {uuid && (
+        <>
+          <ProfileEditDialog
+            open={editOpen}
+            onOpenChange={setEditOpen}
+            uuid={uuid}
+            bio={bio}
+            bannerUrl={bannerUrl}
+            recentBanners={recentBanners}
+            visibility={visibility}
+            onChange={(patch) => {
+              if (patch.bio !== undefined) setBio(patch.bio);
+              if (patch.bannerUrl !== undefined) setBannerUrl(patch.bannerUrl);
+              if (patch.recentBanners !== undefined) setRecentBanners(patch.recentBanners);
+              if (patch.visibility !== undefined) setVisibility(patch.visibility);
+            }}
+          />
+          <ProfileCustomizeDialog
+            open={customizeOpen}
+            onOpenChange={setCustomizeOpen}
+            uuid={uuid}
+            skinUrl={skin.fullDataUrl}
+            skinVariant={skin.variant}
+            avatarDecoration={avatarDecoration}
+            frame={frame}
+            onChange={(patch) => {
+              if (patch.avatarDecoration !== undefined) setAvatarDecoration(patch.avatarDecoration);
+              if (patch.frame !== undefined) setFrame(patch.frame);
+            }}
+          />
+        </>
+      )}
     </div>
   );
 }

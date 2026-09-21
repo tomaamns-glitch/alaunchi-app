@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
 import { format, formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
 import {
   Send,
   X,
-  Pencil,
-  Check,
   Paperclip,
   Download,
   RefreshCw,
@@ -18,33 +17,48 @@ import {
   Box,
   Shirt,
   Camera,
+  ChevronDown,
+  Globe,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import {
   getConversationId,
   subscribeMessages,
-  subscribeUserActivity,
   sendMessage,
   type ChatMessage,
 } from "@/services/chat";
-import { subscribePresence, type PresenceEntry } from "@/services/presence";
+import { subscribePlayingStatus, type UserActivity } from "@/services/user-activity";
 import { listInstanceFiles, listEmotes, listSchematics, listScreenshots, downloadInstanceFile } from "@/services/electron";
 import { listSkinLibrary, saveToSkinLibrary } from "@/services/skin";
 import { fetchAsBase64 } from "@/services/content-share";
-import { getNicknames, setNickname } from "@/lib/nicknames";
-import { formatPlaytime } from "@/lib/format";
+import { getNicknames } from "@/lib/nicknames";
+import { getInstanceAccentColor } from "@/lib/instance-color";
+import { findCompatibleInstances, type CompatibleInstance } from "@/lib/content-compat";
 import { useChatHeads } from "@/hooks/use-chat-heads";
 import { useModpacks } from "@/hooks/use-modpacks";
+import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { ChatContactRail } from "@/components/chat-contact-rail";
 import { ChatContentPicker } from "@/components/chat-content-picker";
 import type { ContentCategory, SharedContent } from "@/services/content-share";
+import type { Modpack } from "@/services/github";
 import { cn } from "@/lib/utils";
+
+/** Which context a conversation is currently framed in — determines what a
+ *  sent message/shared content is tagged with, and (from Fase 3/4 onward)
+ *  what content-sharing offers. "general" covers everything that isn't tied
+ *  to one specific published modpack (local/custom instances included). */
+export type ChatMode = { type: "general" } | { type: "carousel"; pack: Modpack };
 
 interface ChatWindowProps {
   myUuid: string;
   myUsername: string;
   currentPackId: string;
+  /** Mode this conversation starts in when newly opened (not when reopening
+   *  an already-open/minimized one — see the mode-reset effect below). Pass
+   *  the carousel instance you're currently viewing, or {type:"general"} from
+   *  anywhere else (the Hub, Friends, a public profile). */
+  defaultMode: ChatMode;
 }
 
 const tapHover = { whileHover: { scale: 1.08 }, whileTap: { scale: 0.9 } };
@@ -75,9 +89,11 @@ const CONTENT_CATEGORY_LABEL: Record<ContentCategory, string> = {
  *  back to the bubble; only the X in the header un-pins it entirely. Open,
  *  close, and minimize are all the same transition from here — they just
  *  differ in whether openUuid comes back later. */
-export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProps) {
+export function ChatWindow({ myUuid, myUsername, currentPackId, defaultMode }: ChatWindowProps) {
+  const [, setLocation] = useLocation();
   const openUuid = useChatHeads((s) => s.openUuid);
   const chatIndex = useChatHeads((s) => s.chatIndex);
+  const directory = useChatHeads((s) => s.directory);
   const minimizeChat = useChatHeads((s) => s.minimizeChat);
   const closeChat = useChatHeads((s) => s.closeChat);
   const modpacks = useModpacks((s) => s.modpacks);
@@ -90,20 +106,47 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
     if (openUuid) setDisplayUuid(openUuid);
   }, [openUuid]);
 
+  // Custom instances only load reliably once the Hub has been visited this
+  // session — general-mode content sharing (picker + received-content cards,
+  // both reactively read useCustomInstances()) needs it regardless of which
+  // page the chat panel happens to be open on.
+  useEffect(() => {
+    useCustomInstances.getState().loadInstances().catch(() => {});
+  }, []);
+
+  // Which mode (general / a specific carousel instance) this conversation is
+  // currently framed in. Applies defaultMode only the moment displayUuid
+  // actually changes to a *different* conversation — reopening the same one
+  // after minimizing keeps whatever mode you had picked, it doesn't snap back.
+  const [mode, setMode] = useState<ChatMode>(defaultMode);
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const modeInitializedForUuid = useRef<string | null>(null);
+  useEffect(() => {
+    if (!displayUuid) return;
+    if (modeInitializedForUuid.current !== displayUuid) {
+      modeInitializedForUuid.current = displayUuid;
+      setMode(defaultMode);
+    }
+  }, [displayUuid, defaultMode]);
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
-  const [presenceEntry, setPresenceEntry] = useState<PresenceEntry | null>(null);
-  const [lastConnection, setLastConnection] = useState<number | null>(null);
-  const [nicknames, setNicknamesState] = useState(() => getNicknames());
-  const [editingAlias, setEditingAlias] = useState(false);
-  const [aliasDraft, setAliasDraft] = useState("");
+  const [activity, setActivity] = useState<UserActivity | null>(null);
+  const [activityColor, setActivityColor] = useState<string | null>(null);
+  // Nicknames are read-only here now — editing lives on the player's profile
+  // page instead (a fresh mount of this component, e.g. after navigating away
+  // and back, is enough to pick up a change made there).
+  const [nicknames] = useState(() => getNicknames());
   const [showContentPicker, setShowContentPicker] = useState(false);
   const [railExpanded, setRailExpanded] = useState(true);
   const [installedHashes, setInstalledHashes] = useState<Record<string, Set<string>>>({});
   const [installedSkinHashes, setInstalledSkinHashes] = useState<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  const otherUsername = displayUuid ? chatIndex[displayUuid]?.otherUsername ?? "" : "";
+  // chatIndex only gets an entry once a message has actually been sent —
+  // fall back to the global "everyone who's ever opened the app" directory
+  // for a conversation just opened from a friend's profile/the friends list.
+  const otherUsername = displayUuid ? chatIndex[displayUuid]?.otherUsername ?? directory[displayUuid]?.username ?? "" : "";
   const alias = displayUuid ? nicknames[displayUuid] : undefined;
 
   useEffect(() => {
@@ -115,18 +158,34 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
   }, [displayUuid, myUuid]);
 
   useEffect(() => {
-    if (!displayUuid) return;
-    return subscribePresence(currentPackId, (entries) => setPresenceEntry(entries[displayUuid] ?? null));
-  }, [displayUuid, currentPackId]);
-
-  useEffect(() => {
-    if (!displayUuid) return;
-    return subscribeUserActivity(displayUuid, (activity) => setLastConnection(activity?.lastSeen ?? null));
+    if (!displayUuid) {
+      setActivity(null);
+      return;
+    }
+    return subscribePlayingStatus(displayUuid, setActivity);
   }, [displayUuid]);
 
+  // Only "playing a catalog instance" needs a resolved color (custom instances
+  // show plain text — see the render below) — extracted separately since it's
+  // async and shouldn't block rendering the rest of the status line.
   useEffect(() => {
-    setEditingAlias(false);
+    if (activity?.status !== "playing" || activity.instanceSource !== "github" || !activity.instanceId) {
+      setActivityColor(null);
+      return;
+    }
+    const pack = modpacks.find((p) => p.id === activity.instanceId);
+    let cancelled = false;
+    getInstanceAccentColor({ id: activity.instanceId, imageUrl: pack?.imageUrl }).then((color) => {
+      if (!cancelled) setActivityColor(color);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activity, modpacks]);
+
+  useEffect(() => {
     setShowContentPicker(false);
+    setModeMenuOpen(false);
   }, [displayUuid]);
 
   useEffect(() => {
@@ -171,16 +230,29 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
     });
   }, [messages, refreshInstalledHashes]);
 
+  // Colors for the per-message "sent in {instance} mode" tag (see the render
+  // below) — resolved lazily per distinct carouselInstanceId actually seen in
+  // this conversation, not eagerly for every installed pack.
+  const [tagColors, setTagColors] = useState<Record<string, string>>({});
+  const requestedColorIds = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const m of messages) {
+      const id = m.carouselInstanceId;
+      if (!id || requestedColorIds.current.has(id)) continue;
+      const pack = modpacks.find((p) => p.id === id);
+      if (!pack) continue;
+      requestedColorIds.current.add(id);
+      getInstanceAccentColor(pack).then((color) => {
+        setTagColors((prev) => ({ ...prev, [id]: color }));
+      });
+    }
+  }, [messages, modpacks]);
+
   const handleSend = () => {
     if (!draft.trim() || !displayUuid) return;
-    sendMessage(myUuid, myUsername, displayUuid, otherUsername, draft).catch(() => {});
+    const carouselInstanceId = mode.type === "carousel" ? mode.pack.id : undefined;
+    sendMessage(myUuid, myUsername, displayUuid, otherUsername, draft, carouselInstanceId).catch(() => {});
     setDraft("");
-  };
-
-  const handleSaveAlias = () => {
-    if (!displayUuid) return;
-    setNicknamesState(setNickname(displayUuid, aliasDraft));
-    setEditingAlias(false);
   };
 
   return (
@@ -218,55 +290,106 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
           <div className="flex-1 min-w-0 flex flex-col min-h-0">
             <div className="px-4 py-3 border-b border-white/10 flex items-start gap-3">
               <div className="min-w-0 flex-1">
-                {editingAlias ? (
-                  <div className="flex items-center gap-1">
-                    <Input
-                      autoFocus
-                      value={aliasDraft}
-                      onChange={(e) => setAliasDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleSaveAlias();
-                        if (e.key === "Escape") setEditingAlias(false);
-                      }}
-                      placeholder={otherUsername}
-                      className="h-6 text-xs px-2 bg-background/50 border-white/10 flex-1"
-                    />
-                    <motion.button
-                      {...tapHover}
-                      type="button"
-                      onClick={handleSaveAlias}
-                      className="text-accent hover:text-accent/80 shrink-0"
-                    >
-                      <Check className="h-3.5 w-3.5" />
-                    </motion.button>
-                  </div>
-                ) : (
+                <div className="relative mb-1 w-fit">
                   <motion.button
                     {...tapHover}
                     type="button"
-                    onClick={() => {
-                      setAliasDraft(alias || "");
-                      setEditingAlias(true);
-                    }}
-                    className="flex items-center gap-1.5 text-sm font-semibold text-white hover:text-accent transition-colors"
+                    onClick={() => setModeMenuOpen((v) => !v)}
+                    title="Cambiar el contexto de esta conversación"
+                    className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-gray-400 hover:text-gray-200 transition-colors"
                   >
-                    {alias ? `${alias} (${otherUsername})` : otherUsername}
-                    <Pencil className="h-3 w-3 opacity-50" />
+                    {mode.type === "carousel" ? (
+                      <>
+                        {mode.pack.imageUrl ? (
+                          <img src={mode.pack.imageUrl} alt="" className="h-3.5 w-3.5 rounded-sm object-cover shrink-0" />
+                        ) : (
+                          <Package className="h-3 w-3 shrink-0" />
+                        )}
+                        <span className="max-w-[9rem] truncate normal-case">{mode.pack.name}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Globe className="h-3 w-3 shrink-0" />
+                        <span>General</span>
+                      </>
+                    )}
+                    <ChevronDown className="h-3 w-3 opacity-60 shrink-0" />
                   </motion.button>
-                )}
+                  <AnimatePresence>
+                    {modeMenuOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        transition={{ duration: 0.12 }}
+                        className="absolute top-full left-0 mt-1 z-50 w-52 max-h-56 overflow-y-auto rounded-lg bg-card border border-white/10 shadow-xl py-1"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMode({ type: "general" });
+                            setModeMenuOpen(false);
+                          }}
+                          className={cn(
+                            "w-full flex items-center gap-2 text-left px-2.5 py-1.5 text-xs hover:bg-white/5 transition-colors",
+                            mode.type === "general" ? "text-accent font-semibold" : "text-gray-200"
+                          )}
+                        >
+                          <Globe className="h-3.5 w-3.5 shrink-0" />
+                          General
+                        </button>
+                        {modpacks
+                          .filter((p) => p.installed)
+                          .map((p) => (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => {
+                                setMode({ type: "carousel", pack: p });
+                                setModeMenuOpen(false);
+                              }}
+                              className={cn(
+                                "w-full flex items-center gap-2 text-left px-2.5 py-1.5 text-xs hover:bg-white/5 transition-colors",
+                                mode.type === "carousel" && mode.pack.id === p.id ? "text-accent font-semibold" : "text-gray-200"
+                              )}
+                            >
+                              {p.imageUrl ? (
+                                <img src={p.imageUrl} alt="" className="h-4 w-4 rounded-sm object-cover shrink-0" />
+                              ) : (
+                                <Package className="h-3.5 w-3.5 shrink-0" />
+                              )}
+                              <span className="truncate">{p.name}</span>
+                            </button>
+                          ))}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+                <motion.button
+                  {...tapHover}
+                  type="button"
+                  onClick={() => displayUuid && setLocation(`/profile/${displayUuid}`)}
+                  title="Ver perfil"
+                  className="block text-sm font-semibold text-white hover:text-accent transition-colors truncate text-left"
+                >
+                  {alias || otherUsername}
+                </motion.button>
                 <p className="text-[11px] text-muted-foreground truncate">
-                  Última vez jugada:{" "}
-                  {presenceEntry?.online ? (
+                  {activity?.status === "playing" ? (
+                    activity.instanceSource === "custom" ? (
+                      <span>Jugando a {activity.instanceName} (Local)</span>
+                    ) : (
+                      <span style={activityColor ? { color: activityColor } : undefined} className="font-medium">
+                        Jugando a {activity.instanceName}
+                      </span>
+                    )
+                  ) : activity?.status === "online" ? (
                     <span className="text-green-400">● En línea</span>
-                  ) : presenceEntry?.lastSeen ? (
-                    `hace ${formatDistanceToNow(presenceEntry.lastSeen, { locale: es })}`
+                  ) : activity?.lastSeen ? (
+                    `Última conexión: hace ${formatDistanceToNow(activity.lastSeen, { locale: es })}`
                   ) : (
-                    "sin registrar"
+                    "Última conexión: sin registrar"
                   )}
-                  {presenceEntry?.playtimeMs ? ` · ${formatPlaytime(presenceEntry.playtimeMs)}` : ""}
-                </p>
-                <p className="text-[11px] text-muted-foreground truncate">
-                  Última conexión: {lastConnection ? `hace ${formatDistanceToNow(lastConnection, { locale: es })}` : "sin registrar"}
                 </p>
               </div>
 
@@ -293,27 +416,40 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
                   .sort((a, b) => a.timestamp - b.timestamp)
                   .map((m, i) => {
                     const isMe = m.senderUuid === myUuid;
+                    // Degradation rule: a message tagged with a carousel instance the
+                    // viewer doesn't have renders exactly like a general message — no
+                    // tag, nothing implying context they can't act on.
+                    const tagPack = m.carouselInstanceId ? modpacks.find((p) => p.id === m.carouselInstanceId) : undefined;
+                    const tagColor = m.carouselInstanceId ? tagColors[m.carouselInstanceId] : undefined;
                     return (
                       <motion.div
                         key={i}
                         initial={{ opacity: 0, y: 6 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.15 }}
-                        className={cn("flex", isMe ? "justify-end" : "justify-start")}
+                        className={cn("flex flex-col", isMe ? "items-end" : "items-start")}
                       >
+                        {tagPack && (
+                          <span
+                            className="mb-0.5 max-w-[75%] truncate rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white/90"
+                            style={{ backgroundColor: tagColor ?? "hsl(205 90% 55%)" }}
+                          >
+                            {tagPack.name}
+                          </span>
+                        )}
                         {m.content ? (
                           <SharedContentCard
                             content={m.content}
+                            carouselInstanceId={m.carouselInstanceId}
                             installed={
                               m.content.category === "skins"
                                 ? installedSkinHashes.has(m.content.sha1)
                                 : (m.content.modpackId ? installedHashes[m.content.modpackId]?.has(m.content.sha1) : false) ?? false
                             }
-                            pack={modpacks.find((p) => p.id === m.content!.modpackId)}
                             onInstalled={() =>
                               m.content!.category === "skins"
                                 ? refreshInstalledSkinHashes()
-                                : refreshInstalledHashes(m.content!.modpackId as string)
+                                : m.content!.modpackId && refreshInstalledHashes(m.content!.modpackId)
                             }
                           />
                         ) : (
@@ -361,7 +497,7 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
                       myUsername={myUsername}
                       otherUuid={displayUuid}
                       otherUsername={otherUsername}
-                      currentPackId={currentPackId}
+                      mode={mode}
                       onClose={() => setShowContentPicker(false)}
                     />
                   )}
@@ -396,42 +532,91 @@ export function ChatWindow({ myUuid, myUsername, currentPackId }: ChatWindowProp
 
 function SharedContentCard({
   content,
+  carouselInstanceId,
   installed,
-  pack,
   onInstalled,
 }: {
   content: SharedContent;
+  /** The message's mode tag (chat.ts' ChatMessage.carouselInstanceId), not
+   *  content.modpackId — the message's *mode* decides whether this is a
+   *  direct install or needs compatibility detection, not just whichever id
+   *  the sender happened to record. */
+  carouselInstanceId?: string;
   installed: boolean;
-  pack: { id: string; name: string; installed: boolean } | undefined;
   onInstalled: () => void;
 }) {
+  const catalogModpacks = useModpacks((s) => s.modpacks);
+  const customInstances = useCustomInstances((s) => s.instances);
   const [installing, setInstalling] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
+  const [checkingCompat, setCheckingCompat] = useState(false);
+  const [compatible, setCompatible] = useState<CompatibleInstance[] | null>(null);
   const Icon = CONTENT_CATEGORY_ICON[content.category];
-  // Skins have no modpack to install into — they go straight to the local
-  // skin library, so the "instala el modpack primero" gate doesn't apply.
-  const packInstalled = content.category === "skins" ? true : pack?.installed ?? false;
 
-  const handleDownload = async () => {
+  // Direct match: sent in a carousel instance's mode AND the viewer actually
+  // has that instance — install exactly what was shared, no picker. Anything
+  // else (general mode, or carousel mode for an instance the viewer doesn't
+  // have — the agreed degradation rule) falls through to compatibility
+  // detection below instead of a modpackId-only guess.
+  const directPack =
+    content.category !== "skins" && carouselInstanceId
+      ? catalogModpacks.find((p) => p.id === carouselInstanceId && p.installed) ??
+        customInstances.find((p) => p.id === carouselInstanceId)
+      : undefined;
+
+  const allMyInstances = [...catalogModpacks.filter((p) => p.installed), ...customInstances];
+
+  const installInto = async (targetId: string, targetName: string, url: string, sha1: string, fileName: string) => {
     setInstalling(true);
     try {
-      if (content.category === "skins") {
-        const base64 = await fetchAsBase64(content.downloadUrl);
-        await saveToSkinLibrary(content.displayName, content.skinVariant ?? "classic", base64);
-      } else if (content.category === "schematics") {
+      if (content.category === "schematics") {
         const folder = content.schematicSource === "worldedit" ? "config/worldedit/schematics" : "schematics";
-        await downloadInstanceFile(content.modpackId!, `${folder}/${content.fileName}`, content.downloadUrl, content.sha1);
+        await downloadInstanceFile(targetId, `${folder}/${fileName}`, url, sha1);
       } else {
-        const targetPath = `${content.category}/${content.fileName}`;
-        await downloadInstanceFile(content.modpackId!, targetPath, content.downloadUrl, content.sha1);
+        await downloadInstanceFile(targetId, `${content.category}/${fileName}`, url, sha1);
       }
-      toast.success(`${content.displayName} instalado.`);
+      toast.success(`${content.displayName} instalado en ${targetName}.`);
       onInstalled();
+      setShowPicker(false);
     } catch (e: any) {
       toast.error(e?.message || "Error al instalar.");
     } finally {
       setInstalling(false);
     }
   };
+
+  const handleClick = async () => {
+    if (content.category === "skins") {
+      setInstalling(true);
+      try {
+        const base64 = await fetchAsBase64(content.downloadUrl);
+        await saveToSkinLibrary(content.displayName, content.skinVariant ?? "classic", base64);
+        toast.success(`${content.displayName} instalado.`);
+        onInstalled();
+      } catch (e: any) {
+        toast.error(e?.message || "Error al instalar.");
+      } finally {
+        setInstalling(false);
+      }
+      return;
+    }
+
+    if (directPack) {
+      await installInto(directPack.id, directPack.name, content.downloadUrl, content.sha1, content.fileName);
+      return;
+    }
+
+    const opening = !showPicker;
+    setShowPicker(opening);
+    if (opening && compatible === null && content.modrinthProjectId) {
+      setCheckingCompat(true);
+      const found = await findCompatibleInstances(content.modrinthProjectId, content.category);
+      setCheckingCompat(false);
+      setCompatible(found);
+    }
+  };
+
+  const isOneClick = content.category === "skins" || !!directPack;
 
   return (
     <div className="max-w-[85%] flex items-center gap-2.5 rounded-2xl px-3 py-2.5 bg-white/10 shadow-sm">
@@ -451,29 +636,94 @@ function SharedContentCard({
         <p className="text-sm text-gray-100 truncate font-medium">{content.displayName}</p>
         <p className="text-[10px] text-muted-foreground">{CONTENT_CATEGORY_LABEL[content.category]}</p>
       </div>
-      {!packInstalled ? (
-        <span className="text-[10px] text-muted-foreground text-right shrink-0 max-w-[6rem]">
-          Instala {pack?.name ?? "el modpack"} primero
-        </span>
-      ) : (
+      <div className="relative shrink-0">
         <motion.button
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
           type="button"
-          onClick={handleDownload}
+          onClick={handleClick}
           disabled={installing}
-          className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-accent hover:bg-accent/90 text-accent-foreground text-xs font-bold disabled:opacity-60 transition-colors"
+          className={cn(
+            "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-bold disabled:opacity-60 transition-colors",
+            showPicker ? "bg-accent/20 text-accent" : "bg-accent hover:bg-accent/90 text-accent-foreground"
+          )}
         >
           {installing ? (
             <Loader2 className="h-3 w-3 animate-spin" />
-          ) : installed ? (
+          ) : isOneClick && installed ? (
             <RefreshCw className="h-3 w-3" />
           ) : (
             <Download className="h-3 w-3" />
           )}
-          {installed ? "Volver a descargar" : "Descargar"}
+          {isOneClick ? (installed ? "Volver a descargar" : "Descargar") : "Instalar"}
         </motion.button>
-      )}
+        <AnimatePresence>
+          {showPicker && (
+            <motion.div
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              transition={{ duration: 0.12 }}
+              className="absolute bottom-full right-0 mb-1 z-50 w-52 max-h-56 overflow-y-auto rounded-lg bg-card border border-white/10 shadow-xl py-1"
+            >
+              {checkingCompat ? (
+                <div className="flex items-center justify-center py-4">
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              ) : compatible !== null ? (
+                compatible.length === 0 ? (
+                  <p className="text-[10px] text-muted-foreground px-2.5 py-2 text-left">
+                    No se encontró ninguna instancia compatible (versión de Minecraft / loader).
+                  </p>
+                ) : (
+                  compatible.map((c) => (
+                    <button
+                      key={c.pack.id}
+                      type="button"
+                      onClick={() =>
+                        installInto(c.pack.id, c.pack.name, c.resolvedVersion.url, c.resolvedVersion.sha1, c.resolvedVersion.filename)
+                      }
+                      className="w-full flex items-center gap-2 text-left px-2.5 py-1.5 text-xs text-gray-200 hover:bg-white/5 transition-colors"
+                    >
+                      {c.pack.imageUrl ? (
+                        <img src={c.pack.imageUrl} alt="" className="h-4 w-4 rounded-sm object-cover shrink-0" />
+                      ) : (
+                        <Icon className="h-3.5 w-3.5 shrink-0" />
+                      )}
+                      <span className="truncate">{c.pack.name}</span>
+                    </button>
+                  ))
+                )
+              ) : (
+                <>
+                  <p className="text-[9px] text-muted-foreground px-2.5 pt-1.5 pb-1 text-left">
+                    No se detectó compatibilidad — elige dónde instalarlo:
+                  </p>
+                  {allMyInstances.length === 0 ? (
+                    <p className="text-[10px] text-muted-foreground px-2.5 py-2 text-left">No tienes ninguna instancia.</p>
+                  ) : (
+                    allMyInstances.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => installInto(p.id, p.name, content.downloadUrl, content.sha1, content.fileName)}
+                        className="w-full flex items-center gap-2 text-left px-2.5 py-1.5 text-xs text-gray-200 hover:bg-white/5 transition-colors"
+                      >
+                        {p.imageUrl ? (
+                          <img src={p.imageUrl} alt="" className="h-4 w-4 rounded-sm object-cover shrink-0" />
+                        ) : (
+                          <Icon className="h-3.5 w-3.5 shrink-0" />
+                        )}
+                        <span className="truncate">{p.name}</span>
+                      </button>
+                    ))
+                  )}
+                </>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }
