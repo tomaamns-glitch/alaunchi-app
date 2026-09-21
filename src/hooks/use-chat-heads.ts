@@ -107,7 +107,9 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
   },
 }));
 
-export type HeaderOverlay = "profile" | "presence" | "presence-all" | null;
+// Split into two "todos" flavors — clicking "Amigos" vs. clicking the
+// instance name now opens its own dialog directly (no shared "Todos" button).
+export type HeaderOverlay = "profile" | "presence" | "presence-all-friends" | "presence-all-instance" | null;
 
 interface HeaderOverlayState {
   active: HeaderOverlay;

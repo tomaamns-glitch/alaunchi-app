@@ -69,3 +69,16 @@ export function subscribePlayingStatus(
   const handler = onValue(activityRef, (snap) => callback(snap.val() ?? null));
   return () => off(activityRef, "value", handler);
 }
+
+/** Live-subscribes to everyone's current activity at once — for a friends
+ *  list (online-now / seen-recently), where checking one uuid at a time isn't
+ *  practical. Callers filter down to their own friends client-side, same as
+ *  presence.ts's per-modpack subscribePresence already reads a whole node and
+ *  lets the caller pick out who matters. */
+export function subscribeAllActivity(
+  callback: (all: Record<string, UserActivity>) => void
+): Unsubscribe {
+  const activityRef = ref(rtdb, "userActivity");
+  const handler = onValue(activityRef, (snap) => callback(snap.val() || {}));
+  return () => off(activityRef, "value", handler);
+}

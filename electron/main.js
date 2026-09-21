@@ -432,20 +432,12 @@ function createWindow() {
     // header) — the process survives close-to-tray, so it can just make the
     // Firebase write itself rather than needing anything recorded here.
     if (!win.webContents.isDestroyed()) win.webContents.send("app:closed-to-tray");
-    if (!hasShownTrayHint) {
-      hasShownTrayHint = true;
-      tray?.displayBalloon({
-        title: "ALaunchi sigue abierto",
-        content: "Sigue en segundo plano para contar bien las horas jugadas. Para cerrarlo del todo, clic derecho en este icono.",
-      });
-    }
   });
 
   return win;
 }
 
 let isQuitting = false;
-let hasShownTrayHint = false;
 let tray = null;
 
 app.on("before-quit", () => {

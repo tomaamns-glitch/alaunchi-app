@@ -32,6 +32,7 @@ import { ChangelogViewerDialog } from "@/components/changelog-viewer-dialog";
 import { PresenceButton } from "@/components/presence-button";
 import { ChatWindow } from "@/components/chat-window";
 import { ChatBubbleRow } from "@/components/chat-bubble-row";
+import type { ChatMode } from "@/lib/instance-context";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
 import { reportCaughtError } from "@/services/error-reporter";
@@ -546,6 +547,9 @@ export default function Home() {
   }, [modpacks]);
 
   const currentPack = modpacks[currentIndex];
+  // Shared by PresenceButton and ChatWindow below — both need "which carousel
+  // pack (if any) is this page currently showing" in the same shape.
+  const viewContext: ChatMode = currentPack ? { type: "carousel", pack: currentPack } : { type: "general" };
 
   useEffect(() => {
     if (currentPack) localStorage.setItem(CAROUSEL_POSITION_KEY, currentPack.id);
@@ -783,23 +787,15 @@ export default function Home() {
               don't need a selected modpack. */}
           <div className="flex items-center gap-1">
             <AccountMenuButton uuid={uuid} username={username} />
-            {currentPack && (
-              <PresenceButton
-                modpackId={currentPack.id}
-                packName={currentPack.name}
-                open={activePopup === "presence"}
-                onOpenChange={(next) => (next ? openOverlay("presence") : closeOverlay())}
-              />
-            )}
+            <PresenceButton
+              context={viewContext}
+              open={activePopup === "presence"}
+              onOpenChange={(next) => (next ? openOverlay("presence") : closeOverlay())}
+            />
             {uuid && (
               <div className="relative">
                 <ChatBubbleRow />
-                <ChatWindow
-                  myUuid={uuid}
-                  myUsername={username ?? ""}
-                  currentPackId={currentPack?.id ?? ""}
-                  defaultMode={currentPack ? { type: "carousel", pack: currentPack } : { type: "general" }}
-                />
+                <ChatWindow myUuid={uuid} myUsername={username ?? ""} defaultMode={viewContext} />
               </div>
             )}
           </div>

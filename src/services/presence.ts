@@ -9,6 +9,12 @@ export interface PresenceEntry {
   /** Total time played on this modpack — only present once a session has ended
    *  at least once; see updatePlaytime. */
   playtimeMs?: number;
+  /** Only meaningful for entries synthesized from user-activity.ts (the
+   *  friends section of the players panel) — true when online because
+   *  they're actively playing something, not just because the app is open.
+   *  Per-modpack presence entries never set this (online there already only
+   *  ever means "playing this one instance"). */
+  playing?: boolean;
 }
 
 /** Marks a player online for a modpack, and arms a server-side fallback (via

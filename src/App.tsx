@@ -21,6 +21,7 @@ import { Titlebar } from "@/components/titlebar";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { getLastViewPath, setLastView } from "@/lib/last-view";
 import { useAuth } from "@/hooks/use-auth";
+import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { onUpdateInstalled } from "@/services/electron";
 
 const queryClient = new QueryClient();
@@ -50,6 +51,7 @@ function StartupView() {
   const [location, setLocation] = useLocation();
   const authChecked = useAuth((s) => s.authChecked);
   const restored = useRef(false);
+  const previousLocation = useRef(location);
 
   useEffect(() => {
     setLastView(location);
@@ -62,6 +64,23 @@ function StartupView() {
       setLocation("/hub", { replace: true });
     }
   }, [authChecked, location, setLocation]);
+
+  // A chat panel/presence popup lives in global state (useChatHeads/
+  // useHeaderOverlay), not tied to whichever page mounted it — without this,
+  // switching between Inicio and Hub left it "stuck" open instead of closing,
+  // since the new page's own copy of the component just picks up the same
+  // still-open state. Scoped to exactly that pair of routes (not "any
+  // navigation"): friends.tsx/public-profile.tsx call openChat(uuid) and then
+  // navigate to /hub to show it, and that transition must NOT be undone here.
+  useEffect(() => {
+    const prev = previousLocation.current;
+    const isHomeHubSwitch = (prev === "/" && location === "/hub") || (prev === "/hub" && location === "/");
+    if (isHomeHubSwitch) {
+      useChatHeads.getState().minimizeChat();
+      useHeaderOverlay.getState().close();
+    }
+    previousLocation.current = location;
+  }, [location]);
 
   return null;
 }
