@@ -21,6 +21,12 @@ export interface ChatIndexEntry {
   lastMessage: string;
   lastTimestamp: number;
   unreadCount?: number;
+  /** Set by deleteConversationForMe — messages at or before this ms timestamp
+   *  are hidden from view for the current user only (never written to/read
+   *  from the shared chats/{conversationId}/messages node, so the other
+   *  participant's history is untouched). A message sent/received after this
+   *  point shows normally, effectively starting the conversation fresh. */
+  deletedBefore?: number;
 }
 
 export interface KnownUser {
@@ -105,7 +111,10 @@ async function pushMessageAndUpdateIndex(
   });
 
   await Promise.all([
-    set(ref(rtdb, `chatIndex/${myUuid}/${otherUuid}`), {
+    // update (not set) — a plain set would also wipe out deletedBefore if the
+    // sender had previously deleted their own view of this conversation and
+    // is now sending a fresh message; update() only touches these four keys.
+    update(ref(rtdb, `chatIndex/${myUuid}/${otherUuid}`), {
       otherUsername,
       lastMessage: indexPreview,
       lastTimestamp: timestamp,
@@ -113,7 +122,10 @@ async function pushMessageAndUpdateIndex(
     }),
     // Transaction (not set) on the recipient's side — a plain set would clobber
     // whatever unreadCount was already sitting there from earlier messages.
+    // Same reasoning as above: explicitly carry deletedBefore over instead of
+    // letting the transaction's replacement value silently drop it.
     runTransaction(ref(rtdb, `chatIndex/${otherUuid}/${myUuid}`), (current) => ({
+      ...(current?.deletedBefore ? { deletedBefore: current.deletedBefore } : {}),
       otherUsername: myUsername,
       lastMessage: indexPreview,
       lastTimestamp: timestamp,
@@ -159,4 +171,14 @@ export async function sendSharedContent(
 /** Clears unread count for one conversation — call when the user opens it. */
 export async function markConversationRead(myUuid: string, otherUuid: string): Promise<void> {
   await update(ref(rtdb, `chatIndex/${myUuid}/${otherUuid}`), { unreadCount: 0 });
+}
+
+/** "Eliminar conversación" — hides the history up to now for the current user
+ *  only. Never touches chats/{conversationId}/messages (shared with the other
+ *  participant); ChatWindow filters messages against this marker at render
+ *  time instead. A message sent/received after this point (by either side)
+ *  shows normally — see pushMessageAndUpdateIndex, which is careful to carry
+ *  this field forward rather than dropping it on the next message. */
+export async function deleteConversationForMe(myUuid: string, otherUuid: string): Promise<void> {
+  await update(ref(rtdb, `chatIndex/${myUuid}/${otherUuid}`), { deletedBefore: Date.now() });
 }

@@ -8,6 +8,8 @@ import { useDragReorder } from "@/hooks/use-drag-reorder";
 import { AccountMenuButton } from "@/components/account-menu-button";
 import { ChatBubbleRow } from "@/components/chat-bubble-row";
 import { ChatWindow } from "@/components/chat-window";
+import { PresenceButton } from "@/components/presence-button";
+import { useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { NewInstanceDialog } from "@/components/new-instance-dialog";
 import { NewFolderDialog } from "@/components/new-folder-dialog";
 import { HubSidebar, type HubView } from "@/components/hub-sidebar";
@@ -16,7 +18,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
-import { CAROUSEL_POSITION_KEY } from "@/pages/home";
 
 // Tile width in px. The grid uses `repeat(auto-fill, minmax(SIZE, 1fr))` so this
 // stays honest when the window is resized or maximised — columns reflow, tiles
@@ -51,10 +52,11 @@ export default function Hub() {
     const raw = Number(localStorage.getItem(TILE_SIZE_KEY));
     return raw >= TILE_MIN && raw <= TILE_MAX ? raw : 200;
   });
-  // The chat window needs a modpack to scope presence/sharing to — reuse
-  // whichever pack was last showing in the Inicio carousel rather than
-  // requiring this page to pick one of its own.
-  const [lastPackId] = useState(() => localStorage.getItem(CAROUSEL_POSITION_KEY));
+  // Same global store home.tsx uses — keeps the presence popup and the skin
+  // panel (elsewhere) mutually exclusive across both pages for free.
+  const activePopup = useHeaderOverlay((s) => s.active);
+  const openOverlay = useHeaderOverlay((s) => s.open);
+  const closeOverlay = useHeaderOverlay((s) => s.close);
 
   useEffect(() => {
     if (!isAuthenticated) setLocation("/login");
@@ -271,14 +273,16 @@ export default function Hub() {
         <div className="flex items-center gap-1">
           <AccountMenuButton uuid={uuid} username={username} />
           {uuid && (
+            <PresenceButton
+              context={{ type: "general" }}
+              open={activePopup === "presence"}
+              onOpenChange={(next) => (next ? openOverlay("presence") : closeOverlay())}
+            />
+          )}
+          {uuid && (
             <div className="relative">
               <ChatBubbleRow />
-              <ChatWindow
-                myUuid={uuid}
-                myUsername={username ?? ""}
-                currentPackId={lastPackId ?? ""}
-                defaultMode={{ type: "general" }}
-              />
+              <ChatWindow myUuid={uuid} myUsername={username ?? ""} defaultMode={{ type: "general" }} />
             </div>
           )}
         </div>
