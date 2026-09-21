@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation, useRoute } from "wouter";
 import { ArrowLeft, GalleryHorizontal, Home, KeyRound, Minus, Server, Square, Copy, X } from "lucide-react";
 import { isElectron } from "@/services/electron";
+import { getLastViewPath } from "@/lib/last-view";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { RedeemCodeDialog } from "@/components/redeem-code-dialog";
@@ -44,7 +45,7 @@ export function Titlebar() {
         <div className="flex items-center gap-1 px-2">
           <button
             style={noDragStyle}
-            onClick={() => setLocation(showBack ? "/" : "/hub")}
+            onClick={() => setLocation(onHub ? "/" : showBack ? getLastViewPath() : "/hub")}
             className="h-7 w-7 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
             aria-label={onHub ? "Ir al carrusel" : showBack ? "Volver" : "Panel"}
           >
@@ -61,18 +62,18 @@ export function Titlebar() {
           </span>
         </div>
         <div style={noDragStyle} className="flex items-center h-full">
-          <button
-            onClick={() => setLocation("/servers")}
-            className={`h-full px-3 flex items-center gap-1.5 text-[10px] font-mono font-bold transition-colors ${
-              onServers ? "text-accent bg-white/5" : "text-gray-400 hover:bg-white/10 hover:text-white"
-            }`}
-          >
-            <Server className="h-3 w-3" />
-            SERVER
-          </button>
-          <div className="w-px h-4 bg-white/10" />
           {isAdmin && (
             <>
+              <button
+                onClick={() => setLocation("/servers")}
+                className={`h-full px-3 flex items-center gap-1.5 text-[10px] font-mono font-bold transition-colors ${
+                  onServers ? "text-accent bg-white/5" : "text-gray-400 hover:bg-white/10 hover:text-white"
+                }`}
+              >
+                <Server className="h-3 w-3" />
+                SERVER
+              </button>
+              <div className="w-px h-4 bg-white/10" />
               <button
                 onClick={() => setLocation("/admin")}
                 className="h-full px-3 flex items-center justify-center text-[10px] font-mono font-bold text-gray-400 hover:bg-white/10 hover:text-white transition-colors"

@@ -25,6 +25,7 @@ interface ChatContactRailProps {
  *  with). */
 export function ChatContactRail({ myUuid, currentPackId, selectedUuid, expanded, onToggleExpanded }: ChatContactRailProps) {
   const chatIndex = useChatHeads((s) => s.chatIndex);
+  const directory = useChatHeads((s) => s.directory);
   const openChat = useChatHeads((s) => s.openChat);
   const [showAdd, setShowAdd] = useState(false);
   const [presence, setPresence] = useState<Record<string, PresenceEntry>>({});
@@ -32,10 +33,27 @@ export function ChatContactRail({ myUuid, currentPackId, selectedUuid, expanded,
 
   useEffect(() => subscribePresence(currentPackId, setPresence), [currentPackId]);
 
-  const contacts = Object.entries(chatIndex).sort(
+  // chatIndex only gets an entry once a message has actually been sent, so a
+  // conversation just opened (from a friend's profile, say) with nothing sent
+  // yet would otherwise be entirely absent from this list — fall back to the
+  // global user directory for its username so it still shows up, highlighted.
+  const contactsSource =
+    selectedUuid && !chatIndex[selectedUuid]
+      ? {
+          ...chatIndex,
+          [selectedUuid]: {
+            otherUsername: directory[selectedUuid]?.username ?? presence[selectedUuid]?.username ?? "",
+            lastMessage: "",
+            lastTimestamp: Date.now(),
+          },
+        }
+      : chatIndex;
+  const contacts = Object.entries(contactsSource).sort(
     ([, a], [, b]) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0)
   );
-  const roster = sortAllPresence(presence).filter(([uuid]) => uuid !== myUuid && !chatIndex[uuid]);
+  const roster = sortAllPresence(presence).filter(
+    ([uuid]) => uuid !== myUuid && !chatIndex[uuid] && uuid !== selectedUuid
+  );
 
   return (
     <div
@@ -157,7 +175,7 @@ function ContactHead({
       <Avatar className="h-full w-full rounded-md">
         {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
         <AvatarFallback className="rounded-md bg-accent/20 text-accent text-[10px] font-bold">
-          {username?.charAt(0)?.toUpperCase() ?? "?"}
+          {username?.charAt(0)?.toUpperCase() || "?"}
         </AvatarFallback>
       </Avatar>
       {online && (

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useLocation } from "wouter";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, Scaling, X } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { useInstanceFolders } from "@/hooks/use-instance-folders";
@@ -14,10 +14,16 @@ import { HubSidebar, type HubView } from "@/components/hub-sidebar";
 import { InstanceTile } from "@/components/hub-tile";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Slider } from "@/components/ui/slider";
 import { CAROUSEL_POSITION_KEY } from "@/pages/home";
 
-type SortMode = "custom" | "name" | "recent";
+// Tile width in px. The grid uses `repeat(auto-fill, minmax(SIZE, 1fr))` so this
+// stays honest when the window is resized or maximised — columns reflow, tiles
+// keep the size you picked.
+const TILE_SIZE_KEY = "alaunchi_hub_tile_size";
+const TILE_MIN = 140;
+const TILE_MAX = 340;
 
 export default function Hub() {
   const { isAuthenticated, username, uuid } = useAuth();
@@ -39,7 +45,12 @@ export default function Hub() {
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [view, setView] = useState<HubView>({ kind: "all" });
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState<SortMode>("custom");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [tileSize, setTileSize] = useState(() => {
+    const raw = Number(localStorage.getItem(TILE_SIZE_KEY));
+    return raw >= TILE_MIN && raw <= TILE_MAX ? raw : 200;
+  });
   // The chat window needs a modpack to scope presence/sharing to — reuse
   // whichever pack was last showing in the Inicio carousel rather than
   // requiring this page to pick one of its own.
@@ -75,14 +86,20 @@ export default function Hub() {
     return { baseIds: order.filter((id) => pinned.includes(id) && byId.has(id)), reorderFn: null as ((next: string[]) => void) | null };
   }, [view, order, folderOrder, pinned, byId, reorderAll, reorderInFolder]);
 
-  const canDrag = sort === "custom" && !!reorderFn;
-  const displayIds = useMemo(() => {
-    if (sort === "custom") return baseIds;
-    const withName = baseIds.map((id) => ({ id, name: byId.get(id)?.name ?? "", at: byId.get(id)?.installedAt ?? 0 }));
-    if (sort === "name") withName.sort((a, b) => a.name.localeCompare(b.name));
-    else withName.sort((a, b) => b.at - a.at);
-    return withName.map((x) => x.id);
-  }, [sort, baseIds, byId]);
+  const canDrag = !!reorderFn;
+  const displayIds = baseIds;
+
+  useEffect(() => {
+    localStorage.setItem(TILE_SIZE_KEY, String(tileSize));
+  }, [tileSize]);
+
+  // Fixed-width columns (no `1fr`) so a tile stays exactly the size you picked —
+  // resizing / maximising the window only changes how many columns fit, not the
+  // tiles themselves. Centred so there's no lopsided gap when they don't fill.
+  const gridStyle: CSSProperties = {
+    gridTemplateColumns: `repeat(auto-fill, ${tileSize}px)`,
+    justifyContent: "center",
+  };
 
   const { handlersFor, draggedId } = useDragReorder({
     order: displayIds,
@@ -126,49 +143,79 @@ export default function Hub() {
   };
 
   return (
-    <div className="relative min-h-full bg-background text-foreground flex flex-col">
-      <div className="relative z-10 flex-1 flex flex-col min-h-0 px-6 py-6 gap-6">
+    <div className="relative h-full overflow-hidden bg-background text-foreground flex flex-col">
+      <div className="relative z-10 flex-1 flex flex-col min-h-0 px-6 pt-6 pb-4 gap-6">
         {/* Same floating glass-card treatment as the Perfil header — rounded-xl,
             bg-card/40, one scoped accent glow — instead of the old flush,
             square-cornered bar, so the two screens read as the same app. */}
         <div className="relative shrink-0 rounded-xl border border-white/10 bg-card/40 p-5 overflow-hidden">
           <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
-          <div className="relative space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-xl font-bold leading-tight">Mis instancias</h1>
-                <p className="text-xs text-muted-foreground">
-                  {instances.length} instancia{instances.length === 1 ? "" : "s"}
-                </p>
-              </div>
+          <div className="relative flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="text-xl font-bold leading-tight">Mis instancias</h1>
+              <p className="text-xs text-muted-foreground">
+                {instances.length} instancia{instances.length === 1 ? "" : "s"}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              {instances.length > 0 && (
+                <div className="flex items-center">
+                  {searchOpen && (
+                    <Input
+                      ref={searchRef}
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      onBlur={() => !search && setSearchOpen(false)}
+                      onKeyDown={(e) => e.key === "Escape" && (setSearch(""), setSearchOpen(false))}
+                      placeholder="Nombre de la instancia..."
+                      className="h-9 w-52 text-sm mr-1"
+                    />
+                  )}
+                  <Button
+                    size="icon"
+                    variant={searchOpen ? "secondary" : "ghost"}
+                    className="h-9 w-9 shrink-0"
+                    aria-label={searchOpen ? "Cerrar búsqueda" : "Buscar instancia"}
+                    onClick={() => {
+                      if (searchOpen) {
+                        setSearch("");
+                        setSearchOpen(false);
+                      } else {
+                        setSearchOpen(true);
+                        setTimeout(() => searchRef.current?.focus(), 0);
+                      }
+                    }}
+                  >
+                    {searchOpen ? <X className="h-4 w-4" /> : <Search className="h-4 w-4" />}
+                  </Button>
+                </div>
+              )}
+
+              {instances.length > 0 && (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button size="icon" variant="ghost" className="h-9 w-9" aria-label="Tamaño de las instancias">
+                      <Scaling className="h-4 w-4" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="w-56">
+                    <p className="text-xs font-medium mb-3">Tamaño de las instancias</p>
+                    <Slider
+                      min={TILE_MIN}
+                      max={TILE_MAX}
+                      step={10}
+                      value={[tileSize]}
+                      onValueChange={([v]) => setTileSize(v)}
+                    />
+                  </PopoverContent>
+                </Popover>
+              )}
+
               <Button size="sm" onClick={() => setDialogOpen(true)}>
                 <Plus className="mr-1.5 h-3.5 w-3.5" /> Nueva instancia
               </Button>
             </div>
-
-            {instances.length > 0 && (
-              <div className="flex items-center gap-2 pt-3 border-t border-white/5">
-                <div className="relative flex-1 max-w-xs">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                  <Input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Buscar instancia..."
-                    className="h-8 pl-8 text-sm"
-                  />
-                </div>
-                <Select value={sort} onValueChange={(v) => setSort(v as SortMode)} disabled={searching}>
-                  <SelectTrigger className="w-40 h-8 text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="custom">Personalizado</SelectItem>
-                    <SelectItem value="name">Nombre</SelectItem>
-                    <SelectItem value="recent">Recientes</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
           </div>
         </div>
 
@@ -185,7 +232,7 @@ export default function Hub() {
             searchResults.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-16">Ninguna instancia coincide con "{search}".</p>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              <div className="grid gap-4" style={gridStyle}>
                 {searchResults.map((inst) => renderTile(inst.id, false))}
               </div>
             )
@@ -194,7 +241,7 @@ export default function Hub() {
               {view.kind === "favorites" ? "No has destacado ninguna instancia todavía." : "Esta carpeta está vacía."}
             </p>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            <div className="grid gap-4" style={gridStyle}>
               {displayIds.map((id) => renderTile(id, canDrag))}
             </div>
           )}
@@ -223,10 +270,15 @@ export default function Hub() {
       <footer className="relative z-20 h-20 border-t border-white/5 bg-card/50 backdrop-blur flex items-center px-6 shrink-0">
         <div className="flex items-center gap-1">
           <AccountMenuButton uuid={uuid} username={username} />
-          {uuid && lastPackId && (
+          {uuid && (
             <div className="relative">
               <ChatBubbleRow />
-              <ChatWindow myUuid={uuid} myUsername={username ?? ""} currentPackId={lastPackId} />
+              <ChatWindow
+                myUuid={uuid}
+                myUsername={username ?? ""}
+                currentPackId={lastPackId ?? ""}
+                defaultMode={{ type: "general" }}
+              />
             </div>
           )}
         </div>

@@ -124,6 +124,7 @@ import {
   type MinemevFile,
 } from "@/services/minemev";
 import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
+import { getLastViewPath } from "@/lib/last-view";
 import { formatBytes, formatPlaytime } from "@/lib/format";
 import { toast } from "sonner";
 import { SiModrinth } from "react-icons/si";
@@ -577,7 +578,9 @@ export default function ModpackDetail() {
         );
         if (!cancelled) setUpdates(updateEntries);
       }
-    })().finally(() => {
+    })().catch((e) => {
+      if (!cancelled) toast.error(e?.message || "No se pudo cargar el contenido del modpack.");
+    }).finally(() => {
       if (!cancelled) setLoading(false);
     });
 
@@ -914,7 +917,7 @@ export default function ModpackDetail() {
     return (
       <div className="min-h-full bg-background text-foreground flex flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Modpack no encontrado.</p>
-        <Button variant="outline" onClick={() => setLocation("/")}>
+        <Button variant="outline" onClick={() => setLocation(getLastViewPath())}>
           <ArrowLeft className="mr-2 h-4 w-4" /> Volver
         </Button>
       </div>
@@ -1185,10 +1188,12 @@ export default function ModpackDetail() {
       )}
       <div ref={headerGroupRef} className="sticky top-0 z-30 bg-background">
         <div className="relative h-32 md:h-40 bg-black/50 overflow-hidden">
-          {pack.bannerUrl || pack.imageUrl ? (
-            <img src={pack.bannerUrl || pack.imageUrl} alt={pack.name} className="w-full h-full object-cover" />
+          {pack.bannerUrl ? (
+            <img src={pack.bannerUrl} alt={pack.name} className="w-full h-full object-cover" />
           ) : (
-            <div className="w-full h-full bg-gradient-to-br from-accent/20 to-black" />
+            // No banner → a wash of the icon's dominant colour (useDynamicAccent
+            // above has already retinted --accent from pack.imageUrl).
+            <div className="w-full h-full bg-gradient-to-br from-accent/45 via-accent/15 to-background" />
           )}
           <div className="absolute inset-0 bg-[linear-gradient(to_top,hsl(var(--background)/0.9)_0%,hsl(var(--background)/0.5)_18%,hsl(var(--background)/0.15)_40%,transparent_65%)]" />
         </div>

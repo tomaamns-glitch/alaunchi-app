@@ -46,6 +46,17 @@ export interface PublicProfileSnapshot {
   /** Firebase Storage download URL for a custom banner — absent means "use
    *  the bundled default" (see DEFAULT_PROFILE_BANNER in services/banner.ts). */
   bannerUrl?: string;
+  /** Short line shown under the username on the profile card. */
+  bio?: string;
+  /** Cosmetic id from decoration-catalog.ts — maps to SkinViewerAnimated's
+   *  `effect` prop. "none" / absent = no particles. */
+  avatarDecoration?: string;
+  /** Cosmetic id from decoration-catalog.ts for the card's animated border.
+   *  "none" / absent = plain border. */
+  frame?: string;
+  /** Banner URLs this profile has used before (newest first, capped) — offered
+   *  as quick re-picks in the edit dialog. */
+  recentBanners?: string[];
   totalPlaytimeMs: number;
   /** Ids into the shared GitHub catalog — the viewer's own useModpacks store
    *  already has the full objects, same catalog for everyone. */
@@ -86,6 +97,62 @@ export async function getProfileBanner(uuid: string): Promise<string | null> {
   return snap.val() ?? null;
 }
 
+const RECENT_BANNERS_CAP = 6;
+
+/** Sets the current banner and folds it into the "recently used" list (newest
+ *  first, deduped, capped). Preset/default banners aren't remembered. */
+export async function setProfileBannerRemembered(
+  uuid: string,
+  bannerUrl: string,
+  remember: boolean
+): Promise<string[]> {
+  const patch: Record<string, unknown> = { bannerUrl };
+  let recent: string[] = [];
+  if (remember) {
+    const snap = await get(ref(rtdb, `profiles/${uuid}/recentBanners`));
+    const prev: string[] = Array.isArray(snap.val()) ? snap.val() : [];
+    recent = [bannerUrl, ...prev.filter((u) => u !== bannerUrl)].slice(0, RECENT_BANNERS_CAP);
+    patch.recentBanners = recent;
+  }
+  await update(ref(rtdb, `profiles/${uuid}`), patch);
+  return recent;
+}
+
+export interface ProfileCustomization {
+  bio: string;
+  avatarDecoration: string;
+  frame: string;
+  bannerUrl: string | null;
+  recentBanners: string[];
+  visibility: ProfileVisibility;
+}
+
+/** One read of everything the Editar / Personalizar dialogs need. */
+export async function getProfileCustomization(uuid: string): Promise<ProfileCustomization> {
+  const snap = await get(ref(rtdb, `profiles/${uuid}`));
+  const v = snap.val() ?? {};
+  return {
+    bio: typeof v.bio === "string" ? v.bio : "",
+    avatarDecoration: v.avatarDecoration ?? "none",
+    frame: v.frame ?? "none",
+    bannerUrl: v.bannerUrl ?? null,
+    recentBanners: Array.isArray(v.recentBanners) ? v.recentBanners : [],
+    visibility: (v.visibility as ProfileVisibility) ?? "everyone",
+  };
+}
+
+export async function setProfileBio(uuid: string, bio: string): Promise<void> {
+  await update(ref(rtdb, `profiles/${uuid}`), { bio: bio.trim() || null });
+}
+
+export async function setProfileAvatarDecoration(uuid: string, id: string): Promise<void> {
+  await update(ref(rtdb, `profiles/${uuid}`), { avatarDecoration: id });
+}
+
+export async function setProfileFrame(uuid: string, id: string): Promise<void> {
+  await update(ref(rtdb, `profiles/${uuid}`), { frame: id });
+}
+
 export function subscribeProfile(
   uuid: string,
   callback: (profile: PublicProfileSnapshot | null) => void
@@ -103,6 +170,8 @@ export function subscribeProfile(
         onlineInstanceIds: val.onlineInstanceIds ?? [],
         privateInstances: val.privateInstances ?? [],
         favorites: val.favorites ?? [],
+        avatarDecoration: val.avatarDecoration ?? "none",
+        frame: val.frame ?? "none",
       }
     );
   });

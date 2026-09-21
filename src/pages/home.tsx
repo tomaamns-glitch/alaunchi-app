@@ -14,10 +14,12 @@ import {
   ChevronRight,
   Package,
   KeyRound,
+  Settings,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { installSnapshot, launchMinecraft, onClosedToTray } from "@/services/electron";
 import { markOnline } from "@/services/presence";
+import { markPlayingInstance } from "@/services/user-activity";
 import { touchUserDirectory } from "@/services/chat";
 import { getAzureClientId } from "@/services/auth";
 import { toast } from "sonner";
@@ -102,9 +104,14 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
     let cancelled = false;
     const repoUrl = getGithubRepo();
     const token = getModpacksToken();
-    fetchSnapshot(repoUrl, pack.id, token || undefined).then((manifest) => {
-      if (!cancelled) setUpdateManifest(manifest);
-    });
+    fetchSnapshot(repoUrl, pack.id, token || undefined)
+      .then((manifest) => {
+        if (!cancelled) setUpdateManifest(manifest);
+      })
+      // Best-effort — this only drives the optional "what's new" announcement, not the
+      // update itself. A failure here (rate limit, network) just means no announcement
+      // this time, not something worth surfacing as an error.
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -293,6 +300,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
         clientId: getAzureClientId(),
       });
       markOnline(pack.id, auth.uuid, auth.username).catch(() => {});
+      markPlayingInstance(auth.uuid, auth.username, pack.id, pack.name, "github").catch(() => {});
       toast.success(`¡${pack.name} iniciado!`);
     } catch (e: any) {
       reportCaughtError(`modpack:launching:${pack.id}`, e);
@@ -435,7 +443,7 @@ type JavaInstallStage = "idle" | "fetching" | "downloading" | "extracting" | "do
 export default function Home() {
   const { isAuthenticated, username, uuid } = useAuth();
   const [, setLocation] = useLocation();
-  const { modpacks, loadModpacks, loading } = useModpacks();
+  const { modpacks, loadModpacks, loading, error: modpacksError } = useModpacks();
   const isAdmin = useIsAdmin();
   const [redeemOpen, setRedeemOpen] = useState(false);
 
@@ -620,29 +628,70 @@ export default function Home() {
 
       <main className="flex-1 relative overflow-hidden min-h-0">
         {loading ? (
-          <div className="flex items-center justify-center h-full">
+          // absolute inset-0 (not h-full) — same reasoning as the two states below:
+          // main's real height only resolves reliably for absolutely-positioned children,
+          // the same trick the loaded carousel below already relies on.
+          <div className="absolute inset-0 flex items-center justify-center">
             <Loader2 className="h-8 w-8 animate-spin text-accent" />
           </div>
+        ) : modpacks.length === 0 && modpacksError ? (
+          // Distinct from the genuine "nothing published/redeemed yet" state below —
+          // loadModpacks() failing (GitHub rate limit, network drop, ...) used to look
+          // identical to a real empty catalog, with nothing telling the player it was
+          // actually a transient error they could just retry.
+          //
+          // absolute inset-0 instead of h-full: main's flex-1 height doesn't reliably
+          // propagate as a percentage basis through this page's nesting (AnimatePresence
+          // banner + main + this wrapper), so h-full here used to resolve to this div's
+          // own content height instead of the real available space — the card ended up
+          // hugging the top of the window instead of sitting in the middle. Absolute
+          // positioning against `main` (which has position: relative) sidesteps that
+          // entirely, the same way the loaded-carousel branch further below already does.
+          <div className="absolute inset-0 flex items-center justify-center px-6">
+            <div className="absolute inset-0 bg-gradient-to-b from-destructive/[0.04] via-transparent to-transparent" />
+            <div className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-card/50 backdrop-blur-sm px-8 py-10 flex flex-col items-center text-center gap-5 shadow-xl shadow-black/20">
+              <div className="h-16 w-16 rounded-2xl bg-destructive/10 border border-destructive/25 flex items-center justify-center">
+                <AlertTriangle className="h-7 w-7 text-destructive" />
+              </div>
+              <div className="space-y-2">
+                <h2 className="text-lg font-semibold text-foreground">No se pudo cargar el catálogo</h2>
+                <p className="text-sm text-muted-foreground leading-relaxed">{modpacksError}</p>
+              </div>
+              <Button className="w-full font-bold" onClick={() => loadModpacks()}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Reintentar
+              </Button>
+            </div>
+          </div>
         ) : modpacks.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
-            {isAdmin ? (
-              <>
-                <p className="text-lg font-medium">No hay modpacks disponibles</p>
-                <p className="text-sm">Configura el repositorio de GitHub en Ajustes</p>
-                <Button variant="outline" size="sm" onClick={() => setLocation("/settings")}>
+          <div className="absolute inset-0 flex items-center justify-center px-6">
+            <div className="absolute inset-0 bg-gradient-to-b from-accent/[0.04] via-transparent to-transparent" />
+            <div className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-card/50 backdrop-blur-sm px-8 py-10 flex flex-col items-center text-center gap-5 shadow-xl shadow-black/20">
+              <div className="h-16 w-16 rounded-2xl bg-accent/10 border border-accent/25 flex items-center justify-center">
+                {isAdmin ? <Settings className="h-7 w-7 text-accent" /> : <KeyRound className="h-7 w-7 text-accent" />}
+              </div>
+              <div className="space-y-2">
+                <h2 className="text-lg font-semibold text-foreground">
+                  {isAdmin ? "No hay modpacks disponibles" : "Aún no tienes ningún modpack"}
+                </h2>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  {isAdmin
+                    ? "Configura el repositorio de GitHub en Ajustes para empezar a publicar y jugar modpacks."
+                    : "Pídele a un administrador un código de acceso y añádelo aquí para empezar a jugar."}
+                </p>
+              </div>
+              {isAdmin ? (
+                <Button className="w-full font-bold" onClick={() => setLocation("/settings")}>
+                  <Settings className="mr-2 h-4 w-4" />
                   Ir a Ajustes
                 </Button>
-              </>
-            ) : (
-              <>
-                <p className="text-lg font-medium">No tienes ninguna instancia</p>
-                <p className="text-sm">Añade una con el código que te hayan pasado</p>
-                <Button variant="outline" size="sm" onClick={() => setRedeemOpen(true)}>
-                  <KeyRound className="mr-2 h-3.5 w-3.5" />
-                  Añadir
+              ) : (
+                <Button className="w-full font-bold" onClick={() => setRedeemOpen(true)}>
+                  <KeyRound className="mr-2 h-4 w-4" />
+                  Añadir con código
                 </Button>
-              </>
-            )}
+              )}
+            </div>
           </div>
         ) : (
           currentPack && (
@@ -728,40 +777,54 @@ export default function Home() {
         )}
       </main>
 
-      {!loading && currentPack && (
+      {!loading && (
         <footer className="relative h-20 border-t border-white/5 bg-card/50 backdrop-blur flex items-center justify-between px-6 shrink-0">
+          {/* Always here — the account menu (Skin, Ajustes…) and your chats
+              don't need a selected modpack. */}
           <div className="flex items-center gap-1">
             <AccountMenuButton uuid={uuid} username={username} />
-            <PresenceButton
-              modpackId={currentPack.id}
-              packName={currentPack.name}
-              open={activePopup === "presence"}
-              onOpenChange={(next) => (next ? openOverlay("presence") : closeOverlay())}
-            />
+            {currentPack && (
+              <PresenceButton
+                modpackId={currentPack.id}
+                packName={currentPack.name}
+                open={activePopup === "presence"}
+                onOpenChange={(next) => (next ? openOverlay("presence") : closeOverlay())}
+              />
+            )}
             {uuid && (
               <div className="relative">
                 <ChatBubbleRow />
-                <ChatWindow myUuid={uuid} myUsername={username ?? ""} currentPackId={currentPack.id} />
+                <ChatWindow
+                  myUuid={uuid}
+                  myUsername={username ?? ""}
+                  currentPackId={currentPack?.id ?? ""}
+                  defaultMode={currentPack ? { type: "carousel", pack: currentPack } : { type: "general" }}
+                />
               </div>
             )}
           </div>
 
-          <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2">
-            <ModpackActionBar key={currentPack.id} pack={currentPack} />
-          </div>
+          {/* Play button + content shortcuts only once there's a modpack. */}
+          {currentPack && (
+            <>
+              <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2">
+                <ModpackActionBar key={currentPack.id} pack={currentPack} />
+              </div>
 
-          <div className="flex items-center gap-1">
-            <ChangelogHistoryButton modpackId={currentPack.id} />
-            <button
-              type="button"
-              onClick={() => setLocation(`/modpack/${currentPack.id}`)}
-              data-testid="button-instance-manager"
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors text-gray-200"
-            >
-              <Package className="h-4 w-4" />
-              <span className="text-sm font-medium">Contenido</span>
-            </button>
-          </div>
+              <div className="flex items-center gap-1">
+                <ChangelogHistoryButton modpackId={currentPack.id} />
+                <button
+                  type="button"
+                  onClick={() => setLocation(`/modpack/${currentPack.id}`)}
+                  data-testid="button-instance-manager"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors text-gray-200"
+                >
+                  <Package className="h-4 w-4" />
+                  <span className="text-sm font-medium">Contenido</span>
+                </button>
+              </div>
+            </>
+          )}
         </footer>
       )}
 

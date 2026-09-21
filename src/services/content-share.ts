@@ -19,14 +19,31 @@ export interface SharedContent {
   sha1: string;
   size: number;
   downloadUrl: string;
-  /** Absent for "skins" — skins live in the account-wide skin library, not
-   *  any one modpack's instance folder. */
+  /** The sender's own source instance — absent for "skins" (account-wide, not
+   *  tied to any instance) and always absent for isReference content (a
+   *  favorite has no file of its own to point at). NOT necessarily something
+   *  the recipient has: only used as a direct-install target when the message
+   *  itself was sent in that exact carousel instance's mode (see
+   *  ChatMessage.carouselInstanceId) and the recipient has that instance too
+   *  — otherwise the recipient goes through content-compat.ts instead. */
   modpackId?: string;
   /** Only set for category === "schematics" — which of the two destination
    *  folders (Litematica vs WorldEdit/FAWE) to write into on download. */
   schematicSource?: "litematica" | "worldedit";
   /** Only set for category === "skins". */
   skinVariant?: "slim" | "classic";
+  /** Modrinth project id for mods/shaderpacks/resourcepacks that were
+   *  identified (via identifyModrinthFiles) or shared as a favorite reference.
+   *  Lets a recipient who doesn't have modpackId run compatibility detection
+   *  (content-compat.ts) against their own instances instead. */
+  modrinthProjectId?: string;
+  /** True for content shared from a favorite (services/favorites.ts) — a
+   *  Modrinth bookmark with no local file behind it. sha1/downloadUrl/size
+   *  above are empty placeholders, not real: the actual file for a specific
+   *  destination instance is resolved fresh from Modrinth (via
+   *  content-compat.ts, which already needs to hit the Modrinth API to check
+   *  compatibility) once the recipient picks where to install it. */
+  isReference?: boolean;
 }
 
 /**

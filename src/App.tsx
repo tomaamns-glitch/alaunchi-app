@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { useEffect, useRef } from "react";
+import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
@@ -19,6 +19,7 @@ import Hub from "@/pages/hub";
 import ModpackDetail from "@/pages/modpack-detail";
 import { Titlebar } from "@/components/titlebar";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { getLastViewPath, setLastView } from "@/lib/last-view";
 import { useAuth } from "@/hooks/use-auth";
 import { onUpdateInstalled } from "@/services/electron";
 
@@ -41,6 +42,28 @@ function AppSplash() {
       <Loader2 className="h-5 w-5 animate-spin text-accent" />
     </div>
   );
+}
+
+// Tracks the last "home view" (see src/lib/last-view.ts) and, on the first
+// launch of the session, drops you back on it.
+function StartupView() {
+  const [location, setLocation] = useLocation();
+  const authChecked = useAuth((s) => s.authChecked);
+  const restored = useRef(false);
+
+  useEffect(() => {
+    setLastView(location);
+  }, [location]);
+
+  useEffect(() => {
+    if (restored.current || !authChecked) return;
+    restored.current = true;
+    if (location === "/" && getLastViewPath() === "/hub") {
+      setLocation("/hub", { replace: true });
+    }
+  }, [authChecked, location, setLocation]);
+
+  return null;
 }
 
 function Router() {
@@ -89,6 +112,7 @@ function App() {
       <TooltipProvider>
         <WouterRouter hook={useHashLocation}>
           <div className="h-screen flex flex-col overflow-hidden">
+            <StartupView />
             <Titlebar />
             <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
               <ErrorBoundary>

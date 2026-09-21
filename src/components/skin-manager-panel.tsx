@@ -3,7 +3,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { invalidatePlayerHead } from "@/hooks/use-player-head";
 import { useShowcaseSkin } from "@/hooks/use-showcase-skin";
 import { getShowcaseUsernames, addShowcaseUsername, removeShowcaseUsername } from "@/lib/skin-showcase";
-import { SkinViewer3D } from "@/components/skin-viewer-3d";
+import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
@@ -244,12 +244,13 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
   return (
     <div className="w-[28rem] flex gap-4">
       <div className="flex flex-col items-center gap-1 shrink-0">
-        <SkinViewer3D
+        <SkinViewerAnimated
           skinUrl={skinDataUrl ?? `https://mc-heads.net/skin/${uuid}`}
           capeUrl={capeDataUrl}
           variant={activeSkin ? (activeSkin.variant === "SLIM" ? "slim" : "classic") : "auto-detect"}
           width={140}
           height={190}
+          effect="cherry-petals"
           className="cursor-grab active:cursor-grabbing"
         />
         <span className="text-sm font-medium text-gray-200">{username}</span>

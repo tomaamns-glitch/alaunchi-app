@@ -32,11 +32,18 @@ export function ChangelogHistoryButton({ modpackId }: ChangelogHistoryButtonProp
     setOpen(next);
     if (!next || history !== null) return;
     setLoading(true);
-    const repoUrl = getGithubRepo();
-    const token = getModpacksToken();
-    const manifest = await fetchSnapshot(repoUrl, modpackId, token || undefined);
-    setHistory([...(manifest?.changelogHistory ?? [])].reverse());
-    setLoading(false);
+    try {
+      const repoUrl = getGithubRepo();
+      const token = getModpacksToken();
+      const manifest = await fetchSnapshot(repoUrl, modpackId, token || undefined);
+      setHistory([...(manifest?.changelogHistory ?? [])].reverse());
+    } catch {
+      // Best-effort — leave history null so the popover shows its own empty state
+      // and a re-open (e.g. after the network recovers) tries again instead of
+      // getting stuck on a permanently-loading popover.
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

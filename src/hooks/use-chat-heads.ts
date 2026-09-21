@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { subscribeChatIndex, markConversationRead, type ChatIndexEntry } from "@/services/chat";
+import { subscribeChatIndex, subscribeUserDirectory, markConversationRead, type ChatIndexEntry, type KnownUser } from "@/services/chat";
 import { focusWindow, getAppIconDataUrl } from "@/services/electron";
 import { getPlayerHeadDataUrl } from "@/hooks/use-player-head";
 import { playNotificationSound } from "@/lib/notification-sound";
@@ -20,6 +20,12 @@ async function notifyNewMessage(uuid: string, name: string, text: string) {
 interface ChatHeadsState {
   myUuid: string | null;
   chatIndex: Record<string, ChatIndexEntry>;
+  /** Every player who's ever opened the app (services/chat.ts' touchUserDirectory),
+   *  keyed by uuid — the only reliable source for someone's username BEFORE a
+   *  first message has been exchanged (chatIndex only gets an entry once a
+   *  message actually gets sent, so a conversation opened fresh from a friend's
+   *  profile/the friends list has nothing there yet). */
+  directory: Record<string, KnownUser>;
   openUuid: string | null;
   pinnedUuids: Set<string>;
   init: (myUuid: string) => void;
@@ -29,6 +35,7 @@ interface ChatHeadsState {
 }
 
 let unsubscribeIndex: (() => void) | null = null;
+let unsubscribeDirectory: (() => void) | null = null;
 
 // Chats you had minimized (visible as a bubble, not necessarily unread) stay
 // that way across an app restart instead of quietly closing — scoped per
@@ -51,13 +58,15 @@ function savePinnedUuids(myUuid: string, pinnedUuids: Set<string>) {
 export const useChatHeads = create<ChatHeadsState>((set, get) => ({
   myUuid: null,
   chatIndex: {},
+  directory: {},
   openUuid: null,
   pinnedUuids: new Set(),
 
   init: (myUuid) => {
     if (get().myUuid === myUuid) return;
     unsubscribeIndex?.();
-    set({ myUuid, chatIndex: {}, openUuid: null, pinnedUuids: loadPinnedUuids(myUuid) });
+    unsubscribeDirectory?.();
+    set({ myUuid, chatIndex: {}, directory: {}, openUuid: null, pinnedUuids: loadPinnedUuids(myUuid) });
 
     let previous: Record<string, ChatIndexEntry> = {};
     unsubscribeIndex = subscribeChatIndex(myUuid, (index) => {
@@ -71,6 +80,8 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
       previous = index;
       set({ chatIndex: index });
     });
+
+    unsubscribeDirectory = subscribeUserDirectory((users) => set({ directory: users }));
   },
 
   openChat: (uuid) => {

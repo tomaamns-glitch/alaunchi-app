@@ -177,27 +177,62 @@ async function withRateLimitRetry<T extends MinimalResponse>(
   }
 }
 
+// Every regular player shares one embedded read-only token (app-config.ts'
+// getModpacksToken) unless they've set their own in Ajustes for publishing — several
+// friends checking for updates around the same time (e.g. right after an announcement)
+// can trip GitHub's secondary (burst) rate limit on that shared token even though the
+// group is nowhere near the 5000/hour primary budget. Retry that automatically instead
+// of surfacing it as "modpack not found" (the exact bug fetchSnapshot/fetchModpacks
+// used to have by swallowing every error the same way). A truly exhausted primary
+// budget fails fast instead, with the actual reset time, rather than retrying for
+// minutes against a limit that won't clear until then.
+const GH_API_MAX_ATTEMPTS = 6;
+
 async function ghApiFetch(
   path: string,
   token: string,
   opts: RequestInit = {}
 ): Promise<any> {
-  const res = await fetch(`https://api.github.com${path}`, {
-    ...opts,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "Content-Type": "application/json",
-      ...(opts.headers ?? {}),
-    },
-  });
-  if (!res.ok) {
+  for (let tryNum = 1; ; tryNum++) {
+    const res = await fetch(`https://api.github.com${path}`, {
+      ...opts,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        ...(opts.headers ?? {}),
+      },
+    });
+    if (res.ok) {
+      const text = await res.text();
+      return text ? JSON.parse(text) : null;
+    }
+
     const body = await res.text();
-    throw new Error(`GitHub API ${res.status}: ${body}`);
+
+    if (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0") {
+      const resetEpoch = parseInt(res.headers.get("x-ratelimit-reset") || "", 10);
+      const resetAt = Number.isFinite(resetEpoch) ? new Date(resetEpoch * 1000) : null;
+      throw new Error(
+        `Límite de peticiones a GitHub agotado (compartido entre todos los usuarios sin token propio).` +
+          (resetAt ? ` Se restablece a las ${resetAt.toLocaleTimeString()}.` : "")
+      );
+    }
+
+    const isSecondaryRateLimit = res.status === 403 && /secondary rate limit/i.test(body);
+    const isTransientServerError = res.status === 502 || res.status === 503 || res.status === 504;
+    if ((isSecondaryRateLimit || isTransientServerError) && tryNum < GH_API_MAX_ATTEMPTS) {
+      const retryAfterHeader = res.headers.get("retry-after");
+      const waitSeconds = retryAfterHeader ? parseInt(retryAfterHeader, 10) : Math.min(15 * tryNum, 90);
+      await new Promise((r) => setTimeout(r, waitSeconds * 1000));
+      continue;
+    }
+
+    const err = new Error(`GitHub API ${res.status}: ${body}`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
   }
-  const text = await res.text();
-  return text ? JSON.parse(text) : null;
 }
 
 async function getFileContents(
@@ -208,9 +243,20 @@ async function getFileContents(
 ): Promise<{ content: string; sha: string } | null> {
   try {
     const data = await ghApiFetch(`/repos/${owner}/${repo}/contents/${filePath}`, token);
-    return { content: atob(data.content.replace(/\n/g, "")), sha: data.sha };
-  } catch {
-    return null;
+    // Mirror image of putFileContents' btoa(unescape(encodeURIComponent(...))) below —
+    // without this, any accented character (tildes, ñ) in modpacks.json/manifest.json
+    // (names, descriptions, changelog, file paths) comes back mangled, and since publish
+    // flows read-modify-write these files, the corruption compounds on every publish.
+    const content = decodeURIComponent(escape(atob(data.content.replace(/\n/g, ""))));
+    return { content, sha: data.sha };
+  } catch (e: any) {
+    // Only a real 404 means "this file genuinely doesn't exist" — anything else (rate
+    // limit, network drop, GitHub 5xx) used to be swallowed into the exact same null,
+    // which every caller reads as "not published"/"doesn't exist yet" rather than the
+    // transient failure it actually was. Let those propagate so callers can tell a
+    // retryable hiccup apart from "really isn't there".
+    if (e?.status === 404) return null;
+    throw e;
   }
 }
 
@@ -255,27 +301,28 @@ export async function fetchModpacks(repoUrl: string, token?: string): Promise<Mo
 
   const { owner, repo } = parsed;
 
-  try {
-    let data: Omit<Modpack, "installed" | "installedVersion" | "updateAvailable">[];
-
-    if (token) {
-      const file = await getFileContents(owner, repo, "modpacks.json", token);
-      if (!file) return [];
-      data = JSON.parse(file.content);
-    } else {
-      const res = await fetch(rawUrl(owner, repo, "modpacks.json"), { cache: "no-store" });
-      if (!res.ok) throw new Error("Not found");
-      data = await res.json();
-    }
-
-    return data.map((mp) => ({
-      ...mp,
-      installed: false,
-      updateAvailable: false,
-    }));
-  } catch {
-    return [];
+  // Only "modpacks.json genuinely doesn't exist" (404 — a freshly configured repo with
+  // nothing published yet) resolves to an empty catalog. A rate limit, network drop or
+  // GitHub 5xx used to look exactly the same to callers as a real empty catalog — this
+  // now propagates instead, so loadModpacks() (use-modpacks.ts) can tell the two apart
+  // and show a "couldn't load, retry" state rather than a silent "you have no modpacks".
+  let data: Omit<Modpack, "installed" | "installedVersion" | "updateAvailable">[];
+  if (token) {
+    const file = await getFileContents(owner, repo, "modpacks.json", token);
+    if (!file) return [];
+    data = JSON.parse(file.content);
+  } else {
+    const res = await fetch(rawUrl(owner, repo, "modpacks.json"), { cache: "no-store" });
+    if (res.status === 404) return [];
+    if (!res.ok) throw new Error(`GitHub ${res.status} obteniendo el catálogo de modpacks.`);
+    data = await res.json();
   }
+
+  return data.map((mp) => ({
+    ...mp,
+    installed: false,
+    updateAvailable: false,
+  }));
 }
 
 // Short-lived manifest cache, keyed by modpackId — lets a fresh code redeem
@@ -311,23 +358,29 @@ export async function fetchSnapshot(
   if (!parsed) return null;
   const { owner, repo } = parsed;
   const p = `modpacks/${modpackId}/manifest.json`;
-  try {
-    let raw: string;
-    if (token) {
-      const f = await getFileContents(owner, repo, p, token);
-      if (!f) return null;
-      raw = f.content;
-    } else {
-      const res = await fetch(rawUrl(owner, repo, p), { cache: "no-store" });
-      if (!res.ok) return null;
-      raw = await res.text();
-    }
-    const data = JSON.parse(raw);
-    if (data.schemaVersion !== 2) return null;
-    return data as SnapshotManifest;
-  } catch {
-    return null;
+  // Same reasoning as fetchModpacks above: only a real 404 (this modpack genuinely has
+  // no manifest published) resolves to null. Anything else propagates so callers show
+  // an accurate error instead of "No hay manifiesto publicado para este modpack
+  // todavía" for what might actually be a rate limit or dropped connection.
+  let raw: string;
+  if (token) {
+    const f = await getFileContents(owner, repo, p, token);
+    if (!f) return null;
+    raw = f.content;
+  } else {
+    const res = await fetch(rawUrl(owner, repo, p), { cache: "no-store" });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`GitHub ${res.status} obteniendo el manifiesto de ${modpackId}.`);
+    raw = await res.text();
   }
+  let data: any;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(`El manifiesto de ${modpackId} no es JSON válido.`);
+  }
+  if (data.schemaVersion !== 2) return null;
+  return data as SnapshotManifest;
 }
 
 export function snapshotBaseUrl(repoUrl: string, manifest: SnapshotManifest): string {

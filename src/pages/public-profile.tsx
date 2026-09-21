@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
 import { useLocation, useParams } from "wouter";
-import { Boxes, Clock, Download, Gamepad2, Heart, Home as HomeIcon, Loader2, Lock, Play, UserPlus } from "lucide-react";
+import { Boxes, Clock, Download, Gamepad2, Heart, Home as HomeIcon, Loader2, Lock, MessageSquare, Play, UserMinus, UserPlus } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
-import { SkinViewer3D } from "@/components/skin-viewer-3d";
+import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
+import { ProfileFrame } from "@/components/profile-frame";
+import { toSkinEffect } from "@/lib/decoration-catalog";
 import { useShowcaseSkin } from "@/hooks/use-showcase-skin";
 import { subscribeProfile, type PublicProfileSnapshot, type PublicInstanceSummary } from "@/services/public-profile";
 import { DEFAULT_PROFILE_BANNER } from "@/services/banner";
-import { areFriends, sendFriendRequest, subscribeSentRequests } from "@/services/friends";
+import { removeFriend, sendFriendRequest, subscribeFriends, subscribeSentRequests } from "@/services/friends";
+import { useChatHeads } from "@/hooks/use-chat-heads";
 import { InstallFavoriteDialog } from "@/components/install-favorite-dialog";
 import { installOnlineInstance } from "@/lib/install-online-instance";
 import { installFromRecipe, type RecipeInstallResult } from "@/lib/instance-recipe";
@@ -192,9 +195,10 @@ export default function PublicProfile() {
   const { modpacks, loadModpacks } = useModpacks();
 
   const [profile, setProfile] = useState<PublicProfileSnapshot | null | undefined>(undefined);
-  const [authorized, setAuthorized] = useState<boolean | null>(null);
+  const [isFriend, setIsFriend] = useState(false);
   const [sentRequest, setSentRequest] = useState(false);
   const [sending, setSending] = useState(false);
+  const openChat = useChatHeads((s) => s.openChat);
 
   useEffect(() => {
     if (!isAuthenticated) setLocation("/login");
@@ -219,17 +223,13 @@ export default function PublicProfile() {
   }, [myUuid, targetUuid]);
 
   useEffect(() => {
-    if (!myUuid || !targetUuid || !profile) return;
-    if (profile.visibility !== "friends") {
-      setAuthorized(true);
-      return;
-    }
-    areFriends(myUuid, targetUuid).then(setAuthorized).catch(() => setAuthorized(false));
-  }, [myUuid, targetUuid, profile]);
+    if (!myUuid || !targetUuid) return;
+    return subscribeFriends(myUuid, (friends) => setIsFriend(!!friends[targetUuid]));
+  }, [myUuid, targetUuid]);
 
   if (!isAuthenticated || !targetUuid || !myUuid || !myUsername) return null;
 
-  if (profile === undefined || (profile?.visibility === "friends" && authorized === null)) {
+  if (profile === undefined) {
     return (
       <div className="min-h-full flex items-center justify-center">
         <Loader2 className="h-5 w-5 animate-spin text-accent" />
@@ -245,45 +245,48 @@ export default function PublicProfile() {
     );
   }
 
-  if (!authorized) {
-    return (
-      <div className="min-h-full flex flex-col items-center justify-center gap-3 text-center px-6">
-        <Lock className="h-8 w-8 text-muted-foreground" />
-        <h2 className="text-lg font-bold">{profile.username}</h2>
-        <p className="text-sm text-muted-foreground max-w-xs">
-          Este perfil solo es visible para sus amigos.
-        </p>
-        <Button
-          size="sm"
-          disabled={sentRequest || sending}
-          onClick={async () => {
-            setSending(true);
-            try {
-              await sendFriendRequest(myUuid, myUsername, targetUuid, profile.username);
-              setSentRequest(true);
-            } finally {
-              setSending(false);
-            }
-          }}
-        >
-          {sending ? (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <UserPlus className="mr-1.5 h-3.5 w-3.5" />
-          )}
-          {sentRequest ? "Solicitud enviada" : "Añadir amigo"}
-        </Button>
-      </div>
-    );
-  }
-
+  // The identity half (name, bio, decoration, frame, stats) is always visible.
+  // The content tabs (instancias, favoritos) only when the owner shares them
+  // with everyone, or with you as a friend.
+  const contentVisible = profile.visibility !== "friends" || isFriend;
   const totalInstances = profile.onlineInstanceIds.length + profile.privateInstances.length;
+
+  const handleAddFriend = async () => {
+    setSending(true);
+    try {
+      await sendFriendRequest(myUuid, myUsername, targetUuid, profile.username);
+      setSentRequest(true);
+    } catch {
+      toast.error("No se pudo enviar la solicitud.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleRemoveFriend = async () => {
+    try {
+      await removeFriend(myUuid, targetUuid);
+    } catch {
+      toast.error("No se pudo eliminar el amigo.");
+    }
+  };
+
+  const handleOpenChat = () => {
+    openChat(targetUuid);
+    setLocation("/hub");
+  };
 
   return (
     <ProfileContent
       profile={profile}
       modpacks={modpacks}
       totalInstances={totalInstances}
+      contentVisible={contentVisible}
+      friendState={isFriend ? "friends" : sentRequest ? "sent" : "none"}
+      sending={sending}
+      onAddFriend={handleAddFriend}
+      onRemoveFriend={handleRemoveFriend}
+      onOpenChat={handleOpenChat}
       onOpenOnline={(id) => setLocation(`/modpack/${id}`)}
     />
   );
@@ -293,11 +296,23 @@ function ProfileContent({
   profile,
   modpacks,
   totalInstances,
+  contentVisible,
+  friendState,
+  sending,
+  onAddFriend,
+  onRemoveFriend,
+  onOpenChat,
   onOpenOnline,
 }: {
   profile: PublicProfileSnapshot;
   modpacks: Modpack[];
   totalInstances: number;
+  contentVisible: boolean;
+  friendState: "none" | "sent" | "friends";
+  sending: boolean;
+  onAddFriend: () => void;
+  onRemoveFriend: () => void;
+  onOpenChat: () => void;
   onOpenOnline: (id: string) => void;
 }) {
   const skin = useShowcaseSkin(profile.username);
@@ -308,24 +323,65 @@ function ProfileContent({
     <div className="min-h-full bg-background text-foreground flex flex-col">
       <main className="flex-1 overflow-y-auto px-6 py-6">
         <div className="max-w-5xl w-full mx-auto space-y-6">
+          <ProfileFrame frame={profile.frame}>
           <div className="relative rounded-xl border border-white/10 bg-card/40 overflow-hidden">
             <div className="absolute inset-0">
               <img src={profile.bannerUrl || DEFAULT_PROFILE_BANNER} alt="" className="w-full h-full object-cover" />
               <div className="absolute inset-0 bg-gradient-to-r from-background via-background/85 to-background/25" />
             </div>
-            <div className="relative p-5 flex items-start gap-5">
-              <div
-                className="rounded-lg border border-white/10 bg-black/40 overflow-hidden shrink-0"
-                style={{ width: 100, height: 145 }}
-              >
-                {skin.fullDataUrl && <SkinViewer3D skinUrl={skin.fullDataUrl} variant={skin.variant} width={100} height={145} />}
+
+            <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
+              {friendState === "friends" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={onOpenChat}
+                    className="flex items-center gap-1.5 rounded-md bg-black/50 backdrop-blur-sm px-2.5 py-1.5 text-[11px] font-medium text-gray-200 hover:bg-black/70 hover:text-white transition-colors"
+                  >
+                    <MessageSquare className="h-3.5 w-3.5" />
+                    Abrir chat
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onRemoveFriend}
+                    className="flex items-center gap-1.5 rounded-md bg-black/50 backdrop-blur-sm px-2.5 py-1.5 text-[11px] font-medium text-gray-300 hover:bg-red-600/80 hover:text-white transition-colors"
+                  >
+                    <UserMinus className="h-3.5 w-3.5" />
+                    Eliminar
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onAddFriend}
+                  disabled={friendState === "sent" || sending}
+                  className="flex items-center gap-1.5 rounded-md bg-black/50 backdrop-blur-sm px-2.5 py-1.5 text-[11px] font-medium text-gray-200 hover:bg-black/70 hover:text-white transition-colors disabled:opacity-70 disabled:hover:bg-black/50"
+                >
+                  {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
+                  {friendState === "sent" ? "Solicitud enviada" : "Añadir amigo"}
+                </button>
+              )}
+            </div>
+
+            <div className="relative p-5 flex items-stretch gap-5">
+              <div className="shrink-0" style={{ width: 100, height: 145 }}>
+                {skin.fullDataUrl && (
+                  <SkinViewerAnimated
+                    key={profile.avatarDecoration}
+                    skinUrl={skin.fullDataUrl}
+                    variant={skin.variant}
+                    width={100}
+                    height={145}
+                    effect={toSkinEffect(profile.avatarDecoration)}
+                  />
+                )}
               </div>
-              <div className="flex-1 min-w-0 space-y-4">
-                <div className="min-w-0">
+              <div className="flex-1 min-w-0 flex flex-col">
+                <div className="min-w-0 pr-28">
                   <h2 className="text-2xl font-bold truncate">{profile.username}</h2>
-                  <p className="text-sm text-muted-foreground">Jugador</p>
+                  {profile.bio && <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{profile.bio}</p>}
                 </div>
-                <div className="flex flex-wrap items-center gap-x-8 gap-y-3 pt-3 border-t border-white/5">
+                <div className="mt-auto flex flex-wrap items-center gap-x-8 gap-y-3 pt-3 border-t border-white/5">
                   <Stat icon={<Clock className="h-4 w-4" />} value={formatPlaytime(profile.totalPlaytimeMs)} label="Tiempo jugado" />
                   <Stat icon={<Gamepad2 className="h-4 w-4" />} value={String(totalInstances)} label="Instancias" />
                   <Stat icon={<Heart className="h-4 w-4" />} value={String(profile.favorites?.length ?? 0)} label="Favoritas" />
@@ -333,7 +389,16 @@ function ProfileContent({
               </div>
             </div>
           </div>
+          </ProfileFrame>
 
+          {!contentVisible ? (
+            <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-white/10 bg-card/30 py-14 text-center">
+              <Lock className="h-6 w-6 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground max-w-xs">
+                {profile.username} solo comparte sus instancias y favoritos con sus amigos.
+              </p>
+            </div>
+          ) : (
           <Tabs defaultValue="online">
             <TabsList className="h-auto w-full justify-start gap-6 rounded-none border-b border-white/10 bg-transparent p-0">
               <TabsTrigger value="online" className={tabTrigger}>
@@ -426,6 +491,7 @@ function ProfileContent({
               )}
             </TabsContent>
           </Tabs>
+          )}
         </div>
       </main>
 

@@ -182,6 +182,29 @@ function hashFileSha1(filePath) {
 // Per-hash in-flight dedup so concurrent workers wanting the same hash share one download.
 const inFlightObjects = new Map();
 
+// Per-modpackId lock shared by mc:install-snapshot and mc:launch. Nothing stopped the
+// same instance from being installed/updated and launched — or launched twice — at the
+// same time: the same modpack has a Play/Update button on the home carousel, the
+// instance-manager page and each hub tile, all with their own independent React state,
+// so nothing in the renderer actually prevents firing two of these concurrently. Two
+// installs would race writes to the same alaunchi-meta.json and instance files; two
+// launches would both truncate-open the same launch.log and spawn two JVMs against the
+// same save data/world.
+const activeModpackOps = new Map(); // modpackId -> "installing" | "launching"
+
+function acquireModpackOp(modpackId, kind) {
+  const existing = activeModpackOps.get(modpackId);
+  if (existing) {
+    const verb = existing === "installing" ? "instalando o actualizando" : "iniciando";
+    throw new Error(`Este modpack ya se está ${verb}. Espera a que termine antes de intentarlo de nuevo.`);
+  }
+  activeModpackOps.set(modpackId, kind);
+}
+
+function releaseModpackOp(modpackId) {
+  activeModpackOps.delete(modpackId);
+}
+
 async function ensureObject(hash, downloadUrl, headers) {
   const cachePath = objectCachePath(hash);
   if (fsSync.existsSync(cachePath)) {
@@ -231,6 +254,33 @@ async function ensureObject(hash, downloadUrl, headers) {
     return await p;
   } finally {
     inFlightObjects.delete(hash);
+  }
+}
+
+// Every regular player shares one embedded read-only GitHub token (see app-config.ts'
+// getModpacksToken) unless they've set their own in Ajustes — several friends checking
+// for updates or downloading a fresh publish's objects within the same minute can trip
+// GitHub's secondary (burst) rate limit even though nobody's anywhere near the
+// 5000/hour primary budget. downloadFile's HTTP-error path attaches statusCode/body/
+// headers to the error precisely so this can be told apart from a real 403/404 (object
+// genuinely never uploaded) instead of counting it as permanently missing — which used
+// to tell people to re-publish the modpack over what was actually a few seconds of
+// shared congestion.
+function isGithubSecondaryRateLimit(err) {
+  return err?.statusCode === 403 && typeof err.body === "string" && /secondary rate limit/i.test(err.body);
+}
+
+async function ensureObjectWithGithubRetry(hash, downloadUrl, headers) {
+  const MAX_ATTEMPTS = 5;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await ensureObject(hash, downloadUrl, headers);
+    } catch (e) {
+      if (!isGithubSecondaryRateLimit(e) || attempt >= MAX_ATTEMPTS) throw e;
+      const retryAfter = parseInt(e.headers?.["retry-after"] || "", 10);
+      const waitSeconds = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : Math.min(15 * attempt, 90);
+      await new Promise((r) => setTimeout(r, waitSeconds * 1000));
+    }
   }
 }
 
@@ -454,9 +504,11 @@ app.whenReady().then(async () => {
   };
 
   let launched = false;
+  let updateWatchdog = null;
   const proceedToMain = () => {
     if (launched) return;
     launched = true;
+    if (updateWatchdog) clearTimeout(updateWatchdog);
     launchMain();
     mainWindow.once("ready-to-show", () => {
       if (!splash.isDestroyed()) splash.close();
@@ -469,6 +521,20 @@ app.whenReady().then(async () => {
   // and relaunch automatically (isSilent, isForceRunAfter) before the player
   // ever reaches the main window. Any failure along the way just falls back
   // to launching the current version rather than blocking forever.
+  //
+  // That fallback only fires on an actual *error* event, though — checkForUpdates()
+  // and the download it triggers talk to a real network endpoint with no timeout of
+  // their own, so a connection that stalls silently (no error, no progress, nothing)
+  // would leave this frameless, closable-only-via-Alt+F4 splash spinning forever.
+  // Give up waiting after a generous window and open the app anyway; if the update
+  // does finish downloading later, install it on the next natural quit instead of
+  // force-quitting the app the player is by then already using.
+  const UPDATE_WATCHDOG_MS = 45_000;
+  updateWatchdog = setTimeout(() => {
+    console.warn(`[AutoUpdate] Sin respuesta tras ${UPDATE_WATCHDOG_MS / 1000}s — continuando sin esperar.`);
+    proceedToMain();
+  }, UPDATE_WATCHDOG_MS);
+
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
   // Without this, checkForUpdates() on an unpacked `electron .` run silently
@@ -483,7 +549,14 @@ app.whenReady().then(async () => {
   autoUpdater.on("download-progress", (progress) => sendSplashState({ state: "updating", percent: progress.percent }));
   autoUpdater.on("update-downloaded", () => {
     try { fsSync.writeFileSync(UPDATE_READY_FLAG, String(Date.now())); } catch {}
-    autoUpdater.quitAndInstall(true, true);
+    if (!launched) {
+      autoUpdater.quitAndInstall(true, true);
+    } else {
+      // The watchdog above already gave up and opened the main window — the player
+      // may be mid-session by now, so don't yank it out from under them. Fall back to
+      // installing next time they actually quit instead of forcing it right now.
+      autoUpdater.autoInstallOnAppQuit = true;
+    }
   });
   autoUpdater.on("update-not-available", proceedToMain);
   autoUpdater.on("error", (err) => {
@@ -501,52 +574,88 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-function downloadFile(url, destPath, onProgress, headers) {
+// Inactivity timeout (not total-duration): a stalled connection — WiFi dropped without
+// a FIN/RST, a NAT silently discarding an idle socket — otherwise never emits "error" or
+// "finish" at all, so the download's promise (and everything awaiting it: install,
+// update, launch) would hang forever with no way to recover short of restarting the app.
+// Reset on every chunk of activity so a slow-but-steady multi-hundred-MB download is
+// never penalized for its total size, only for going fully silent.
+const DOWNLOAD_INACTIVITY_MS = 30_000;
+
+function downloadFile(url, destPath, onProgress, headers, inactivityMs = DOWNLOAD_INACTIVITY_MS) {
   return new Promise((resolve, reject) => {
     const file = fsSync.createWriteStream(destPath);
     const protocol = url.startsWith("https") ? https : http;
+
+    let settled = false;
+    let timer = null;
+    const clearTimer = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+    };
+    const resetTimer = () => {
+      clearTimer();
+      timer = setTimeout(() => {
+        request.destroy(new Error(`Descarga sin actividad durante ${Math.round(inactivityMs / 1000)}s: ${url.split("?")[0]}`));
+      }, inactivityMs);
+    };
 
     // Attach this immediately: the stream can emit "error" (e.g. EPERM from an
     // antivirus briefly locking the temp file) before the HTTP response arrives
     // and handleResponse() attaches its own listener below. An EventEmitter that
     // errors with no listener throws, which crashes the whole main process.
-    let settled = false;
-    file.on("error", (err) => {
+    const fail = (err) => {
       if (settled) return;
       settled = true;
+      clearTimer();
       file.close(() => {
         fsSync.unlink(destPath, () => {});
         reject(err);
       });
-    });
+    };
+    file.on("error", fail);
 
     const handleResponse = (res) => {
+      resetTimer();
       if (res.statusCode === 301 || res.statusCode === 302) {
+        settled = true; // ownership of destPath/rejection now belongs to the redirected call
+        clearTimer();
         file.close(() => {
           fsSync.unlink(destPath, () => {});
           // Don't forward custom headers (esp. Authorization) to the redirect target —
           // presigned storage URLs reject requests carrying an unexpected Authorization header.
-          downloadFile(res.headers.location, destPath, onProgress).then(resolve).catch(reject);
+          downloadFile(res.headers.location, destPath, onProgress, undefined, inactivityMs).then(resolve).catch(reject);
         });
         return;
       }
       if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
-        res.resume();
-        file.close(() => {
-          fsSync.unlink(destPath, () => {});
-          reject(new Error(`HTTP ${res.statusCode} descargando ${url.split("?")[0]}`));
+        // Capture a small body + the response headers (bounded — error bodies are tiny
+        // JSON) instead of just discarding them, so a caller talking to an API that
+        // needs to tell a rate limit apart from a real 404/403 (see ensureObject's
+        // GitHub asset downloads below) actually can.
+        let errBody = "";
+        res.on("data", (chunk) => {
+          if (errBody.length < 4000) errBody += chunk;
+        });
+        res.on("end", () => {
+          const err = new Error(`HTTP ${res.statusCode} descargando ${url.split("?")[0]}`);
+          err.statusCode = res.statusCode;
+          err.body = errBody;
+          err.headers = res.headers;
+          fail(err);
         });
         return;
       }
       const total = parseInt(res.headers["content-length"] || "0", 10);
       let downloaded = 0;
       res.on("data", (chunk) => {
+        resetTimer();
         downloaded += chunk.length;
         if (onProgress && total > 0) onProgress(Math.round((downloaded / total) * 100));
       });
       res.pipe(file);
       file.on("finish", () => {
         settled = true;
+        clearTimer();
         file.close(() => resolve());
       });
       // Errors from here on are also caught by the early "error" listener above.
@@ -555,14 +664,8 @@ function downloadFile(url, destPath, onProgress, headers) {
     const request = headers
       ? protocol.get(url, { headers }, handleResponse)
       : protocol.get(url, handleResponse);
-    request.on("error", (err) => {
-      if (settled) return;
-      settled = true;
-      file.close(() => {
-        fsSync.unlink(destPath, () => {});
-        reject(err);
-      });
-    });
+    resetTimer();
+    request.on("error", fail);
   });
 }
 
@@ -856,7 +959,7 @@ async function generateInstanceId(name) {
   return id;
 }
 
-ipcMain.handle("instances:create", async (_, { name, loaderType, minecraftVersion, loaderVersion, iconDataUrl }) => {
+ipcMain.handle("instances:create", async (_, { name, loaderType, minecraftVersion, loaderVersion, iconDataUrl, bannerDataUrl }) => {
   const id = await generateInstanceId(name);
   const instanceDir = path.join(CUSTOM_INSTANCES_DIR, id);
   await fs.mkdir(path.join(instanceDir, "mods"), { recursive: true });
@@ -871,6 +974,7 @@ ipcMain.handle("instances:create", async (_, { name, loaderType, minecraftVersio
     loaderType,
     loaderVersion: loaderVersion || undefined,
     iconDataUrl: iconDataUrl || undefined,
+    bannerDataUrl: bannerDataUrl || undefined,
     installedAt: Date.now(),
     source: "custom",
   };
@@ -910,21 +1014,27 @@ async function extractBundleZip(zipPath, destDir) {
   const entries = zip.getEntries();
   for (const entry of entries) {
     if (entry.isDirectory) continue;
-    const entryPath = path.join(destDir, entry.entryName);
+    // "Zip Slip": an entryName like "../../../somewhere" would otherwise write outside
+    // destDir — safeJoin rejects it instead of silently following it out.
+    const entryPath = safeJoin(destDir, entry.entryName);
     await fs.mkdir(path.dirname(entryPath), { recursive: true });
     await fs.writeFile(entryPath, entry.getData());
   }
 }
 
 function resolveFileDestPath(file, instanceDir) {
-  if (file.path) return path.join(instanceDir, file.path);
+  // Unlike mc:install-snapshot's manifest.files (validated by validateManifest + joined
+  // with safeJoin), file.path/file.filename here come straight from the caller with no
+  // "no .. segments" check — safeJoin below is what actually stops one from escaping
+  // instanceDir instead of just trusting the caller.
+  if (file.path) return safeJoin(instanceDir, file.path);
   const isZip = file.filename?.toLowerCase().endsWith(".zip");
   const isBundle = file.type === "bundle" || (isZip && file.type === "mod");
   if (isBundle) return null;
-  if (file.type === "mod") return path.join(instanceDir, "mods", file.filename);
-  if (file.type === "resourcepack") return path.join(instanceDir, "resourcepacks", file.filename);
-  if (file.type === "shader") return path.join(instanceDir, "shaderpacks", file.filename);
-  return path.join(instanceDir, file.filename);
+  if (file.type === "mod") return safeJoin(instanceDir, path.join("mods", file.filename));
+  if (file.type === "resourcepack") return safeJoin(instanceDir, path.join("resourcepacks", file.filename));
+  if (file.type === "shader") return safeJoin(instanceDir, path.join("shaderpacks", file.filename));
+  return safeJoin(instanceDir, file.filename);
 }
 
 async function fileNeedsDownload(destPath, sizeMb) {
@@ -1031,11 +1141,13 @@ ipcMain.handle("mc:update-modpack", async (event, { modpackId, filesToDelete, fi
     if (metaContent) await fs.writeFile(metaPath, metaContent);
   } else {
     for (const filename of (filesToDelete || [])) {
+      // filename comes straight from the caller — safeJoin stops a "../../whatever"
+      // entry from deleting a file outside this instance's own folder.
       const possiblePaths = [
-        path.join(instanceDir, "mods", filename),
-        path.join(instanceDir, "resourcepacks", filename),
-        path.join(instanceDir, "shaderpacks", filename),
-        path.join(instanceDir, filename),
+        safeJoin(instanceDir, path.join("mods", filename)),
+        safeJoin(instanceDir, path.join("resourcepacks", filename)),
+        safeJoin(instanceDir, path.join("shaderpacks", filename)),
+        safeJoin(instanceDir, filename),
       ];
       for (const p of possiblePaths) {
         if (fsSync.existsSync(p)) { await fs.unlink(p); break; }
@@ -1162,6 +1274,8 @@ function validateManifest(manifest) {
 
 ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manifest, baseUrl, token }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
+  acquireModpackOp(modpackId, "installing");
+  try {
   validateManifest(manifest);
   if (typeof baseUrl !== "string" || !baseUrl.startsWith("https://")) {
     throw new Error("Falta URL base de objetos (https)");
@@ -1292,7 +1406,7 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
       try {
         const assetUrl = assetByHash?.get(hash);
         if (assetUrl) {
-          await ensureObject(hash, assetUrl, {
+          await ensureObjectWithGithubRetry(hash, assetUrl, {
             Authorization: `Bearer ${token}`,
             Accept: "application/octet-stream",
             "User-Agent": "ALaunchi/1.0",
@@ -1368,6 +1482,9 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
 
   win?.webContents.send("install-progress", { modpackId, stage: "done", progress: 100 });
   return { success: true, totalFiles: total };
+  } finally {
+    releaseModpackOp(modpackId);
+  }
 });
 
 // Content folders scanned for the instance-manager view (mods/shaders/resourcepacks
@@ -1660,7 +1777,127 @@ ipcMain.handle("mc:get-schematic-assets", async (event, { mcVersion }) => {
   return readSchematicAssetBundle(dir);
 });
 
+// The 12 frames of Minecraft's falling cherry-blossom particle, pulled from a
+// vanilla client jar the user already downloaded (never redistributed by us,
+// same rule as the schematic assets above). Returns null if no >=1.20 jar has
+// been cached yet — the skin viewer then falls back to its own drawn petal.
+// Result is memoised for the session (undefined = not tried, null = none found).
+let cherryPetalFramesCache;
+ipcMain.handle("mc:get-cherry-petal-frames", async () => {
+  if (cherryPetalFramesCache !== undefined) return cherryPetalFramesCache;
+  cherryPetalFramesCache = null;
+  try {
+    const versionsDir = path.join(CACHE_DIR, "versions");
+    const ids = await fs.readdir(versionsDir).catch(() => []);
+    const candidates = ids
+      .map((id) => {
+        const m = /^1\.(\d+)(?:\.(\d+))?$/.exec(id);
+        if (!m || Number(m[1]) < 20) return null; // cherry blossoms landed in 1.20
+        const jar = path.join(versionsDir, id, `${id}.jar`);
+        return fsSync.existsSync(jar) ? { jar, minor: Number(m[1]), patch: Number(m[2] || 0) } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.minor - a.minor || b.patch - a.patch);
+    if (!candidates.length) return null;
+
+    const zip = new AdmZip(candidates[0].jar);
+    const frames = [];
+    for (let i = 0; i < 12; i++) {
+      const entry = zip.getEntry(`assets/minecraft/textures/particle/cherry_${i}.png`);
+      if (!entry) break;
+      frames.push("data:image/png;base64," + entry.getData().toString("base64"));
+    }
+    if (frames.length === 12) cherryPetalFramesCache = frames;
+  } catch (e) {
+    console.log("[cherry-petals] could not read frames:", e.message);
+  }
+  return cherryPetalFramesCache;
+});
+
+// Loader / Minecraft marks for the instance tiles, read out of the jars the
+// launcher already downloaded to run those loaders (fabric-loader, neoforge
+// universal, forge, and a vanilla client for the Minecraft icon). Nothing is
+// ever bundled or redistributed by us — same rule as the schematic assets and
+// cherry-petal frames above. Any loader whose jar hasn't been fetched yet comes
+// back null and the renderer keeps its drawn glyph. Memoised for the session.
+let loaderIconsCache;
+ipcMain.handle("mc:get-loader-icons", async () => {
+  if (loaderIconsCache !== undefined) return loaderIconsCache;
+  const out = { minecraft: null, fabric: null, forge: null, neoforge: null };
+  const libDir = path.join(CACHE_DIR, "libraries");
+
+  const pull = (jarPath, entryNames) => {
+    try {
+      const zip = new AdmZip(jarPath);
+      for (const name of entryNames) {
+        const entry = zip.getEntry(name);
+        if (entry) return "data:image/png;base64," + entry.getData().toString("base64");
+      }
+    } catch {}
+    return null;
+  };
+
+  const findJar = async (re) => {
+    const stack = [libDir];
+    while (stack.length) {
+      const dir = stack.pop();
+      let entries;
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) stack.push(full);
+        else if (re.test(full.replace(/\\/g, "/"))) return full;
+      }
+    }
+    return null;
+  };
+
+  try {
+    const versionsDir = path.join(CACHE_DIR, "versions");
+    for (const id of await fs.readdir(versionsDir).catch(() => [])) {
+      const jar = path.join(versionsDir, id, `${id}.jar`);
+      if (fsSync.existsSync(jar)) {
+        out.minecraft = pull(jar, ["pack.png"]);
+        if (out.minecraft) break;
+      }
+    }
+
+    const fabricJar = await findJar(/net\/fabricmc\/fabric-loader\/.+\/fabric-loader-[^/]+\.jar$/i);
+    if (fabricJar) out.fabric = pull(fabricJar, ["ui/icon/fabric_x128.png", "assets/fabricloader/icon.png"]);
+
+    const neoJar = await findJar(/net\/neoforged\/neoforge\/.+\/neoforge-[^/]+-universal\.jar$/i);
+    if (neoJar) out.neoforge = pull(neoJar, ["neoforged_logo.png"]);
+
+    const forgeJar = await findJar(/net\/minecraftforge\/forge\/.+\/forge-[^/]+\.jar$/i);
+    if (forgeJar) out.forge = pull(forgeJar, ["forge_logo.png", "big_logo.png", "logo.png"]);
+  } catch (e) {
+    console.log("[loader-icons] could not read:", e.message);
+  }
+
+  loaderIconsCache = out;
+  return out;
+});
+
 ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, authToken, username, uuid, xuid, clientId }) => {
+  // Refuse to spawn a second JVM against the same instance/world if one's already
+  // running. Nothing else guarantees this: the renderer's "disabled while launching"
+  // guards are per-component React state, and the same modpack has independent Play
+  // buttons on the home carousel, the instance manager page and each hub tile.
+  let existingSession = null;
+  try {
+    const meta = JSON.parse(await fs.readFile(path.join(instanceDirFor(modpackId), "alaunchi-meta.json"), "utf8"));
+    existingSession = meta.activeSession || null;
+  } catch {}
+  if (existingSession && isPidAlive(existingSession.pid)) {
+    throw new Error("Minecraft ya está en marcha para este modpack.");
+  }
+
+  acquireModpackOp(modpackId, "launching");
+  try {
   const effectiveClientId = clientId || LAUNCHER_CONFIG.azureClientId || "";
   if (!xuid) {
     console.warn(`[mc:launch] WARNING: launching with empty --xuid. Online server joins will fail with "Sesión no válida". User should re-login with Microsoft.`);
@@ -1775,7 +2012,12 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
         classpath.push(libPath);
       }
     } catch (e) {
+      // Unlike Forge/NeoForge below, this used to swallow the error and let the launch
+      // continue with vanilla's mainClass/classpath — the game would then open with no
+      // Fabric Loader and no mods at all, silently, reporting "launched" as if nothing
+      // was wrong.
       console.error("[Fabric] Error:", e.message);
+      throw new Error(`No se pudo instalar Fabric para MC ${mcVersion}: ${e.message}`);
     }
   }
 
@@ -1959,12 +2201,22 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   const child = spawn(javaPath, mcArgs, { detached: true, stdio });
   if (logFd !== null) fsSync.closeSync(logFd);
 
+  // spawn() failing outright (java binary missing/no permissions: ENOENT/EACCES) emits
+  // "error" instead of "exit" — child.exitCode stays null forever in that case, so the
+  // exitCode check below would never trip and this handler would fall through to
+  // returning { success: true } even though Java never started. Track it explicitly.
+  let spawnError = null;
   child.on("error", (err) => {
     console.error("[Launch] Spawn error:", err.message);
+    spawnError = err;
     win?.webContents.send("launch-status", { modpackId, stage: "error", message: err.message });
   });
 
   await new Promise((resolve) => setTimeout(resolve, 5000));
+
+  if (spawnError) {
+    throw new Error(`No se pudo iniciar Java: ${spawnError.message}`);
+  }
 
   const exitCode = child.exitCode;
   if (exitCode !== null && exitCode !== 0) {
@@ -1993,6 +2245,9 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   child.unref();
   win?.webContents.send("launch-status", { modpackId, stage: "launched" });
   return { success: true, pid: child.pid };
+  } finally {
+    releaseModpackOp(modpackId);
+  }
 });
 
 // Full list of NeoForge builds for a given MC version, newest first. Shared by
@@ -2520,13 +2775,28 @@ function buildLaunchArgs(versionJson, opts, loaderProfile = null) {
     return resolved;
   }
 
+  // Only "has_custom_resolution" is meaningful here — this launcher always launches
+  // with an explicit width/height, never in demo mode or via quick-play. That single
+  // feature is what gates vanilla's --width/--height args in arguments.game.
+  const SUPPORTED_FEATURES = { has_custom_resolution: true };
+
   function evaluateRules(rules) {
     for (const rule of rules || []) {
-      if (rule.features) return false;
       if (rule.os) {
         const osMatch = !rule.os.name || rule.os.name === currentPlatformName;
         if (rule.action === "allow" && !osMatch) return false;
         if (rule.action === "disallow" && osMatch) return false;
+      }
+      if (rule.features) {
+        // Previously: any feature-gated rule was rejected outright, which silently
+        // dropped --width/--height every launch (they're gated on has_custom_resolution)
+        // — the game always opened at Mojang's default window size instead of the
+        // 1280x720 this launcher always passes in opts.width/opts.height.
+        const featuresMatch = Object.entries(rule.features).every(
+          ([key, val]) => !!SUPPORTED_FEATURES[key] === !!val
+        );
+        if (rule.action === "allow" && !featuresMatch) return false;
+        if (rule.action === "disallow" && featuresMatch) return false;
       }
     }
     return true;
@@ -2607,53 +2877,74 @@ async function getJavaPathForMajor(major) {
   return null;
 }
 
-async function installJavaMajor(major, onProgress) {
-  const platform = process.platform;
-  const arch = process.arch;
-  const adoptiumOS = platform === "win32" ? "windows" : platform === "darwin" ? "mac" : "linux";
-  const adoptiumArch = arch === "arm64" ? "aarch64" : "x64";
+// Per-major in-flight dedup, same pattern as inFlightObjects/ensureObject above. Without
+// it, two modpacks needing the same not-yet-installed Java major launched around the same
+// time both download to the identical fixed downloadPath and both fs.rm+fs.rename the
+// identical finalDir at once — interleaved writes to one file, or one instance's rename
+// landing mid-way through the other's rm, corrupting the JRE either way.
+const inFlightJavaInstalls = new Map(); // major -> Promise<binPath>
 
-  onProgress?.({ stage: "fetching", progress: 0 });
+function installJavaMajor(major, onProgress) {
+  const inFlight = inFlightJavaInstalls.get(major);
+  if (inFlight) return inFlight;
 
-  const releases = await fetchJson(
-    `https://api.adoptium.net/v3/assets/latest/${major}/hotspot?architecture=${adoptiumArch}&image_type=jre&os=${adoptiumOS}&vendor=eclipse`
-  );
-  if (!releases || releases.length === 0) throw new Error(`No se encontró JRE ${major} en Adoptium`);
+  const p = (async () => {
+    const platform = process.platform;
+    const arch = process.arch;
+    const adoptiumOS = platform === "win32" ? "windows" : platform === "darwin" ? "mac" : "linux";
+    const adoptiumArch = arch === "arm64" ? "aarch64" : "x64";
 
-  const pkg = releases[0].binary.package;
-  const downloadUrl = pkg.link;
-  const filename = pkg.name;
-  const isZip = filename.endsWith(".zip");
-  const downloadPath = path.join(JAVA_DIR, filename);
+    onProgress?.({ stage: "fetching", progress: 0 });
 
-  onProgress?.({ stage: "downloading", progress: 0 });
-  await downloadFile(downloadUrl, downloadPath, (p) => onProgress?.({ stage: "downloading", progress: p }));
-
-  onProgress?.({ stage: "extracting", progress: 0 });
-  const extractDir = path.join(JAVA_DIR, `.extract-${major}-${Date.now()}`);
-  await fs.mkdir(extractDir, { recursive: true });
-  if (isZip) {
-    await execAsync(
-      `powershell -NoProfile -Command "Expand-Archive -Force -Path '${downloadPath}' -DestinationPath '${extractDir}'"`
+    const releases = await fetchJson(
+      `https://api.adoptium.net/v3/assets/latest/${major}/hotspot?architecture=${adoptiumArch}&image_type=jre&os=${adoptiumOS}&vendor=eclipse`
     );
-  } else {
-    await execAsync(`tar -xzf "${downloadPath}" -C "${extractDir}"`);
-  }
+    if (!releases || releases.length === 0) throw new Error(`No se encontró JRE ${major} en Adoptium`);
 
-  const entries = await fs.readdir(extractDir, { withFileTypes: true });
-  const jreFolder = entries.find(
-    (e) => e.isDirectory() && (e.name.startsWith("jdk") || e.name.startsWith("jre"))
-  );
-  if (!jreFolder) throw new Error("No se encontró la carpeta del JRE extraído");
+    const pkg = releases[0].binary.package;
+    const downloadUrl = pkg.link;
+    const filename = pkg.name;
+    const isZip = filename.endsWith(".zip");
+    // Unique per attempt (not just per major) so a second, later install of the same
+    // major — after this one already finished and got deduped away — never collides
+    // with a leftover/in-progress file from a previous attempt.
+    const downloadPath = path.join(JAVA_DIR, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${filename}`);
 
-  const finalDir = path.join(JAVA_DIR, String(major));
-  await fs.rm(finalDir, { recursive: true, force: true }).catch(() => {});
-  await fs.rename(path.join(extractDir, jreFolder.name), finalDir);
-  await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-  await fs.unlink(downloadPath).catch(() => {});
+    onProgress?.({ stage: "downloading", progress: 0 });
+    await downloadFile(downloadUrl, downloadPath, (p2) => onProgress?.({ stage: "downloading", progress: p2 }));
 
-  onProgress?.({ stage: "done", progress: 100 });
-  return javaBinFor(finalDir);
+    onProgress?.({ stage: "extracting", progress: 0 });
+    const extractDir = path.join(JAVA_DIR, `.extract-${major}-${Date.now()}`);
+    await fs.mkdir(extractDir, { recursive: true });
+    try {
+      if (isZip) {
+        await execAsync(
+          `powershell -NoProfile -Command "Expand-Archive -Force -Path '${downloadPath}' -DestinationPath '${extractDir}'"`
+        );
+      } else {
+        await execAsync(`tar -xzf "${downloadPath}" -C "${extractDir}"`);
+      }
+
+      const entries = await fs.readdir(extractDir, { withFileTypes: true });
+      const jreFolder = entries.find(
+        (e) => e.isDirectory() && (e.name.startsWith("jdk") || e.name.startsWith("jre"))
+      );
+      if (!jreFolder) throw new Error("No se encontró la carpeta del JRE extraído");
+
+      const finalDir = path.join(JAVA_DIR, String(major));
+      await fs.rm(finalDir, { recursive: true, force: true }).catch(() => {});
+      await fs.rename(path.join(extractDir, jreFolder.name), finalDir);
+
+      onProgress?.({ stage: "done", progress: 100 });
+      return javaBinFor(finalDir);
+    } finally {
+      await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
+      await fs.unlink(downloadPath).catch(() => {});
+    }
+  })();
+
+  inFlightJavaInstalls.set(major, p);
+  return p.finally(() => inFlightJavaInstalls.delete(major));
 }
 
 ipcMain.handle("mc:check-java", async (event, args) => {
