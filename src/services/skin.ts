@@ -145,3 +145,19 @@ export async function renderHeadIcon(skinDataUrl: string, size = 64): Promise<st
   ctx.drawImage(img, 40, 8, 8, 8, 0, 0, size, size);
   return canvas.toDataURL("image/png");
 }
+
+/** Crops the outer (back-facing, the one with the design) 10×16 face out of a
+ *  cape texture. Cape textures are 64×32 or an HD multiple of it, so the crop
+ *  is scaled by width/64; `scale` is output pixels per texture pixel. */
+export async function renderCapeIcon(capeDataUrl: string, scale = 5): Promise<string> {
+  const img = await loadImageElement(capeDataUrl);
+  const k = img.width / 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = 10 * scale;
+  canvas.height = 16 * scale;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas 2D no disponible.");
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(img, 1 * k, 1 * k, 10 * k, 16 * k, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/png");
+}

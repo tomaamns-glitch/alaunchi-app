@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
 import { invalidatePlayerHead } from "@/hooks/use-player-head";
 import { useShowcaseSkin } from "@/hooks/use-showcase-skin";
@@ -7,7 +8,7 @@ import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
-import { Loader2, Upload, Trash, Check, Shirt, Store, Plus, X, AlertCircle } from "lucide-react";
+import { Loader2, Upload, Trash, Check, Store, Plus, X, AlertCircle } from "lucide-react";
 import {
   getSkinProfile,
   changeSkin,
@@ -17,6 +18,8 @@ import {
   deleteFromSkinLibrary,
   fetchTextureAsDataUrl,
   fileToBase64,
+  renderHeadIcon,
+  renderCapeIcon,
   type SkinProfile,
   type LibrarySkin,
 } from "@/services/skin";
@@ -25,9 +28,11 @@ import { toast } from "sonner";
 interface SkinManagerPanelProps {
   uuid: string;
   username: string | null;
+  /** Rendered right under the character (the account menu puts its "Volver" here). */
+  viewerFooter?: React.ReactNode;
 }
 
-export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
+export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPanelProps) {
   const { mcToken } = useAuth();
   const [profile, setProfile] = useState<SkinProfile | null>(null);
   const [library, setLibrary] = useState<LibrarySkin[]>([]);
@@ -45,6 +50,7 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
 
   const [showcaseUsernames, setShowcaseUsernames] = useState<string[]>(() => getShowcaseUsernames());
   const [newShowcaseName, setNewShowcaseName] = useState("");
+  const [tab, setTab] = useState("library");
 
   const activeSkin = profile?.skins.find((s) => s.state === "ACTIVE") ?? null;
   const activeCape = profile?.capes.find((c) => c.state === "ACTIVE") ?? null;
@@ -241,19 +247,27 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
     );
   }
 
+  const libraryCols = gridCols(library.length);
+  const showcaseCols = gridCols(showcaseUsernames.length);
+  const capesCols = gridCols(profile?.capes.length ?? 0);
+
   return (
-    <div className="w-[28rem] flex gap-4">
-      <div className="flex flex-col items-center gap-1 shrink-0">
-        <SkinViewerAnimated
-          skinUrl={skinDataUrl ?? `https://mc-heads.net/skin/${uuid}`}
-          capeUrl={capeDataUrl}
-          variant={activeSkin ? (activeSkin.variant === "SLIM" ? "slim" : "classic") : "auto-detect"}
-          width={140}
-          height={190}
-          effect="cherry-petals"
-          className="cursor-grab active:cursor-grabbing"
-        />
-        <span className="text-sm font-medium text-gray-200">{username}</span>
+    <div className="flex gap-4">
+      {/* Same size, backdrop and spot as the account menu's character, so
+          switching to "Personalizar" doesn't make it jump. */}
+      <div className="flex flex-col items-center gap-2 shrink-0">
+        <div className="rounded-xl bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.18),transparent_70%)]">
+          <SkinViewerAnimated
+            skinUrl={skinDataUrl ?? `https://mc-heads.net/skin/${uuid}`}
+            capeUrl={capeDataUrl}
+            variant={activeSkin ? (activeSkin.variant === "SLIM" ? "slim" : "classic") : "auto-detect"}
+            width={150}
+            height={200}
+            effect="cherry-petals"
+            className="cursor-grab active:cursor-grabbing"
+          />
+        </div>
+        {viewerFooter}
         {activeSkin && (
           <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
             Modelo {activeSkin.variant === "SLIM" ? "slim" : "clásico"}
@@ -261,8 +275,8 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
         )}
       </div>
 
-      <div className="flex-1 min-w-0">
-        <Tabs defaultValue="library">
+      <AnimatedWidth>
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="w-full bg-card/50 border border-white/5">
             <TabsTrigger value="library" className="flex-1 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground">
               Biblioteca ({library.length})
@@ -277,7 +291,8 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
             )}
           </TabsList>
 
-          <TabsContent value="library" className="pt-3 space-y-3">
+          <TabsContent value="library" className="mt-3">
+            <TabBody>
             <input
               ref={fileInputRef}
               type="file"
@@ -357,18 +372,13 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
             {library.length === 0 ? (
               <p className="text-xs text-muted-foreground text-center py-4">Aún no has guardado ninguna skin.</p>
             ) : (
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${libraryCols}, ${TILE_WIDTH})` }}>
                 {library.map((entry) => (
                   <div
                     key={entry.id}
                     className="relative group flex flex-col items-center gap-1 p-2 rounded-md bg-white/5 border border-white/5"
                   >
-                    <img
-                      src={`data:image/png;base64,${entry.fileBase64}`}
-                      alt={entry.name}
-                      className="h-10 w-10 object-contain bg-black/30 rounded"
-                      style={{ imageRendering: "pixelated" }}
-                    />
+                    <LibrarySkinHead fileBase64={entry.fileBase64} alt={entry.name} />
                     <span className="text-[10px] text-gray-300 truncate w-full text-center">{entry.name}</span>
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity absolute -top-1.5 -right-1.5">
                       <button
@@ -394,9 +404,11 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
                 ))}
               </div>
             )}
+            </TabBody>
           </TabsContent>
 
-          <TabsContent value="showcase" className="pt-3 space-y-3">
+          <TabsContent value="showcase" className="mt-3">
+            <TabBody>
             <div className="flex gap-2">
               <Input
                 value={newShowcaseName}
@@ -418,11 +430,11 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
             </div>
 
             {showcaseUsernames.length === 0 ? (
-              <p className="text-xs text-muted-foreground text-center py-4">
+              <p className="text-xs text-muted-foreground text-center py-4 max-w-[15rem] mx-auto">
                 Añade un nombre de Minecraft para ver su skin actual aquí.
               </p>
             ) : (
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${showcaseCols}, ${TILE_WIDTH})` }}>
                 {showcaseUsernames.map((name) => (
                   <ShowcaseEntry
                     key={name}
@@ -435,32 +447,146 @@ export function SkinManagerPanel({ uuid, username }: SkinManagerPanelProps) {
                 ))}
               </div>
             )}
+            </TabBody>
           </TabsContent>
 
           {profile && profile.capes.length > 0 && (
-            <TabsContent value="capes" className="pt-3 space-y-2">
-              {profile.capes.map((cape) => (
-                <button
-                  key={cape.id}
-                  type="button"
-                  onClick={() => handleToggleCape(cape.id)}
-                  disabled={busy}
-                  className={`w-full flex items-center gap-3 p-2 rounded-md border text-left transition-colors ${
-                    cape.state === "ACTIVE"
-                      ? "bg-accent/15 border-accent/40 text-accent"
-                      : "bg-white/5 border-white/5 text-gray-300 hover:bg-white/10"
-                  }`}
-                >
-                  <Shirt className="h-4 w-4 shrink-0" />
-                  <span className="text-sm flex-1 truncate">{cape.alias || "Capa"}</span>
-                  {cape.state === "ACTIVE" && <Check className="h-4 w-4 shrink-0" />}
-                </button>
-              ))}
-              <p className="text-[10px] text-muted-foreground pt-1">Pulsa una capa activa para quitártela.</p>
+            <TabsContent value="capes" className="mt-3">
+              <TabBody>
+              <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${capesCols}, ${TILE_WIDTH})` }}>
+                {profile.capes.map((cape) => (
+                  <button
+                    key={cape.id}
+                    type="button"
+                    onClick={() => handleToggleCape(cape.id)}
+                    disabled={busy}
+                    title={cape.state === "ACTIVE" ? "Quitar capa" : "Ponerse esta capa"}
+                    className={`relative flex flex-col items-center gap-1.5 p-2 rounded-md border transition-colors ${
+                      cape.state === "ACTIVE"
+                        ? "bg-accent/15 border-accent/50"
+                        : "bg-white/5 border-white/5 hover:bg-white/10"
+                    }`}
+                  >
+                    <CapePreview url={cape.url} alt={cape.alias || "Capa"} />
+                    <span
+                      className={`text-[10px] truncate w-full text-center ${
+                        cape.state === "ACTIVE" ? "text-accent font-semibold" : "text-gray-300"
+                      }`}
+                    >
+                      {cape.alias || "Capa"}
+                    </span>
+                    {cape.state === "ACTIVE" && (
+                      <span className="absolute -top-1.5 -right-1.5 h-5 w-5 flex items-center justify-center rounded-full bg-accent text-accent-foreground">
+                        <Check className="h-3 w-3" />
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              </TabBody>
             </TabsContent>
           )}
         </Tabs>
+      </AnimatedWidth>
+    </div>
+  );
+}
+
+// Every tile is the same fixed width, so a tab's width is fully decided by how
+// many columns it has — which is what lets the panel grow sideways (not up/down)
+// when switching tabs.
+const TILE_WIDTH = "4.5rem";
+
+/** Two rows fit the fixed-height tab body; past that, extra items add columns
+ *  (the panel widens to the right) up to 6, and only then start scrolling. */
+function gridCols(count: number): number {
+  return Math.min(6, Math.max(3, Math.ceil(count / 2)));
+}
+
+/** Fixed height (lines up with the character column on the left) so switching
+ *  tabs never moves the panel up or down; each tab slides in from the right. */
+function TabBody({ children }: { children: React.ReactNode }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: 24 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+      className="h-[218px] overflow-y-auto overflow-x-hidden p-1.5 space-y-3"
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+/** Animates its own width to whatever its content naturally needs — anchored
+ *  on the left, so a wider tab grows the panel to the right and a narrower one
+ *  pulls it back in. */
+function AnimatedWidth({ children }: { children: React.ReactNode }) {
+  const innerRef = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState<number | "auto">("auto");
+
+  useLayoutEffect(() => {
+    const el = innerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setWidth(el.offsetWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <motion.div
+      initial={false}
+      animate={{ width }}
+      transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+      className="overflow-hidden shrink-0"
+    >
+      <div ref={innerRef} className="w-max min-w-[16rem]">
+        {children}
       </div>
+    </motion.div>
+  );
+}
+
+/** Face + hat layer of a saved skin, instead of the raw flattened texture. */
+function LibrarySkinHead({ fileBase64, alt }: { fileBase64: string; alt: string }) {
+  const [headUrl, setHeadUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    renderHeadIcon(`data:image/png;base64,${fileBase64}`, 48)
+      .then((url) => { if (!cancelled) setHeadUrl(url); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [fileBase64]);
+
+  return headUrl ? (
+    <img src={headUrl} alt={alt} className="h-10 w-10 rounded" style={{ imageRendering: "pixelated" }} />
+  ) : (
+    <div className="h-10 w-10 rounded bg-black/30" />
+  );
+}
+
+/** Back face of a cape (the side with the design), fetched through the
+ *  texture proxy — textures.minecraft.net has no CORS headers. */
+function CapePreview({ url, alt }: { url: string; alt: string }) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchTextureAsDataUrl(url)
+      .then((dataUrl) => renderCapeIcon(dataUrl))
+      .then((png) => { if (!cancelled) setPreviewUrl(png); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [url]);
+
+  return (
+    <div className="h-16 w-10 flex items-center justify-center">
+      {previewUrl ? (
+        <img src={previewUrl} alt={alt} className="h-16 w-10 rounded-sm shadow-md" style={{ imageRendering: "pixelated" }} />
+      ) : (
+        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+      )}
     </div>
   );
 }

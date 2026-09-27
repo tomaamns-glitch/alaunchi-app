@@ -1951,6 +1951,24 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   const classpath = [clientJarPath];
   const currentPlatform = process.platform.replace("win32", "windows").replace("darwin", "osx");
 
+  // Like the official launcher, a loader library replaces the vanilla one with the same
+  // group:artifact(:classifier) instead of sitting next to it — otherwise e.g. vanilla's
+  // asm-9.6 and Fabric's asm-9.10.1 both end up on the classpath and Fabric Loader
+  // aborts with "duplicate ASM classes found on classpath".
+  const libKey = (name) => {
+    const [group, artifact, , classifier] = String(name || "").split("@")[0].split(":");
+    return group && artifact ? `${group}:${artifact}${classifier ? `:${classifier}` : ""}` : null;
+  };
+  const vanillaLibPaths = new Map();
+  const replaceVanillaLib = (name) => {
+    const key = libKey(name);
+    const vanillaPath = key && vanillaLibPaths.get(key);
+    if (!vanillaPath) return;
+    const idx = classpath.indexOf(vanillaPath);
+    if (idx !== -1) classpath.splice(idx, 1);
+    vanillaLibPaths.delete(key);
+  };
+
   for (const lib of versionJson.libraries || []) {
     if (lib.rules) {
       const allowed = lib.rules.every((rule) => {
@@ -1966,6 +1984,8 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
       await fs.mkdir(path.dirname(libPath), { recursive: true });
       if (!fsSync.existsSync(libPath)) await downloadFile(artifact.url, libPath, () => {});
       classpath.push(libPath);
+      const key = libKey(lib.name);
+      if (key) vanillaLibPaths.set(key, libPath);
     }
   }
 
@@ -2001,6 +2021,7 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
           const baseUrl = lib.url || "https://repo1.maven.org/maven2/";
           await downloadFile(baseUrl + relPath, libPath, () => {});
         }
+        replaceVanillaLib(lib.name);
         classpath.push(libPath);
       }
     } catch (e) {
@@ -2032,7 +2053,10 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
           "https://libraries.minecraft.net/",
           "https://repo1.maven.org/maven2/",
         ], installLibsDir);
-        if (libPath) classpath.push(libPath);
+        if (libPath) {
+          replaceVanillaLib(lib.name);
+          classpath.push(libPath);
+        }
       }
     } catch (e) {
       console.error("[NeoForge] Error:", e.message);
@@ -2059,7 +2083,10 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
           "https://libraries.minecraft.net/",
           "https://repo1.maven.org/maven2/",
         ], installLibsDir);
-        if (libPath) classpath.push(libPath);
+        if (libPath) {
+          replaceVanillaLib(lib.name);
+          classpath.push(libPath);
+        }
       }
     } catch (e) {
       console.error("[Forge] Error:", e.message);

@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { Shirt, Settings, User, Users, ChevronLeft } from "lucide-react";
+import { Shirt, Settings, User, Users, ChevronLeft, ChevronDown, type LucideIcon } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { SkinManagerPanel } from "@/components/skin-manager-panel";
-import { usePlayerHeadUrl } from "@/hooks/use-player-head";
-import { useHeaderOverlay } from "@/hooks/use-chat-heads";
+import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
+import { usePlayerHeadUrl, usePlayerSkinUrl } from "@/hooks/use-player-head";
+import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
+import { FriendsPanel } from "@/components/friends-panel";
 import { subscribeIncomingRequests } from "@/services/friends";
 
 interface AccountMenuButtonProps {
@@ -13,36 +15,66 @@ interface AccountMenuButtonProps {
   username: string | null;
 }
 
-/** The account button in the bottom bar — opens a menu above it (Skin /
- *  Configuración), coordinated with the other header popups (presence,
- *  chat) via useHeaderOverlay so only one is ever open at a time. */
+// The panel is revealed by a clip-path that starts as exactly the footer
+// button's own rectangle (anchored bottom-left, same as the button) and opens
+// up to the full panel — so it reads as the button itself growing, Windows
+// start-menu style, and swallowing the players button/chat bubbles beside it.
+// Same "calc(N% - Npx)" shape on both ends so framer-motion can interpolate it.
+const clipFromButton = (w: number, h: number) =>
+  `inset(calc(100% - ${h}px) calc(100% - ${w}px) calc(0% - 0px) calc(0% - 0px) round 8px)`;
+const CLIP_OPEN = "inset(calc(0% - 0px) calc(0% - 0px) calc(0% - 0px) calc(0% - 0px) round 14px)";
+
+/** The account button in the bottom bar — expands into the account panel
+ *  (your character, Personalizar, Perfil/Amigos/Configuración), coordinated
+ *  with the other footer popups (presence, chat) via useHeaderOverlay so only
+ *  one is ever open at a time. */
 export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
   const [, setLocation] = useLocation();
   const myHeadUrl = usePlayerHeadUrl(uuid);
+  const mySkinUrl = usePlayerSkinUrl(uuid);
   const activePopup = useHeaderOverlay((s) => s.active);
   const openOverlay = useHeaderOverlay((s) => s.open);
   const closeOverlay = useHeaderOverlay((s) => s.close);
   const profileOpen = activePopup === "profile";
-  // Which screen the popup shows: the "menu" (Skin / Configuración) it opens
-  // on, or the skin manager after picking "Skin". Reset back to the menu
-  // whenever the popup closes, so it never reopens mid-skin-editing.
-  const [profileView, setProfileView] = useState<"menu" | "skin">("menu");
+  // Which screen the panel shows (menu / skin manager / friends) — in the
+  // shared store so the players panel can open it straight on "friends".
+  const profileView = useHeaderOverlay((s) => s.profileView);
+  const setProfileView = useHeaderOverlay((s) => s.setProfileView);
+  const openChat = useChatHeads((s) => s.openChat);
   const [pendingRequests, setPendingRequests] = useState(0);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const [buttonSize, setButtonSize] = useState({ w: 160, h: 38 });
 
   useEffect(() => {
     if (!uuid) return;
     return subscribeIncomingRequests(uuid, (requests) => setPendingRequests(Object.keys(requests).length));
   }, [uuid]);
 
+  // Kept measured ahead of time (not only on click) since the panel can also
+  // be opened from elsewhere, and its expand animation starts from this rect.
+  useLayoutEffect(() => {
+    const el = buttonRef.current;
+    if (!el) return;
+    const measure = () => setButtonSize({ w: el.offsetWidth, h: el.offsetHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const setProfileOpen = (next: boolean | ((prev: boolean) => boolean)) => {
     const wasOpen = profileOpen;
     const nextOpen = typeof next === "function" ? next(wasOpen) : next;
     if (nextOpen) openOverlay("profile");
-    else {
-      closeOverlay();
-      setProfileView("menu");
-    }
+    else closeOverlay();
   };
+
+  const go = (path: string) => {
+    setProfileOpen(false);
+    setLocation(path);
+  };
+
+  const collapsedClip = clipFromButton(buttonSize.w, buttonSize.h);
 
   return (
     <div className="relative">
@@ -57,78 +89,109 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
       <AnimatePresence>
         {profileOpen && uuid && (
           <motion.div
-            initial={{ opacity: 0, y: 8, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 8, scale: 0.96 }}
-            transition={{ duration: 0.15, ease: "easeOut" }}
-            className="absolute bottom-full left-0 mb-2 z-40 rounded-lg bg-card/95 backdrop-blur border border-white/10 shadow-2xl max-h-[70vh] overflow-y-auto"
+            initial={{ clipPath: collapsedClip, opacity: 0.4 }}
+            animate={{ clipPath: CLIP_OPEN, opacity: 1 }}
+            exit={{ clipPath: collapsedClip, opacity: 0 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="absolute bottom-0 left-0 z-50 min-w-[23rem] rounded-[14px] bg-card/95 backdrop-blur-xl border border-white/10 shadow-2xl flex flex-col"
           >
-            {profileView === "menu" ? (
-              <div className="w-48 p-1.5 flex flex-col gap-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setProfileOpen(false);
-                    setLocation("/profile");
-                  }}
-                  className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-gray-200 hover:bg-white/10 transition-colors"
+            <AnimatePresence mode="wait" initial={false}>
+              {profileView === "menu" ? (
+                <motion.div
+                  key="menu"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="flex gap-4 p-4"
                 >
-                  <User className="h-4 w-4 text-accent" />
-                  Perfil
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setProfileOpen(false);
-                    setLocation("/friends");
-                  }}
-                  className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-gray-200 hover:bg-white/10 transition-colors"
+                  <CharacterColumn skinUrl={mySkinUrl}>
+                    <button
+                      type="button"
+                      onClick={() => setProfileView("skin")}
+                      className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-accent text-accent-foreground text-sm font-bold hover:bg-accent/90 transition-colors"
+                    >
+                      <Shirt className="h-4 w-4" />
+                      Personalizar
+                    </button>
+                  </CharacterColumn>
+
+                  <div className="flex-1 flex flex-col gap-1.5 pt-1">
+                    <MenuTile icon={User} label="Perfil" onClick={() => go("/profile")} />
+                    <MenuTile icon={Users} label="Amigos" badge={pendingRequests} onClick={() => setProfileView("friends")} />
+                    <MenuTile icon={Settings} label="Configuración" onClick={() => go("/settings")} />
+                  </div>
+                </motion.div>
+              ) : profileView === "friends" ? (
+                <motion.div
+                  key="friends"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="flex gap-4 p-4"
                 >
-                  <Users className="h-4 w-4 text-accent" />
-                  Amigos
-                  {pendingRequests > 0 && (
-                    <span className="ml-auto h-4 min-w-4 px-1 rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground flex items-center justify-center">
-                      {pendingRequests}
-                    </span>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setProfileView("skin")}
-                  className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-gray-200 hover:bg-white/10 transition-colors"
+                  <CharacterColumn skinUrl={mySkinUrl}>
+                    <BackButton onClick={() => setProfileView("menu")} />
+                  </CharacterColumn>
+                  {/* Same height as the character column, so the panel only grows sideways. */}
+                  <motion.div
+                    initial={{ opacity: 0, x: 24 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                    className="w-[21rem] h-[246px]"
+                  >
+                    {username && (
+                      <FriendsPanel
+                        uuid={uuid}
+                        username={username}
+                        onOpenProfile={(id) => go(`/profile/${id}`)}
+                        onChat={(id) => {
+                          // openChat closes this panel itself (useHeaderOverlay).
+                          openChat(id);
+                        }}
+                      />
+                    )}
+                  </motion.div>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="skin"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="p-4 max-h-[70vh] overflow-y-auto"
                 >
-                  <Shirt className="h-4 w-4 text-accent" />
-                  Skin
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setProfileOpen(false);
-                    setLocation("/settings");
-                  }}
-                  className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-gray-200 hover:bg-white/10 transition-colors"
-                >
-                  <Settings className="h-4 w-4 text-accent" />
-                  Configuración
-                </button>
-              </div>
-            ) : (
-              <div className="p-4">
-                <button
-                  type="button"
-                  onClick={() => setProfileView("menu")}
-                  className="flex items-center gap-1 mb-2 text-xs font-medium text-gray-400 hover:text-white transition-colors"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5" />
-                  Volver
-                </button>
-                <SkinManagerPanel uuid={uuid} username={username} />
-              </div>
-            )}
+                  <SkinManagerPanel
+                    uuid={uuid}
+                    username={username}
+                    viewerFooter={<BackButton onClick={() => setProfileView("menu")} />}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* The button itself, grown — clicking it again collapses the panel. */}
+            <button
+              type="button"
+              onClick={() => setProfileOpen(false)}
+              className="flex items-center gap-3 px-4 py-2.5 border-t border-white/5 bg-white/[0.03] hover:bg-white/[0.06] transition-colors rounded-b-[14px] text-left"
+            >
+              <Avatar className="h-10 w-10 rounded-lg border border-white/10">
+                {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-lg" />}
+                <AvatarFallback className="rounded-lg bg-accent/20 text-accent text-base font-bold">
+                  {username?.charAt(0)?.toUpperCase() ?? "?"}
+                </AvatarFallback>
+              </Avatar>
+              <span className="flex-1 text-base font-semibold text-white truncate">{username}</span>
+              <ChevronDown className="h-4 w-4 text-gray-400" />
+            </button>
           </motion.div>
         )}
       </AnimatePresence>
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => setProfileOpen((v) => !v)}
         className="relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors"
@@ -144,5 +207,69 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
         </span>
       </button>
     </div>
+  );
+}
+
+/** Your character on the left of the panel — same size/spot in every view so
+ *  it never jumps when switching between them. */
+function CharacterColumn({ skinUrl, children }: { skinUrl: string | null; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col items-center gap-2 shrink-0">
+      <div className="rounded-xl bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.18),transparent_70%)]">
+        {skinUrl ? (
+          <SkinViewerAnimated
+            skinUrl={skinUrl}
+            variant="auto-detect"
+            width={150}
+            height={200}
+            effect="cherry-petals"
+            className="cursor-grab active:cursor-grabbing"
+          />
+        ) : (
+          <div className="w-[150px] h-[200px]" />
+        )}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function BackButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm font-bold text-gray-200 hover:bg-white/10 transition-colors"
+    >
+      <ChevronLeft className="h-4 w-4" />
+      Volver
+    </button>
+  );
+}
+
+interface MenuTileProps {
+  icon: LucideIcon;
+  label: string;
+  badge?: number;
+  onClick: () => void;
+}
+
+function MenuTile({ icon: Icon, label, badge, onClick }: MenuTileProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group flex items-center gap-3 px-3 py-2.5 rounded-lg bg-white/[0.04] border border-white/5 text-sm font-medium text-gray-200 hover:bg-white/10 hover:border-white/10 transition-colors"
+    >
+      <span className="h-8 w-8 shrink-0 flex items-center justify-center rounded-md bg-accent/15 text-accent group-hover:bg-accent/25 transition-colors">
+        <Icon className="h-4 w-4" />
+      </span>
+      {label}
+      {!!badge && badge > 0 && (
+        <span className="ml-auto h-4 min-w-4 px-1 rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground flex items-center justify-center">
+          {badge}
+        </span>
+      )}
+    </button>
   );
 }

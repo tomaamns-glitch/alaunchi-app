@@ -109,11 +109,20 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
 
 // Split into two "todos" flavors — clicking "Amigos" vs. clicking the
 // instance name now opens its own dialog directly (no shared "Todos" button).
-export type HeaderOverlay = "profile" | "presence" | "presence-all-friends" | "presence-all-instance" | null;
+export type HeaderOverlay = "profile" | "presence" | "presence-all-instance" | null;
+
+/** Which screen the account menu shows. Lives here (not in the menu itself) so
+ *  other footer popups can open it straight on a given screen — e.g. the
+ *  players panel's "Amigos" heading opens it on "friends". */
+export type ProfileView = "menu" | "skin" | "friends";
 
 interface HeaderOverlayState {
   active: HeaderOverlay;
+  profileView: ProfileView;
   open: (kind: Exclude<HeaderOverlay, null>) => void;
+  /** Opens the account menu on a specific screen. */
+  openProfile: (view: ProfileView) => void;
+  setProfileView: (view: ProfileView) => void;
   close: () => void;
 }
 
@@ -123,10 +132,18 @@ interface HeaderOverlayState {
 // each store calls the other's getState() directly.
 export const useHeaderOverlay = create<HeaderOverlayState>((set) => ({
   active: null,
+  profileView: "menu",
   open: (kind) => {
     useChatHeads.getState().minimizeChat();
-    set({ active: kind });
+    set({ active: kind, profileView: "menu" });
   },
+  openProfile: (view) => {
+    useChatHeads.getState().minimizeChat();
+    set({ active: "profile", profileView: view });
+  },
+  setProfileView: (view) => set({ profileView: view }),
+  // profileView isn't reset here (the menu would swap screens mid-collapse) —
+  // open() puts it back to "menu", so it never reopens mid-skin-editing.
   close: () => set({ active: null }),
 }));
 
