@@ -149,15 +149,16 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
   const [railExpanded, setRailExpanded] = useState(true);
   const [installedHashes, setInstalledHashes] = useState<Record<string, Set<string>>>({});
   const [installedSkinHashes, setInstalledSkinHashes] = useState<Set<string>>(new Set());
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
-  // Per-conversation scrollTop, remembered only when leaving it scrolled up —
-  // if it was at the bottom, no entry is kept and it just opens at the bottom
-  // again next time, same as always.
-  const scrollPositions = useRef<Map<string, number>>(new Map());
-  const justSwitchedConversation = useRef(true);
+  // "Keep the view glued to the latest message." True on every open and on
+  // every new message; only a real upward scroll by the user clears it. While
+  // it's set, the ResizeObserver below re-pins to the bottom whenever the
+  // content grows after the fact (Firebase delivering the history, shared
+  // content cards loading, the per-message entrance animation) — scrolling
+  // just once on open used to land above the real end, or at the very top.
+  const stickToBottom = useRef(true);
+  const lastScrollTop = useRef(0);
   const [atBottom, setAtBottom] = useState(true);
-  const [newMessagesBelow, setNewMessagesBelow] = useState(false);
 
   // chatIndex only gets an entry once a message has actually been sent —
   // fall back to the global "everyone who's ever opened the app" directory
@@ -170,6 +171,9 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
       setMessages([]);
       return;
     }
+    // Don't keep showing the previous conversation's messages until the new
+    // subscription's first snapshot lands.
+    setMessages([]);
     return subscribeMessages(getConversationId(myUuid, displayUuid), setMessages);
   }, [displayUuid, myUuid]);
 
@@ -203,68 +207,67 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
     setShowContentPicker(false);
   }, [displayUuid]);
 
-  // Kept current on every render (no deps array) purely so the cleanup below
-  // — which only depends on openUuid — can read "whichever conversation was
-  // showing right before this transition" without stale-closure trouble;
-  // displayUuid itself doesn't change on minimize (openUuid -> null), it
-  // stays pointed at the outgoing conversation, which is exactly what we
-  // want to key the saved scroll position under.
-  const displayUuidRef = useRef<string | null>(null);
-  useEffect(() => {
-    displayUuidRef.current = displayUuid;
-  });
-
-  // Saves the outgoing conversation's scroll position — but only if it
-  // wasn't at the bottom — the moment you switch to a different conversation
-  // or minimize (both change openUuid; switching between two already-open
-  // conversations does too, via openChat).
-  useEffect(() => {
-    return () => {
-      const uuid = displayUuidRef.current;
-      const el = messagesContainerRef.current;
-      if (!uuid || !el) return;
-      if (isNearBottom(el)) scrollPositions.current.delete(uuid);
-      else scrollPositions.current.set(uuid, el.scrollTop);
-    };
-  }, [openUuid]);
-
-  // Marks the *next* messages update as "just switched conversations" so the
-  // effect below restores a position (or jumps to bottom) instead of treating
-  // it like a live new-message arrival.
-  useEffect(() => {
-    justSwitchedConversation.current = true;
-    setNewMessagesBelow(false);
-  }, [displayUuid]);
-
-  useEffect(() => {
+  const scrollToBottom = useCallback(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
-    if (justSwitchedConversation.current) {
-      justSwitchedConversation.current = false;
-      const saved = displayUuid ? scrollPositions.current.get(displayUuid) : undefined;
-      el.scrollTop = saved ?? el.scrollHeight;
-      setAtBottom(isNearBottom(el));
-      return;
-    }
-    // A genuinely new message arrived while this conversation was already open.
-    if (isNearBottom(el)) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    } else {
-      setNewMessagesBelow(true);
-    }
-  }, [visibleMessages.length]);
+    el.scrollTop = el.scrollHeight;
+    lastScrollTop.current = el.scrollTop;
+    setAtBottom(true);
+  }, []);
+
+  // Opening/reopening a conversation, or any new message in it (theirs or
+  // ours, even if you'd scrolled up to read), always goes to the latest one.
+  // Declared before the effect below so it runs first in the same commit.
+  useEffect(() => {
+    if (openUuid) stickToBottom.current = true;
+  }, [openUuid]);
+
+  const prevMessageCount = useRef(0);
+  useEffect(() => {
+    const grew = visibleMessages.length > prevMessageCount.current;
+    prevMessageCount.current = visibleMessages.length;
+    if (!openUuid) return;
+    if (grew) stickToBottom.current = true;
+    if (stickToBottom.current) scrollToBottom();
+  }, [visibleMessages.length, openUuid, scrollToBottom]);
+
+  // Watches both the message list and the scroll container itself (the panel
+  // animating open changes its height) — callback ref since the container is
+  // mounted/unmounted with the panel's open/close transition.
+  const contentObserver = useRef<ResizeObserver | null>(null);
+  const messagesContentRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      contentObserver.current?.disconnect();
+      contentObserver.current = null;
+      if (!node) return;
+      const ro = new ResizeObserver(() => {
+        if (stickToBottom.current) scrollToBottom();
+      });
+      ro.observe(node);
+      if (node.parentElement) ro.observe(node.parentElement);
+      contentObserver.current = ro;
+    },
+    [scrollToBottom]
+  );
 
   function handleMessagesScroll() {
     const el = messagesContainerRef.current;
     if (!el) return;
-    const now = isNearBottom(el);
-    setAtBottom(now);
-    if (now) setNewMessagesBelow(false);
+    const top = el.scrollTop;
+    const near = isNearBottom(el);
+    // Only an actual upward scroll unsticks — content growing (or our own
+    // pinning) never moves scrollTop up, so it can't be mistaken for one.
+    if (near) stickToBottom.current = true;
+    else if (top < lastScrollTop.current - 1) stickToBottom.current = false;
+    lastScrollTop.current = top;
+    setAtBottom(near);
   }
 
   function jumpToLatest() {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    setNewMessagesBelow(false);
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    stickToBottom.current = true;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }
 
   // Which shared-content hashes are already installed, per modpack referenced
@@ -428,8 +431,9 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
             <div
               ref={messagesContainerRef}
               onScroll={handleMessagesScroll}
-              className="h-full overflow-y-auto p-4 space-y-2"
+              className="h-full overflow-y-auto p-4"
             >
+              <div ref={messagesContentRef} className="space-y-2">
               {visibleMessages.length === 0 ? (
                 <p className="text-xs text-muted-foreground text-center py-6">
                   Todavía no hay mensajes con {alias || otherUsername}.
@@ -496,7 +500,7 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                     );
                   })
               )}
-              <div ref={messagesEndRef} />
+              </div>
             </div>
 
             <AnimatePresence>
@@ -513,9 +517,6 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                   className="absolute bottom-3 right-3 h-8 w-8 flex items-center justify-center rounded-full bg-card border border-white/10 shadow-lg text-gray-200 hover:text-accent transition-colors"
                 >
                   <ArrowDown className="h-4 w-4" />
-                  {newMessagesBelow && (
-                    <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-red-500 border border-card" />
-                  )}
                 </motion.button>
               )}
             </AnimatePresence>

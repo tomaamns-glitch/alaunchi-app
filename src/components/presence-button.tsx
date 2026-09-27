@@ -61,9 +61,9 @@ function formatAnnouncement(onlineOthers: [string, PresenceEntry][], nicknames: 
  *  native notification, same as before — scoped to that section only). */
 export function PresenceButton({ context, open, onOpenChange }: PresenceButtonProps) {
   const myUuid = useAuth((s) => s.uuid);
-  const showFriendsAll = useHeaderOverlay((s) => s.active === "presence-all-friends");
   const showInstanceAll = useHeaderOverlay((s) => s.active === "presence-all-instance");
   const openOverlay = useHeaderOverlay((s) => s.open);
+  const openProfile = useHeaderOverlay((s) => s.openProfile);
   const closeOverlay = useHeaderOverlay((s) => s.close);
 
   // Friends section — always active, independent of context. Friends can't
@@ -176,10 +176,9 @@ export function PresenceButton({ context, open, onOpenChange }: PresenceButtonPr
             <div>
               <button
                 type="button"
-                onClick={() => {
-                  onOpenChange(false);
-                  openOverlay("presence-all-friends");
-                }}
+                // Opens the account menu's friends screen (replaces this
+                // panel — useHeaderOverlay only ever has one open).
+                onClick={() => openProfile("friends")}
                 title="Ver todos los amigos"
                 className="block mb-2 text-xs font-semibold text-muted-foreground hover:text-accent uppercase tracking-wide text-left transition-colors"
               >
@@ -208,14 +207,6 @@ export function PresenceButton({ context, open, onOpenChange }: PresenceButtonPr
         )}
       </AnimatePresence>
 
-      {showFriendsAll && (
-        <PresenceAllDialog
-          title="Amigos"
-          players={allFriendsSorted}
-          emptyMessage="Todavía no tienes amigos añadidos."
-          onClose={closeOverlay}
-        />
-      )}
       {showInstanceAll && instancePack && (
         <PresenceAllDialog title={instancePack.name} players={instancePlayers} onClose={closeOverlay} />
       )}
