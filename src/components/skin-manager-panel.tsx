@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
 import { invalidatePlayerHead } from "@/hooks/use-player-head";
 import { useShowcaseSkin } from "@/hooks/use-showcase-skin";
+import { useAvatarDecoration } from "@/hooks/use-avatar-decoration";
 import { getShowcaseUsernames, addShowcaseUsername, removeShowcaseUsername } from "@/lib/skin-showcase";
 import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
 import { Button } from "@/components/ui/button";
@@ -34,6 +35,7 @@ interface SkinManagerPanelProps {
 
 export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPanelProps) {
   const { mcToken } = useAuth();
+  const decoration = useAvatarDecoration(uuid);
   const [profile, setProfile] = useState<SkinProfile | null>(null);
   const [library, setLibrary] = useState<LibrarySkin[]>([]);
   const [loading, setLoading] = useState(true);
@@ -263,7 +265,7 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
             variant={activeSkin ? (activeSkin.variant === "SLIM" ? "slim" : "classic") : "auto-detect"}
             width={150}
             height={200}
-            effect="cherry-petals"
+            effect={decoration}
             className="cursor-grab active:cursor-grabbing"
           />
         </div>

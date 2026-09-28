@@ -285,6 +285,19 @@ export async function getCherryPetalFrames(): Promise<string[] | null> {
   }
 }
 
+/** Any vanilla particle's frames (PNG data URLs, in the order the game plays
+ *  them), read from the newest cached client jar that has that particle.
+ *  `null` when none does (or outside Electron / before an app restart picks up
+ *  the handler) — callers draw their own fallback. */
+export async function getParticleFrames(particleId: string): Promise<string[] | null> {
+  if (!isElectron || !eAPI.getParticleFrames) return null;
+  try {
+    return (await eAPI.getParticleFrames(particleId)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export interface LoaderIcons {
   minecraft: string | null;
   fabric: string | null;

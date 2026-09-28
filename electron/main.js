@@ -1806,6 +1806,123 @@ ipcMain.handle("mc:get-cherry-petal-frames", async () => {
   return cherryPetalFramesCache;
 });
 
+// Any vanilla particle's frames, in the order its particles/<id>.json lists
+// them (which is also the order the game plays them over the particle's life),
+// as PNG data URLs — for the avatar decorations. Same rule as the cherry
+// frames above: read from a client jar the user already has, never shipped by
+// us. Tries the newest release jar first (26.x sorts above 1.x) and falls back
+// to older ones until one has that particle. Memoised per particle id
+// (null = no cached jar has it; the viewer then draws a plain fallback).
+const particleFramesCache = new Map();
+async function listClientJarsNewestFirst() {
+  const versionsDir = path.join(CACHE_DIR, "versions");
+  const ids = await fs.readdir(versionsDir).catch(() => []);
+  return ids
+    .map((id) => {
+      const m = /^(\d+)\.(\d+)(?:\.(\d+))?$/.exec(id);
+      if (!m) return null;
+      const jar = path.join(versionsDir, id, `${id}.jar`);
+      return fsSync.existsSync(jar) ? { jar, v: [Number(m[1]), Number(m[2]), Number(m[3] || 0)] } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.v[0] - a.v[0] || b.v[1] - a.v[1] || b.v[2] - a.v[2]);
+}
+ipcMain.handle("mc:get-particle-frames", async (_e, { particleId }) => {
+  if (!/^[a-z0-9_]+$/.test(particleId || "")) return null;
+  if (particleFramesCache.has(particleId)) return particleFramesCache.get(particleId);
+  let result = null;
+  try {
+    for (const { jar } of await listClientJarsNewestFirst()) {
+      const zip = new AdmZip(jar);
+      const def = zip.getEntry(`assets/minecraft/particles/${particleId}.json`);
+      if (!def) continue;
+      const textures = JSON.parse(def.getData().toString("utf8")).textures || [];
+      const frames = [];
+      for (const t of textures) {
+        const name = String(t).replace(/^minecraft:/, "");
+        const entry = zip.getEntry(`assets/minecraft/textures/particle/${name}.png`);
+        if (!entry) break;
+        frames.push("data:image/png;base64," + entry.getData().toString("base64"));
+      }
+      if (frames.length && frames.length === textures.length) {
+        result = frames;
+        break;
+      }
+    }
+  } catch (e) {
+    console.log(`[particles] could not read ${particleId}:`, e.message);
+  }
+  particleFramesCache.set(particleId, result);
+  return result;
+});
+
+// ─── DEV ONLY: packs de decoraciones/nameplates para pruebas ─────────────────
+// Lets the Personalizar dialog preview third-party packs (e.g. the Discord shop
+// archives) straight out of their zips, to judge how a style looks before
+// designing our own. Never registered in a packaged build, never copies
+// anything into the app or the repo — those files are not ours to ship.
+//   avatar decorations: ALAUNCHI_DECO_ZIP, else ~/Downloads/avatar_decoration.zip (.png)
+//   nameplates:         ALAUNCHI_NAMEPLATE_ZIP, else ~/Downloads/nameplates.zip (.webm)
+// Uses yauzl (random access) so a ~600 MB zip is never read into memory whole.
+if (isDev) {
+  const devPacks = {
+    deco: {
+      zipPath: process.env.ALAUNCHI_DECO_ZIP || path.join(os.homedir(), "Downloads", "avatar_decoration.zip"),
+      ext: /\.png$/i,
+    },
+    nameplate: {
+      zipPath: process.env.ALAUNCHI_NAMEPLATE_ZIP || path.join(os.homedir(), "Downloads", "nameplates.zip"),
+      ext: /\.webm$/i,
+    },
+  };
+  const openPacks = new Map();
+  const openPack = (kind) => {
+    if (!openPacks.has(kind)) {
+      const { zipPath, ext } = devPacks[kind];
+      const promise = new Promise((resolve, reject) => {
+        const yauzl = require("yauzl");
+        yauzl.open(zipPath, { lazyEntries: true, autoClose: false }, (err, zip) => {
+          if (err) return reject(err);
+          const entries = new Map();
+          zip.on("entry", (entry) => {
+            if (ext.test(entry.fileName)) entries.set(entry.fileName, entry);
+            zip.readEntry();
+          });
+          zip.on("end", () => resolve({ zip, entries }));
+          zip.on("error", reject);
+          zip.readEntry();
+        });
+      });
+      promise.catch(() => openPacks.delete(kind));
+      openPacks.set(kind, promise);
+    }
+    return openPacks.get(kind);
+  };
+
+  ipcMain.handle("dev:pack-list", async (_e, { kind }) => {
+    if (!devPacks[kind] || !fsSync.existsSync(devPacks[kind].zipPath)) return null;
+    const { entries } = await openPack(kind);
+    return [...entries.keys()].sort();
+  });
+
+  ipcMain.handle("dev:pack-get", async (_e, { kind, name }) => {
+    if (!devPacks[kind]) return null;
+    const { zip, entries } = await openPack(kind);
+    const entry = entries.get(name);
+    if (!entry) return null;
+    const buf = await new Promise((resolve, reject) => {
+      zip.openReadStream(entry, (err, stream) => {
+        if (err) return reject(err);
+        const chunks = [];
+        stream.on("data", (c) => chunks.push(c));
+        stream.on("end", () => resolve(Buffer.concat(chunks)));
+        stream.on("error", reject);
+      });
+    });
+    return buf.toString("base64");
+  });
+}
+
 // Loader / Minecraft marks for the instance tiles, read out of the jars the
 // launcher already downloaded to run those loaders (fabric-loader, neoforge
 // universal, forge, and a vanilla client for the Minecraft icon). Nothing is

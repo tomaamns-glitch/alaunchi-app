@@ -149,6 +149,15 @@ export async function setProfileAvatarDecoration(uuid: string, id: string): Prom
   await update(ref(rtdb, `profiles/${uuid}`), { avatarDecoration: id });
 }
 
+/** Live avatar-decoration id ("none" when unset) — only that one field, so
+ *  the account menu / skin editor can follow changes made in Personalizar
+ *  without pulling the whole profile snapshot. */
+export function subscribeAvatarDecoration(uuid: string, callback: (id: string) => void): Unsubscribe {
+  const r = ref(rtdb, `profiles/${uuid}/avatarDecoration`);
+  const handler = onValue(r, (snap) => callback((snap.val() as string | null) ?? "none"));
+  return () => off(r, "value", handler);
+}
+
 export async function setProfileFrame(uuid: string, id: string): Promise<void> {
   await update(ref(rtdb, `profiles/${uuid}`), { frame: id });
 }

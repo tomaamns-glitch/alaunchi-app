@@ -8,6 +8,7 @@ import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
 import { usePlayerHeadUrl, usePlayerSkinUrl } from "@/hooks/use-player-head";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { FriendsPanel } from "@/components/friends-panel";
+import { useAvatarDecoration } from "@/hooks/use-avatar-decoration";
 import { subscribeIncomingRequests } from "@/services/friends";
 
 interface AccountMenuButtonProps {
@@ -32,6 +33,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
   const [, setLocation] = useLocation();
   const myHeadUrl = usePlayerHeadUrl(uuid);
   const mySkinUrl = usePlayerSkinUrl(uuid);
+  const decoration = useAvatarDecoration(uuid);
   const activePopup = useHeaderOverlay((s) => s.active);
   const openOverlay = useHeaderOverlay((s) => s.open);
   const closeOverlay = useHeaderOverlay((s) => s.close);
@@ -105,7 +107,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   transition={{ duration: 0.12 }}
                   className="flex gap-4 p-4"
                 >
-                  <CharacterColumn skinUrl={mySkinUrl}>
+                  <CharacterColumn skinUrl={mySkinUrl} effect={decoration}>
                     <button
                       type="button"
                       onClick={() => setProfileView("skin")}
@@ -131,7 +133,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   transition={{ duration: 0.12 }}
                   className="flex gap-4 p-4"
                 >
-                  <CharacterColumn skinUrl={mySkinUrl}>
+                  <CharacterColumn skinUrl={mySkinUrl} effect={decoration}>
                     <BackButton onClick={() => setProfileView("menu")} />
                   </CharacterColumn>
                   {/* Same height as the character column, so the panel only grows sideways. */}
@@ -212,7 +214,15 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
 
 /** Your character on the left of the panel — same size/spot in every view so
  *  it never jumps when switching between them. */
-function CharacterColumn({ skinUrl, children }: { skinUrl: string | null; children: React.ReactNode }) {
+function CharacterColumn({
+  skinUrl,
+  effect,
+  children,
+}: {
+  skinUrl: string | null;
+  effect: ReturnType<typeof useAvatarDecoration>;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col items-center gap-2 shrink-0">
       <div className="rounded-xl bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.18),transparent_70%)]">
@@ -222,7 +232,7 @@ function CharacterColumn({ skinUrl, children }: { skinUrl: string | null; childr
             variant="auto-detect"
             width={150}
             height={200}
-            effect="cherry-petals"
+            effect={effect}
             className="cursor-grab active:cursor-grabbing"
           />
         ) : (
