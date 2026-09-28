@@ -32,6 +32,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getSchematicPost: (args) => ipcRenderer.invoke("mc:get-schematic-post", args),
   getSchematicFiles: (args) => ipcRenderer.invoke("mc:get-schematic-files", args),
   getCherryPetalFrames: () => ipcRenderer.invoke("mc:get-cherry-petal-frames"),
+  getParticleFrames: (particleId) => ipcRenderer.invoke("mc:get-particle-frames", { particleId }),
+  // DEV ONLY — handlers only exist under `electron:dev` (see main.js).
+  devPackList: (kind) => ipcRenderer.invoke("dev:pack-list", { kind }),
+  devPackGet: (kind, name) => ipcRenderer.invoke("dev:pack-get", { kind, name }),
   getLoaderIcons: () => ipcRenderer.invoke("mc:get-loader-icons"),
   launchMinecraft: (args) => ipcRenderer.invoke("mc:launch", args),
   checkJava: () => ipcRenderer.invoke("mc:check-java"),

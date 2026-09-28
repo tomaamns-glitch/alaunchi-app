@@ -29,6 +29,7 @@ import { useShowcaseSkin } from "@/hooks/use-showcase-skin";
 import { getInstalledModpacksMeta } from "@/services/electron";
 import { getFavorites, type FavoriteCategory } from "@/services/favorites";
 import { DEFAULT_PROFILE_BANNER } from "@/services/banner";
+import { useDevBannerOverride } from "@/lib/dev-banner-override";
 import {
   getProfileCustomization,
   publishProfile,
@@ -134,6 +135,7 @@ export default function Profile() {
   const [bio, setBio] = useState("");
   const [avatarDecoration, setAvatarDecoration] = useState("none");
   const [frame, setFrame] = useState("none");
+  const devBannerVideo = useDevBannerOverride((s) => s.videoUrl);
 
   useEffect(() => {
     if (!isAuthenticated) setLocation("/login");
@@ -225,7 +227,12 @@ export default function Profile() {
           <ProfileFrame frame={frame}>
           <div className="relative rounded-xl border border-white/10 bg-card/40 overflow-hidden">
             <div className="absolute inset-0">
-              <img src={bannerUrl || DEFAULT_PROFILE_BANNER} alt="" className="w-full h-full object-cover" />
+              {devBannerVideo ? (
+                // DEV ONLY: nameplate being tried from Personalizar → Pruebas → Banners
+                <video src={devBannerVideo} autoPlay loop muted playsInline className="w-full h-full object-cover" />
+              ) : (
+                <img src={bannerUrl || DEFAULT_PROFILE_BANNER} alt="" className="w-full h-full object-cover" />
+              )}
               <div className="absolute inset-0 bg-gradient-to-r from-background via-background/85 to-background/25" />
             </div>
 
@@ -392,6 +399,7 @@ export default function Profile() {
             open={customizeOpen}
             onOpenChange={setCustomizeOpen}
             uuid={uuid}
+            username={username ?? ""}
             skinUrl={skin.fullDataUrl}
             skinVariant={skin.variant}
             avatarDecoration={avatarDecoration}

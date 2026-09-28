@@ -5,6 +5,9 @@ import { inferModelType, loadCapeToCanvas, loadImage, loadSkinToCanvas } from "s
 import classicModelUrl from "@/assets/models/classic-player.gltf?url";
 import slimModelUrl from "@/assets/models/slim-player.gltf?url";
 import { getCherryPetalFrames } from "@/services/electron";
+import { PARTICLE_EFFECTS, ParticleEffect, isParticleEffectId, type ParticleEffectId, type ParticleEffectDef } from "@/components/particle-effects";
+
+export type SkinEffect = "none" | "soul-fire" | "cherry-petals" | "fireflies" | ParticleEffectId;
 
 interface SkinViewerAnimatedProps {
   skinUrl: string;
@@ -17,8 +20,10 @@ interface SkinViewerAnimatedProps {
    * Cosmetic backdrop:
    * - "soul-fire": blue flames rising around the character.
    * - "cherry-petals": pink petals drifting down behind the character.
+   * - "fireflies": firefly-bush fireflies blinking around it, under night lighting.
+   * - any id in PARTICLE_EFFECTS (particle-effects.ts): vanilla-particle decorations.
    */
-  effect?: "none" | "soul-fire" | "cherry-petals";
+  effect?: SkinEffect;
 }
 
 interface SceneEffect {
@@ -328,6 +333,147 @@ class SoulFire implements SceneEffect {
   }
 }
 
+/**
+ * Fireflies, like the ones around a firefly bush at night (1.21.5+). The
+ * vanilla particle texture is literally a single warm-white pixel — the look
+ * comes from how it's drawn: full-bright, tiny, and fading in/out while it
+ * drifts. Recreated as `THREE.Points` rendered as crisp squares (pixel-style)
+ * with a soft yellow-green halo, additively blended and depth-tested so the
+ * ones behind the character are hidden by it. Each one wanders on a smooth
+ * random heading inside a loose cylinder around the body, lives a few seconds,
+ * and blinks with the vanilla-like "fade in, hold, fade out" curve.
+ */
+const FIREFLY_COUNT = 22;
+
+class Fireflies implements SceneEffect {
+  readonly points: THREE.Points;
+  private pos = new Float32Array(FIREFLY_COUNT * 3);
+  private vel = new Float32Array(FIREFLY_COUNT * 3);
+  private heading = new Float32Array(FIREFLY_COUNT);
+  private turn = new Float32Array(FIREFLY_COUNT);
+  private age = new Float32Array(FIREFLY_COUNT);
+  private span = new Float32Array(FIREFLY_COUNT);
+  private aAlpha = new Float32Array(FIREFLY_COUNT);
+  private aSize = new Float32Array(FIREFLY_COUNT);
+  private material: THREE.ShaderMaterial;
+  private time = 0;
+
+  constructor(private radius: number, private minY: number, private maxY: number, sizePx: number) {
+    for (let i = 0; i < FIREFLY_COUNT; i++) this.respawn(i, Math.random());
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(this.pos, 3));
+    geometry.setAttribute("aAlpha", new THREE.BufferAttribute(this.aAlpha, 1));
+    geometry.setAttribute("aSize", new THREE.BufferAttribute(this.aSize, 1));
+
+    this.material = new THREE.ShaderMaterial({
+      uniforms: {
+        uSize: { value: sizePx },
+        uCore: { value: new THREE.Color(0xfffbe6) },
+        uHalo: { value: new THREE.Color(0xb4ee3a) },
+      },
+      vertexShader: /* glsl */ `
+        attribute float aAlpha;
+        attribute float aSize;
+        varying float vAlpha;
+        uniform float uSize;
+        void main() {
+          vAlpha = aAlpha;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = uSize * aSize / max(-mv.z, 0.1);
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        varying float vAlpha;
+        uniform vec3 uCore;
+        uniform vec3 uHalo;
+        void main() {
+          vec2 c = abs(gl_PointCoord - 0.5);
+          // the vanilla particle: one crisp square pixel in the middle...
+          float core = step(max(c.x, c.y), 0.075);
+          // ...plus a soft glow around it, since in-game it's full-bright at night
+          float halo = pow(max(0.0, 1.0 - length(gl_PointCoord - 0.5) * 2.0), 2.4);
+          vec3 col = mix(uHalo, uCore, core);
+          float a = max(core, halo * 0.85) * vAlpha;
+          if (a < 0.01) discard;
+          // additive blending already multiplies by alpha — don't premultiply too
+          gl_FragColor = vec4(col, a);
+        }
+      `,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+
+    this.points = new THREE.Points(geometry, this.material);
+    this.points.frustumCulled = false;
+  }
+
+  private respawn(i: number, startFraction = 0) {
+    const angle = Math.random() * Math.PI * 2;
+    // not inside the body: keep a small gap around the vertical axis
+    const r = this.radius * (0.45 + 0.55 * Math.sqrt(Math.random()));
+    this.pos[i * 3] = Math.cos(angle) * r;
+    this.pos[i * 3 + 1] = this.minY + Math.random() * (this.maxY - this.minY);
+    this.pos[i * 3 + 2] = Math.sin(angle) * r;
+    this.heading[i] = Math.random() * Math.PI * 2;
+    this.turn[i] = (Math.random() - 0.5) * 1.6;
+    this.vel[i * 3 + 1] = (Math.random() - 0.5) * 0.08;
+    this.span[i] = 3 + Math.random() * 4;
+    this.aSize[i] = 0.8 + Math.random() * 0.5;
+    this.age[i] = startFraction * this.span[i];
+    this.aAlpha[i] = 0;
+  }
+
+  update(dt: number) {
+    this.time += dt;
+    for (let i = 0; i < FIREFLY_COUNT; i++) {
+      this.age[i] += dt;
+      if (this.age[i] >= this.span[i]) this.respawn(i);
+
+      // lazy wandering: the heading drifts, occasionally changing turn direction
+      if (Math.random() < dt * 0.4) this.turn[i] = (Math.random() - 0.5) * 1.6;
+      this.heading[i] += this.turn[i] * dt;
+      const speed = 0.12;
+      this.vel[i * 3] = Math.cos(this.heading[i]) * speed;
+      this.vel[i * 3 + 2] = Math.sin(this.heading[i]) * speed;
+      this.vel[i * 3 + 1] += (Math.random() - 0.5) * 0.12 * dt;
+      this.vel[i * 3 + 1] *= 0.98;
+
+      let x = this.pos[i * 3] + this.vel[i * 3] * dt;
+      let y = this.pos[i * 3 + 1] + this.vel[i * 3 + 1] * dt;
+      let z = this.pos[i * 3 + 2] + this.vel[i * 3 + 2] * dt;
+      // soft walls: steer back toward the body when drifting too far out,
+      // and away from it when too close
+      const d = Math.hypot(x, z);
+      if (d > this.radius || d < this.radius * 0.4) {
+        const toward = Math.atan2(-z, -x) + (d < this.radius * 0.4 ? Math.PI : 0);
+        this.heading[i] += Math.sin(toward - this.heading[i]) * 2.5 * dt;
+      }
+      if (y < this.minY || y > this.maxY) this.vel[i * 3 + 1] *= -1;
+      y = Math.min(this.maxY, Math.max(this.minY, y));
+      this.pos[i * 3] = x;
+      this.pos[i * 3 + 1] = y;
+      this.pos[i * 3 + 2] = z;
+
+      // fade in over the first 30%, out over the last 40%, with a gentle blink
+      const t = this.age[i] / this.span[i];
+      const fade = Math.min(1, t / 0.3) * Math.min(1, (1 - t) / 0.4);
+      const blink = 0.75 + 0.25 * Math.sin(this.time * 5 + i * 1.7);
+      this.aAlpha[i] = Math.max(0, fade) * blink;
+    }
+    this.points.geometry.attributes.position.needsUpdate = true;
+    this.points.geometry.attributes.aAlpha.needsUpdate = true;
+    this.points.geometry.attributes.aSize.needsUpdate = true;
+  }
+
+  dispose() {
+    this.points.geometry.dispose();
+    this.material.dispose();
+  }
+}
+
 function makePetalTexture(canvas: HTMLCanvasElement, frames: number): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -612,8 +758,12 @@ export function SkinViewerAnimated({
     rendererRef.current = renderer;
 
     const scene = new THREE.Scene();
-    scene.add(new THREE.AmbientLight(0xffffff, 2));
-    const key = new THREE.DirectionalLight(0xffffff, 1.2);
+    // Fireflies only come out at night — a cooler, dimmer "moonlight" so their
+    // glow actually reads against the character.
+    const night =
+      effect === "fireflies" || (isParticleEffectId(effect) && !!(PARTICLE_EFFECTS[effect] as ParticleEffectDef).night);
+    scene.add(new THREE.AmbientLight(night ? 0xc4ccff : 0xffffff, night ? 1.45 : 2));
+    const key = new THREE.DirectionalLight(night ? 0xaebcff : 0xffffff, night ? 0.9 : 1.2);
     key.position.set(-3, 4, 2);
     scene.add(key);
     sceneRef.current = scene;
@@ -643,6 +793,16 @@ export function SkinViewerAnimated({
       const petals = new CherryPetals(3.5, -0.7, 0.4);
       scene.add(petals.mesh);
       sceneEffect = petals;
+    } else if (effect === "fireflies") {
+      // World space like the petals, so they keep wandering naturally while
+      // the character is spun instead of orbiting with it.
+      const flies = new Fireflies(0.75, 0.1, 2.1, height * 0.5);
+      scene.add(flies.points);
+      sceneEffect = flies;
+    } else if (isParticleEffectId(effect)) {
+      const particles = new ParticleEffect(PARTICLE_EFFECTS[effect]);
+      scene.add(particles.object);
+      sceneEffect = particles;
     }
 
     const clock = new THREE.Clock();
