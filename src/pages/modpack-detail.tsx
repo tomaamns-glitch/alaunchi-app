@@ -123,7 +123,7 @@ import {
   type MinemevPostDetail,
   type MinemevFile,
 } from "@/services/minemev";
-import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
+import { findPackSource } from "@/hooks/use-modpacks";
 import { getLastViewPath } from "@/lib/last-view";
 import { formatBytes, formatPlaytime } from "@/lib/format";
 import { toast } from "sonner";
@@ -191,10 +191,13 @@ const EMPTY_CATEGORIES: Record<Category, any[]> = { mods: [], shaderpacks: [], r
 export default function ModpackDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
-  const { modpacks, loadModpacks } = useModpacks();
+  const { modpacks, pastModpacks, loadModpacks } = useModpacks();
   const { instances, loadInstances } = useCustomInstances();
 
-  const pack = modpacks.find((p) => p.id === id) ?? instances.find((p) => p.id === id);
+  const pack =
+    modpacks.find((p) => p.id === id) ??
+    instances.find((p) => p.id === id) ??
+    pastModpacks.find((p) => p.id === id && p.installed);
   const { launching: playLaunching, launch: playLaunch } = useLaunchModpack(pack);
   useDynamicAccent(pack?.bannerUrl || pack?.imageUrl);
 
@@ -541,9 +544,8 @@ export default function ModpackDetail() {
     setScreenshots([]);
 
     (async () => {
-      const repoUrl = getGithubRepo();
-      const token = getModpacksToken() || undefined;
-      const manifest = await fetchSnapshot(repoUrl, id, token);
+      const source = findPackSource(pack ?? id);
+      const manifest = source ? await fetchSnapshot(source.repoUrl, id, source.token) : null;
       if (cancelled) return;
       const manifestFiles = manifest?.files ?? [];
       setContent(categorize(manifestFiles));

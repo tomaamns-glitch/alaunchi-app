@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useLocation } from "wouter";
 import { Users } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
-import { useChatHeads } from "@/hooks/use-chat-heads";
+import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { FriendsPanel } from "@/components/friends-panel";
 
 export default function Friends() {
@@ -28,7 +28,9 @@ export default function Friends() {
             <FriendsPanel
               uuid={uuid}
               username={username}
-              onOpenProfile={(id) => setLocation(`/profile/${id}`)}
+              onOpenProfile={(id) =>
+                id === uuid ? useHeaderOverlay.getState().openProfile("profile") : useHeaderOverlay.getState().openUserProfile(id)
+              }
               onChat={(id) => {
                 openChat(id);
                 setLocation("/hub");

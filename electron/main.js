@@ -257,8 +257,8 @@ async function ensureObject(hash, downloadUrl, headers) {
   }
 }
 
-// Every regular player shares one embedded read-only GitHub token (see app-config.ts'
-// getModpacksToken) unless they've set their own in Ajustes — several friends checking
+// Every player of a private repo shares its creator's read-only GitHub token (see
+// src/lib/sources.ts) — several friends checking
 // for updates or downloading a fresh publish's objects within the same minute can trip
 // GitHub's secondary (burst) rate limit even though nobody's anywhere near the
 // 5000/hour primary budget. downloadFile's HTTP-error path attaches statusCode/body/
@@ -302,6 +302,69 @@ function safeJoin(base, rel) {
     throw new Error(`Ruta insegura: ${rel}`);
   }
   return target;
+}
+
+// Instance ids become folder names, and published/granted ones come from other
+// creators' manifests — never trust them as paths. A single plain folder name
+// only: no separators, no "..", nothing Windows forbids in a file name.
+function assertSafeInstanceId(id) {
+  if (
+    typeof id !== "string" ||
+    !id ||
+    id === "." ||
+    id === ".." ||
+    /[<>:"/\\|?*\x00-\x1f]/.test(id) ||
+    /[. ]$/.test(id)
+  ) {
+    throw new Error(`Id de instancia no válido: ${id}`);
+  }
+  return id;
+}
+
+// shell.openExternal hands the URL to Windows, which will happily run other
+// protocol handlers (file:, ms-msdt:, search-ms:…) — links come from mod
+// descriptions and chat, so only plain web/mail links get through.
+const EXTERNAL_URL_PROTOCOLS = new Set(["https:", "http:", "mailto:"]);
+function openExternalSafe(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return;
+  }
+  if (!EXTERNAL_URL_PROTOCOLS.has(parsed.protocol)) {
+    console.warn(`[openExternal] Esquema bloqueado: ${parsed.protocol}`);
+    return;
+  }
+  shell.openExternal(parsed.href);
+}
+
+// JSON files holding credentials (auth.json, secrets.json) are encrypted at
+// rest with safeStorage (DPAPI on Windows) as { enc: base64 }. Files written
+// before this was added are plain JSON — still read, and rewritten encrypted
+// by readSecureJson so they get migrated the first time they're loaded.
+async function writeSecureJson(file, data) {
+  const json = JSON.stringify(data);
+  const body = safeStorage.isEncryptionAvailable()
+    ? { enc: safeStorage.encryptString(json).toString("base64") }
+    : data;
+  await fs.writeFile(file, JSON.stringify(body));
+}
+
+async function readSecureJson(file) {
+  let parsed;
+  try {
+    parsed = JSON.parse(await fs.readFile(file, "utf8"));
+  } catch {
+    return null;
+  }
+  if (parsed && typeof parsed.enc === "string") {
+    return JSON.parse(safeStorage.decryptString(Buffer.from(parsed.enc, "base64")));
+  }
+  if (parsed && safeStorage.isEncryptionAvailable()) {
+    await writeSecureJson(file, parsed).catch((e) => console.warn(`[secure-json] No se pudo cifrar ${file}:`, e.message));
+  }
+  return parsed;
 }
 
 let mainWindow = null;
@@ -385,10 +448,10 @@ function createWindow() {
   win.webContents.on("will-navigate", (event, url) => {
     if (isAppUrl(url)) return;
     event.preventDefault();
-    shell.openExternal(url);
+    openExternalSafe(url);
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (!isAppUrl(url)) shell.openExternal(url);
+    if (!isAppUrl(url)) openExternalSafe(url);
     return { action: "deny" };
   });
 
@@ -841,6 +904,7 @@ function isPidAlive(pid) {
 // INSTANCES_DIR (also the right default for an id that doesn't exist in either
 // yet, e.g. a brand-new GitHub modpack about to be installed for the first time).
 function instanceDirFor(modpackId) {
+  assertSafeInstanceId(modpackId);
   const customPath = path.join(CUSTOM_INSTANCES_DIR, modpackId);
   if (fsSync.existsSync(customPath)) return customPath;
   return path.join(INSTANCES_DIR, modpackId);
@@ -974,10 +1038,22 @@ ipcMain.handle("instances:create", async (_, { name, loaderType, minecraftVersio
   return meta;
 });
 
+// Leaving an online instance without keeping its files. Only ever touches
+// INSTANCES_DIR (never a custom instance), and refuses while the game or an
+// install is running — Windows would leave a half-deleted folder behind.
+ipcMain.handle("instances:delete-online", async (_, { id }) => {
+  const instanceDir = path.join(INSTANCES_DIR, assertSafeInstanceId(id));
+  if (activeModpackOps.has(id) || activePlaytimeWatchers.has(id)) {
+    throw new Error("Cierra el juego (o espera a que termine la descarga) antes de borrar los archivos.");
+  }
+  await fs.rm(instanceDir, { recursive: true, force: true });
+  return { success: true };
+});
+
 ipcMain.handle("instances:delete", async (_, { id, keepFiles }) => {
   // Deliberately CUSTOM_INSTANCES_DIR only, not instanceDirFor() — this handler
   // must be physically incapable of touching a GitHub-published modpack's folder.
-  const instanceDir = path.join(CUSTOM_INSTANCES_DIR, id);
+  const instanceDir = path.join(CUSTOM_INSTANCES_DIR, assertSafeInstanceId(id));
   const metaPath = path.join(instanceDir, "alaunchi-meta.json");
   let meta;
   try {
@@ -3127,7 +3203,7 @@ ipcMain.handle("ms:device-code-auth", async (_, args) => {
             console.error("[MS Auth] Device code error:", p.error, p.error_description);
             return reject(new Error(p.error_description || p.error));
           }
-          shell.openExternal(p.verification_uri);
+          openExternalSafe(p.verification_uri);
           resolve({ userCode: p.user_code, verificationUri: p.verification_uri, expiresIn: p.expires_in, interval: p.interval, deviceCode: p.device_code });
         } catch (e) { reject(e); }
       });
@@ -3494,13 +3570,27 @@ ipcMain.handle("fs:write-settings", async (_, settings) => {
   return { success: true };
 });
 
+// auth.json holds the Microsoft refresh token (= the Minecraft account), so
+// it's encrypted at rest — see readSecureJson/writeSecureJson.
 ipcMain.handle("fs:read-auth", async () => {
-  try { return JSON.parse(await fs.readFile(path.join(APP_DATA_DIR, "auth.json"), "utf8")); }
+  try { return await readSecureJson(path.join(APP_DATA_DIR, "auth.json")); }
   catch { return null; }
 });
 
 ipcMain.handle("fs:write-auth", async (_, auth) => {
-  await fs.writeFile(path.join(APP_DATA_DIR, "auth.json"), JSON.stringify(auth, null, 2));
+  await writeSecureJson(path.join(APP_DATA_DIR, "auth.json"), auth);
+  return { success: true };
+});
+
+// Renderer-side secrets (creator's GitHub tokens, granted read tokens) —
+// one encrypted key/value map, cached in memory by src/lib/secure-store.ts.
+ipcMain.handle("secrets:read", async () => {
+  try { return (await readSecureJson(path.join(APP_DATA_DIR, "secrets.json"))) || {}; }
+  catch { return {}; }
+});
+
+ipcMain.handle("secrets:write", async (_, secrets) => {
+  await writeSecureJson(path.join(APP_DATA_DIR, "secrets.json"), secrets || {});
   return { success: true };
 });
 

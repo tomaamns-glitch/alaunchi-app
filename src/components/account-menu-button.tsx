@@ -1,15 +1,25 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { Shirt, Settings, User, Users, ChevronLeft, ChevronDown, type LucideIcon } from "lucide-react";
+import { Shirt, Settings, User, Users, Globe, ChevronLeft, ChevronDown, type LucideIcon } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { SkinManagerPanel } from "@/components/skin-manager-panel";
 import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
 import { usePlayerHeadUrl, usePlayerSkinUrl } from "@/hooks/use-player-head";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { FriendsPanel } from "@/components/friends-panel";
+import { ProfileMenuPanel } from "@/components/profile-menu-panel";
+import { OnlineInstancesPanel } from "@/components/online-instances-panel";
+import { UserProfileMenuView } from "@/components/user-profile-menu-panel";
 import { useAvatarDecoration } from "@/hooks/use-avatar-decoration";
 import { subscribeIncomingRequests } from "@/services/friends";
+import { useDevDecoOverride } from "@/lib/dev-deco-override";
+
+// DEV ONLY: decoration picked in Personalizar → Pruebas, drawn around your head
+// here. Lazy + gated on import.meta.env.DEV so the lab isn't in the prod bundle.
+const DevDecoratedHead = import.meta.env.DEV
+  ? lazy(() => import("@/components/dev-deco-lab").then((m) => ({ default: m.DecoratedHead })))
+  : null;
 
 interface AccountMenuButtonProps {
   uuid: string | null;
@@ -26,7 +36,7 @@ const clipFromButton = (w: number, h: number) =>
 const CLIP_OPEN = "inset(calc(0% - 0px) calc(0% - 0px) calc(0% - 0px) calc(0% - 0px) round 14px)";
 
 /** The account button in the bottom bar — expands into the account panel
- *  (your character, Personalizar, Perfil/Amigos/Configuración), coordinated
+ *  (your character, Personalizar, Perfil/Amigos/Instancias online/Configuración), coordinated
  *  with the other footer popups (presence, chat) via useHeaderOverlay so only
  *  one is ever open at a time. */
 export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
@@ -42,6 +52,9 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
   // shared store so the players panel can open it straight on "friends".
   const profileView = useHeaderOverlay((s) => s.profileView);
   const setProfileView = useHeaderOverlay((s) => s.setProfileView);
+  const viewedUserUuid = useHeaderOverlay((s) => s.viewedUserUuid);
+  const userProfileFrom = useHeaderOverlay((s) => s.userProfileFrom);
+  const openUserProfile = useHeaderOverlay((s) => s.openUserProfile);
   const openChat = useChatHeads((s) => s.openChat);
   const [pendingRequests, setPendingRequests] = useState(0);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -119,8 +132,9 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   </CharacterColumn>
 
                   <div className="flex-1 flex flex-col gap-1.5 pt-1">
-                    <MenuTile icon={User} label="Perfil" onClick={() => go("/profile")} />
+                    <MenuTile icon={User} label="Perfil" onClick={() => setProfileView("profile")} />
                     <MenuTile icon={Users} label="Amigos" badge={pendingRequests} onClick={() => setProfileView("friends")} />
+                    <MenuTile icon={Globe} label="Instancias online" onClick={() => setProfileView("online")} />
                     <MenuTile icon={Settings} label="Configuración" onClick={() => go("/settings")} />
                   </div>
                 </motion.div>
@@ -147,7 +161,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                       <FriendsPanel
                         uuid={uuid}
                         username={username}
-                        onOpenProfile={(id) => go(`/profile/${id}`)}
+                        onOpenProfile={(id) => (id === uuid ? setProfileView("profile") : openUserProfile(id))}
                         onChat={(id) => {
                           // openChat closes this panel itself (useHeaderOverlay).
                           openChat(id);
@@ -155,6 +169,69 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                       />
                     )}
                   </motion.div>
+                </motion.div>
+              ) : profileView === "profile" ? (
+                // EXPERIMENTAL: profile inside the menu; the old /profile page is untouched.
+                <motion.div
+                  key="profile"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="flex gap-4 p-4"
+                >
+                  <CharacterColumn skinUrl={mySkinUrl} effect={decoration}>
+                    <BackButton onClick={() => setProfileView("menu")} />
+                  </CharacterColumn>
+                  <motion.div
+                    initial={{ opacity: 0, x: 24 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                    className="w-[22rem] h-[246px]"
+                  >
+                    {username && <ProfileMenuPanel uuid={uuid} username={username} onNavigate={go} />}
+                  </motion.div>
+                </motion.div>
+              ) : profileView === "online" ? (
+                <motion.div
+                  key="online"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="flex gap-4 p-4"
+                >
+                  <CharacterColumn skinUrl={mySkinUrl} effect={decoration}>
+                    <BackButton onClick={() => setProfileView("menu")} />
+                  </CharacterColumn>
+                  <motion.div
+                    initial={{ opacity: 0, x: 24 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                    className="w-[22rem] h-[246px]"
+                  >
+                    <OnlineInstancesPanel onNavigate={go} />
+                  </motion.div>
+                </motion.div>
+              ) : profileView === "user" && viewedUserUuid ? (
+                // EXPERIMENTAL: someone else's profile inside the menu; /profile/:uuid is untouched.
+                <motion.div
+                  key={`user:${viewedUserUuid}`}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="p-4"
+                >
+                  {username && (
+                    <UserProfileMenuView
+                      targetUuid={viewedUserUuid}
+                      myUuid={uuid}
+                      myUsername={username}
+                      backButton={<BackButton onClick={() => setProfileView(userProfileFrom)} />}
+                      onNavigate={go}
+                    />
+                  )}
                 </motion.div>
               ) : (
                 <motion.div
@@ -180,12 +257,14 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
               onClick={() => setProfileOpen(false)}
               className="flex items-center gap-3 px-4 py-2.5 border-t border-white/5 bg-white/[0.03] hover:bg-white/[0.06] transition-colors rounded-b-[14px] text-left"
             >
-              <Avatar className="h-10 w-10 rounded-lg border border-white/10">
-                {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-lg" />}
-                <AvatarFallback className="rounded-lg bg-accent/20 text-accent text-base font-bold">
-                  {username?.charAt(0)?.toUpperCase() ?? "?"}
-                </AvatarFallback>
-              </Avatar>
+              <HeadAvatar headUrl={myHeadUrl} username={username} size={40}>
+                <Avatar className="h-10 w-10 rounded-lg border border-white/10">
+                  {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-lg" />}
+                  <AvatarFallback className="rounded-lg bg-accent/20 text-accent text-base font-bold">
+                    {username?.charAt(0)?.toUpperCase() ?? "?"}
+                  </AvatarFallback>
+                </Avatar>
+              </HeadAvatar>
               <span className="flex-1 text-base font-semibold text-white truncate">{username}</span>
               <ChevronDown className="h-4 w-4 text-gray-400" />
             </button>
@@ -198,16 +277,49 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
         onClick={() => setProfileOpen((v) => !v)}
         className="relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors"
       >
-        <Avatar className="h-6 w-6 rounded-md border border-white/10">
-          {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-md" />}
-          <AvatarFallback className="rounded-md bg-accent/20 text-accent text-xs font-bold">
-            {username?.charAt(0)?.toUpperCase() ?? "?"}
-          </AvatarFallback>
-        </Avatar>
+        <HeadAvatar headUrl={myHeadUrl} username={username} size={24}>
+          <Avatar className="h-6 w-6 rounded-md border border-white/10">
+            {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-md" />}
+            <AvatarFallback className="rounded-md bg-accent/20 text-accent text-xs font-bold">
+              {username?.charAt(0)?.toUpperCase() ?? "?"}
+            </AvatarFallback>
+          </Avatar>
+        </HeadAvatar>
         <span className="text-sm font-medium text-gray-200" data-testid="text-username">
           {username}
         </span>
       </button>
+    </div>
+  );
+}
+
+/** Your head avatar, or — only in dev, while a decoration is picked in the
+ *  Pruebas lab — that decoration drawn around it. The decoration is 1.2× the
+ *  avatar (Discord's proportions), so it overflows by a negative margin and the
+ *  button keeps its size. */
+function HeadAvatar({
+  headUrl,
+  username,
+  size,
+  children,
+}: {
+  headUrl: string | null;
+  username: string | null;
+  size: number;
+  children: React.ReactNode;
+}) {
+  const devDeco = useDevDecoOverride((s) => s.name);
+  const devSquare = useDevDecoOverride((s) => s.square);
+  if (!DevDecoratedHead || !devDeco) return <>{children}</>;
+  const outer = size * 1.2;
+  const overflow = (outer - size) / 2;
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }} title={username ?? undefined}>
+      <div className="absolute" style={{ inset: -overflow }}>
+        <Suspense fallback={children}>
+          <DevDecoratedHead key={`${devDeco}-${devSquare}`} name={devDeco} headUrl={headUrl} size={outer} square={devSquare} />
+        </Suspense>
+      </div>
     </div>
   );
 }

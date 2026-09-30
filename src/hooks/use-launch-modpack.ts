@@ -6,7 +6,7 @@ import { markOnline } from "@/services/presence";
 import { markPlayingInstance } from "@/services/user-activity";
 import { getAzureClientId } from "@/services/auth";
 import { Modpack, fetchSnapshot, snapshotBaseUrl } from "@/services/github";
-import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
+import { requirePackSource } from "@/hooks/use-modpacks";
 import { reportCaughtError } from "@/services/error-reporter";
 import { toast } from "sonner";
 
@@ -29,8 +29,7 @@ export function useLaunchModpack(pack: Modpack | undefined) {
       if (pack.updateAvailable) {
         setStage("updating");
         try {
-          const repoUrl = getGithubRepo();
-          const token = getModpacksToken();
+          const { repoUrl, token } = requirePackSource(pack);
           const manifest = await fetchSnapshot(repoUrl, pack.id, token || undefined);
           if (!manifest) throw new Error("No hay manifiesto publicado para este modpack todavía.");
 
@@ -78,7 +77,8 @@ export function useLaunchModpack(pack: Modpack | undefined) {
         xuid: auth.xuid,
         clientId: getAzureClientId(),
       });
-      markOnline(pack.id, auth.uuid, auth.username).catch(() => {});
+      // Out-of-network (past) instances have no instance presence anymore.
+      if (!pack.outOfNetwork) markOnline(pack.id, auth.uuid, auth.username).catch(() => {});
       markPlayingInstance(auth.uuid, auth.username, pack.id, pack.name, pack.source === "custom" ? "custom" : "github").catch(() => {});
       toast.success(`¡${pack.name} iniciado!`);
     } catch (e: any) {

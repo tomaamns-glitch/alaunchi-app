@@ -1,7 +1,7 @@
 import { getLatestVersion, identifyModrinthFiles, categoryOf } from "@/services/modrinth";
 import { listInstanceFiles, downloadInstanceFile, deleteInstanceFile } from "@/services/electron";
 import { fetchSnapshot, type Modpack } from "@/services/github";
-import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
+import { findPackSource } from "@/hooks/use-modpacks";
 import { resolveContentConflict } from "@/lib/content-conflict";
 import type { FavoriteEntry } from "@/services/favorites";
 
@@ -41,7 +41,8 @@ export async function installFavoriteInto(target: Modpack, favorite: FavoriteEnt
   const mandatoryPaths = new Set<string>();
   if (target.source !== "custom") {
     try {
-      const manifest = await fetchSnapshot(getGithubRepo(), target.id, getModpacksToken() || undefined);
+      const source = findPackSource(target.id);
+      const manifest = source ? await fetchSnapshot(source.repoUrl, target.id, source.token) : null;
       for (const f of manifest?.files ?? []) {
         if (f.required !== false) mandatoryPaths.add(f.path);
       }

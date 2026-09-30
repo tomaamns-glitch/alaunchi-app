@@ -94,7 +94,10 @@ export function PresenceButton({ context, open, onOpenChange }: PresenceButtonPr
   const prevOnlineRef = useRef<Set<string> | null>(null);
 
   useEffect(() => {
-    onOpenChange(false);
+    // Only our own popup — onOpenChange(false) closes the shared footer
+    // overlay, which could be the account menu (it reloads the catalog on
+    // opening Perfil, which changes instancePack and used to shut it).
+    if (open) onOpenChange(false);
     prevOnlineRef.current = null;
     if (!instancePack) {
       setInstanceEntries({});
