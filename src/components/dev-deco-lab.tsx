@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
+import { useDevDecoOverride } from "@/lib/dev-deco-override";
 
 // DEV ONLY — a lab for previewing a third-party avatar-decoration pack (read
 // straight from its zip by main.js, see "dev:deco-list") on your own head, in
@@ -91,7 +92,7 @@ async function decodeFrames(bytes: ArrayBuffer, square: boolean): Promise<Frame[
   return frames;
 }
 
-function DecoratedHead({
+export function DecoratedHead({
   name,
   headUrl,
   size,
@@ -176,8 +177,14 @@ export function DevDecoLab({ uuid }: { uuid: string }) {
   const [names, setNames] = useState<string[] | null | undefined>(undefined);
   const [listError, setListError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
-  const [square, setSquare] = useState(true);
+  // Lives in the override store (not local state) so the pick is also shown
+  // around your head in the account menu, and survives closing this dialog.
+  const selected = useDevDecoOverride((s) => s.name);
+  const square = useDevDecoOverride((s) => s.square);
+  const setOverride = useDevDecoOverride((s) => s.set);
+  const clearOverride = useDevDecoOverride((s) => s.clear);
+  const setSelected = (n: string) => setOverride(n, square);
+  const setSquare = (fn: (v: boolean) => boolean) => useDevDecoOverride.setState({ square: fn(square) });
 
   useEffect(() => {
     if (!eAPI?.devPackList) {
@@ -225,6 +232,13 @@ export function DevDecoLab({ uuid }: { uuid: string }) {
                 <DecoratedHead key={`${selected}-${square}-30`} name={selected} headUrl={headUrl} size={30} square={square} />
               </div>
               <span className="text-[11px] text-center text-gray-300">{label(selected)}</span>
+              <button
+                type="button"
+                onClick={clearOverride}
+                className="text-[10px] text-muted-foreground hover:text-accent transition-colors"
+              >
+                Quitar del menú
+              </button>
             </>
           ) : (
             <p className="text-[11px] text-muted-foreground text-center py-10">Elige una para verla sobre tu cabeza.</p>
@@ -267,7 +281,7 @@ export function DevDecoLab({ uuid }: { uuid: string }) {
         </div>
       </div>
       <p className="text-[10px] text-amber-400/80">
-        Solo en desarrollo: no se guarda en tu perfil ni se incluye en la app. Sirve para comparar estilos.
+        Solo en desarrollo: la elegida se ve temporalmente en tu cabeza del menú de cuenta, pero no se guarda en tu perfil ni se incluye en la app.
       </p>
     </div>
   );

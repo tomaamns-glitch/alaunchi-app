@@ -39,7 +39,7 @@ import {
   type WalkedFile,
   type PublishProgress,
 } from "@/services/github";
-import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
+import { getMySource } from "@/lib/sources";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { formatBytes } from "@/lib/format";
 import { ChangelogEditor } from "@/components/changelog-editor";
@@ -49,6 +49,7 @@ import {
   getAccessCode,
   subscribeAccessGrants,
   revokeAccess,
+  formatCode,
   type AccessGrant,
 } from "@/services/access-codes";
 
@@ -222,12 +223,13 @@ export default function AdminModpack() {
   }, [isAdmin]);
 
   useEffect(() => {
-    if (!id) return;
+    const repoUrl = getMySource()?.repoUrl;
+    if (!id || !repoUrl) return;
     let cancelled = false;
-    getAccessCode(id).then((code) => {
+    getAccessCode(repoUrl, id).then((code) => {
       if (!cancelled) setAccessCode(code);
     });
-    const unsubscribe = subscribeAccessGrants(id, setAccessGrants);
+    const unsubscribe = subscribeAccessGrants(repoUrl, id, setAccessGrants);
     return () => {
       cancelled = true;
       unsubscribe();
@@ -251,8 +253,8 @@ export default function AdminModpack() {
       bannerUrl: pack.bannerUrl,
       antiXray: pack.antiXray ?? false,
     });
-    const repoUrl = getGithubRepo();
-    const token = getModpacksToken();
+    const repoUrl = getMySource()?.repoUrl ?? "";
+    const token = getMySource()?.adminToken;
     fetchSnapshot(repoUrl, id, token || undefined)
       .then((manifest) => {
         if (cancelled) return;
@@ -528,8 +530,8 @@ export default function AdminModpack() {
 
   const handleSaveSettings = async () => {
     if (!id) return;
-    const token = localStorage.getItem("githubToken") ?? "";
-    const repoUrl = getGithubRepo();
+    const token = getMySource()?.adminToken ?? "";
+    const repoUrl = getMySource()?.repoUrl ?? "";
     if (!token) {
       toast.error("Necesitas un token de GitHub en Ajustes antes de guardar.");
       return;
@@ -547,12 +549,13 @@ export default function AdminModpack() {
   };
 
   const handleGenerateOrRegenerateCode = async () => {
-    if (!id || !uuid || !username) return;
+    const mine = getMySource();
+    if (!id || !uuid || !mine) return;
     setAccessCodeLoading(true);
     try {
       const code = accessCode
-        ? await regenerateAccessCode(id)
-        : await createAccessCode(id, uuid, username);
+        ? await regenerateAccessCode(mine.repoUrl, id, uuid, mine.readToken)
+        : await createAccessCode(mine.repoUrl, id, uuid, mine.readToken);
       setAccessCode(code);
       toast.success(accessCode ? "Código regenerado." : "Código creado.");
     } catch (e: any) {
@@ -564,16 +567,17 @@ export default function AdminModpack() {
 
   const handleCopyCode = () => {
     if (!accessCode) return;
-    navigator.clipboard.writeText(accessCode).then(
+    navigator.clipboard.writeText(formatCode(accessCode)).then(
       () => toast.success("Código copiado."),
       () => toast.error("No se pudo copiar.")
     );
   };
 
   const handleRevokeAccess = async (grantUuid: string, grantUsername: string) => {
-    if (!id) return;
+    const repoUrl = getMySource()?.repoUrl;
+    if (!id || !repoUrl) return;
     try {
-      await revokeAccess(id, grantUuid);
+      await revokeAccess(repoUrl, id, grantUuid);
       toast.success(`Acceso de ${grantUsername} eliminado.`);
     } catch (e: any) {
       toast.error(e?.message ?? "No se pudo quitar el acceso.");
@@ -599,8 +603,8 @@ export default function AdminModpack() {
       toast.error("Indica el número de versión.");
       return;
     }
-    const token = localStorage.getItem("githubToken") ?? "";
-    const repoUrl = getGithubRepo();
+    const token = getMySource()?.adminToken ?? "";
+    const repoUrl = getMySource()?.repoUrl ?? "";
     if (!token) {
       toast.error("Necesitas un token de GitHub en Ajustes antes de publicar.");
       return;
@@ -1073,13 +1077,13 @@ export default function AdminModpack() {
                 <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 space-y-3">
                   <Label className="text-gray-200">Código de acceso</Label>
                   <p className="text-xs text-muted-foreground">
-                    Quien lo introduzca en "Añadir" verá este modpack en su carrusel. Sin código, el
-                    modpack es visible para todos (como antes de este sistema).
+                    Quien lo introduzca en "Añadir" verá esta instancia online. Sin código nadie más
+                    puede verla. Al regenerarlo, el anterior deja de funcionar.
                   </p>
                   {accessCode ? (
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-lg tracking-[0.3em] bg-background/50 border border-white/10 rounded px-3 py-1.5 text-white">
-                        {accessCode}
+                        {formatCode(accessCode)}
                       </span>
                       <Button variant="outline" size="icon" onClick={handleCopyCode} aria-label="Copiar código">
                         <Copy className="h-4 w-4" />

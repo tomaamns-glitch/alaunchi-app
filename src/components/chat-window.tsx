@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
 import { format, formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
@@ -35,7 +34,7 @@ import { fetchAsBase64 } from "@/services/content-share";
 import { getNicknames } from "@/lib/nicknames";
 import { getInstanceAccentColor } from "@/lib/instance-color";
 import { findCompatibleInstances, type CompatibleInstance } from "@/lib/content-compat";
-import { useChatHeads } from "@/hooks/use-chat-heads";
+import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { ChatContactRail } from "@/components/chat-contact-rail";
@@ -93,7 +92,6 @@ function isNearBottom(el: HTMLDivElement): boolean {
  *  close, and minimize are all the same transition from here — they just
  *  differ in whether openUuid comes back later. */
 export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps) {
-  const [, setLocation] = useLocation();
   const openUuid = useChatHeads((s) => s.openUuid);
   const chatIndex = useChatHeads((s) => s.chatIndex);
   const directory = useChatHeads((s) => s.directory);
@@ -380,7 +378,7 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                 <motion.button
                   {...tapHover}
                   type="button"
-                  onClick={() => displayUuid && setLocation(`/profile/${displayUuid}`)}
+                  onClick={() => displayUuid && useHeaderOverlay.getState().openUserProfile(displayUuid)}
                   title="Ver perfil"
                   className="block text-sm font-semibold text-white hover:text-accent transition-colors truncate text-left"
                 >

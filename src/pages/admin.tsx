@@ -17,7 +17,7 @@ import {
 import { toast } from "sonner";
 import { ArrowLeft, Plus, Trash, Loader2 } from "lucide-react";
 import { createModpack, deleteModpack, type NewModpackData } from "@/services/github";
-import { getGithubRepo } from "@/lib/app-config";
+import { getMySource, uniqueModpackId } from "@/lib/sources";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { createAccessCode } from "@/services/access-codes";
 
@@ -60,19 +60,20 @@ export default function Admin() {
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newForm.id || !newForm.name) { toast.error("ID y nombre son obligatorios"); return; }
-    const token = localStorage.getItem("githubToken") ?? "";
-    const repoUrl = getGithubRepo();
+    const mine = getMySource();
+    const token = mine?.adminToken ?? "";
+    const repoUrl = mine?.repoUrl ?? "";
+    const id = uniqueModpackId(newForm.id);
     setCreating(true);
     try {
-      await createModpack(token, repoUrl, newForm);
+      await createModpack(token, repoUrl, { ...newForm, id });
       toast.success(`Modpack "${newForm.name}" creado en GitHub`);
       // Best-effort — a Firebase hiccup here shouldn't undo the GitHub creation
-      // that just succeeded. Worst case the pack is left without a code, which
-      // just means "unrestricted", the same as any pack published before this
-      // feature existed.
-      if (uuid && username) {
+      // that just succeeded. Worst case the pack is left without a code for now
+      // (nobody else can reach it until one is generated in the Acceso tab).
+      if (uuid) {
         try {
-          await createAccessCode(newForm.id, uuid, username);
+          await createAccessCode(repoUrl, id, uuid, mine?.readToken);
         } catch {
           toast.warning("No se pudo generar el código de acceso. Puedes crearlo luego desde la pestaña Acceso.");
         }
@@ -89,8 +90,8 @@ export default function Admin() {
 
   const handleDeleteModpack = async () => {
     if (!packToDelete) return;
-    const token = localStorage.getItem("githubToken") ?? "";
-    const repoUrl = getGithubRepo();
+    const token = getMySource()?.adminToken ?? "";
+    const repoUrl = getMySource()?.repoUrl ?? "";
     setDeleting(true);
     try {
       await deleteModpack(token, repoUrl, packToDelete.id);
@@ -187,7 +188,7 @@ export default function Admin() {
           <form onSubmit={handleCreate} className="space-y-4 pt-2">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label>ID único *</Label>
+                <Label>ID *</Label>
                 <Input
                   value={newForm.id}
                   onChange={(e) => setNewForm({ ...newForm, id: e.target.value.toLowerCase().replace(/\s+/g, "-") })}
@@ -195,6 +196,7 @@ export default function Admin() {
                   placeholder="mi-modpack"
                   required
                 />
+                <p className="text-[11px] text-muted-foreground">Se le añade un sufijo único (p. ej. mi-modpack-k3f9).</p>
               </div>
               <div className="space-y-1.5">
                 <Label>Nombre *</Label>

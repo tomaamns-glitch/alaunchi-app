@@ -1,11 +1,19 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 import { toast } from "sonner";
 import { Modpack, fetchModpacks } from "../services/github";
-import { getGithubRepo, getModpacksToken } from "../lib/app-config";
+import { addGrantedSource, getGrantedSource, getGrantedSources, getMySource, getReadToken, repoKey, sameRepo } from "../lib/sources";
 import { purgeXrayFiles } from "../services/electron";
-import { getGatedModpackIds, getUserAccessSet } from "../services/access-codes";
+import { getUserAccessSet, grantKey, refreshAccess, revokeAccess } from "../services/access-codes";
+import {
+  type OnlineHistory,
+  historyEntryFrom,
+  markPast,
+  pastEntryToModpack,
+  readOnlineHistory,
+  writeOnlineHistory,
+} from "../lib/online-history";
 import { useAuth } from "./use-auth";
-import { isAdminEmail } from "../lib/admin";
 
 const eAPI = (window as any).electronAPI;
 const isElectron = !!eAPI;
@@ -52,28 +60,102 @@ function sweepXrayContent(modpacks: Modpack[]) {
   }
 }
 
-// Mirrors useIsAdmin() (src/hooks/use-is-admin.ts) — that one's a hook and
-// this runs inside a zustand action, so it reads the auth store imperatively
-// via .getState() instead of subscribing to it.
-function isCurrentUserAdmin(): boolean {
-  return import.meta.env.DEV || isAdminEmail(useAuth.getState().email);
+
+// Which online instances of a repo this user may see: all of them in their
+// own repo (they're its creator and manage every pack), only the granted ones
+// in a repo they reached through access codes. `accessKnown` is false when the
+// grants couldn't be read — then a missing pack says nothing about being removed.
+async function filterByAccess(modpacks: Modpack[]): Promise<{ accessible: Modpack[]; accessKnown: boolean }> {
+  const mine = getMySource();
+  const uuid = useAuth.getState().uuid;
+  const needsGrant = modpacks.some((mp) => !sameRepo(mp.repoUrl, mine?.repoUrl));
+  if (!needsGrant) return { accessible: modpacks, accessKnown: true };
+  let access = new Set<string>();
+  let accessKnown = false;
+  if (uuid) {
+    try {
+      access = await getUserAccessSet(uuid);
+      accessKnown = true;
+    } catch {
+      // Firebase hiccup — keep only your own repo's packs rather than guessing.
+    }
+  }
+  const accessible = modpacks.filter(
+    (mp) => sameRepo(mp.repoUrl, mine?.repoUrl) || (!!mp.repoUrl && access.has(grantKey(mp.repoUrl, mp.id)))
+  );
+  return { accessible, accessKnown };
 }
 
-// Modpacks with no code at all are unrestricted (every pack published before
-// this feature existed, or one whose code creation failed) — only ones the
-// admin actually gated get filtered by grant. The admin always sees the full
-// catalog regardless, since they need it to manage every pack.
-async function filterByAccess(modpacks: Modpack[]): Promise<Modpack[]> {
-  if (isCurrentUserAdmin()) return modpacks;
-  const uuid = useAuth.getState().uuid;
-  if (!uuid) return modpacks;
-  try {
-    const [gatedIds, userAccess] = await Promise.all([getGatedModpackIds(), getUserAccessSet(uuid)]);
-    return modpacks.filter((mp) => !gatedIds.has(mp.id) || userAccess.has(mp.id));
-  } catch {
-    // Firebase hiccup — fail open rather than hiding every modpack.
-    return modpacks;
+/** Brings the online-instance history up to date with what was just read:
+ *  visible packs are (again) "online"; a previously online one is now "past" if
+ *  its repo was read fine and it's gone from the catalog (deleted by its
+ *  creator) or still there but no longer granted to you (removed). Repos that
+ *  failed to load this time are left alone — a network error is not a removal. */
+function reconcileHistory(
+  previous: OnlineHistory,
+  accessible: Modpack[],
+  catalogIdsByRepo: Map<string, Set<string>>,
+  accessKnown: boolean
+): OnlineHistory {
+  const next: OnlineHistory = { ...previous };
+  const accessibleIds = new Set(accessible.map((mp) => mp.id));
+  for (const mp of accessible) next[mp.id] = historyEntryFrom(mp, previous[mp.id]);
+  for (const entry of Object.values(next)) {
+    if (entry.status !== "online" || accessibleIds.has(entry.id)) continue;
+    const ids = catalogIdsByRepo.get(repoKey(entry.repoUrl) ?? "");
+    if (!ids) continue;
+    if (!ids.has(entry.id)) next[entry.id] = markPast(entry, "deleted");
+    else if (accessKnown) next[entry.id] = markPast(entry, "kicked");
   }
+  return next;
+}
+
+/** A granted private repo answering 401/403/404 usually means its creator
+ *  rotated the read token — fetch the current one again through a code we
+ *  redeemed for that repo and retry once. */
+async function fetchSourceCatalog(url: string): Promise<Modpack[]> {
+  try {
+    return await fetchModpacks(url, getReadToken(url));
+  } catch (e: any) {
+    const granted = getGrantedSource(url);
+    if (![401, 403, 404].includes(e?.status) || !granted?.codes?.length) throw e;
+    for (const code of granted.codes) {
+      const fresh = await refreshAccess(code).catch(() => null);
+      if (fresh?.readToken && fresh.readToken !== granted.readToken) {
+        addGrantedSource({ repoUrl: url, readToken: fresh.readToken });
+        return fetchModpacks(url, fresh.readToken);
+      }
+    }
+    throw e;
+  }
+}
+
+/** Every repo to read a catalog from: yours (if you're a creator) plus every
+ *  one reached through an access code, de-duplicated. */
+function allSourceUrls(): string[] {
+  const urls: string[] = [];
+  const mine = getMySource();
+  if (mine) urls.push(mine.repoUrl);
+  for (const g of getGrantedSources()) {
+    if (!urls.some((u) => sameRepo(u, g.repoUrl))) urls.push(g.repoUrl);
+  }
+  return urls;
+}
+
+/** Repo + read token of an online instance (by object or by id, looked up in
+ *  the loaded catalog), or null if it isn't known — best-effort callers. */
+export function findPackSource(pack: Modpack | string | undefined): { repoUrl: string; token?: string } | null {
+  const mp = typeof pack === "string" ? useModpacks.getState().modpacks.find((m) => m.id === pack) : pack;
+  if (!mp?.repoUrl) return null;
+  return { repoUrl: mp.repoUrl, token: getReadToken(mp.repoUrl) };
+}
+
+/** Same as findPackSource, but for install/update paths that can't go on
+ *  without knowing which repo to download from. */
+export function requirePackSource(pack: Modpack | string | undefined): { repoUrl: string; token?: string } {
+  const source = findPackSource(pack);
+  if (!source) throw new Error("No se sabe de qué repositorio viene esta instancia online. Recarga la lista.");
+  return source;
 }
 
 function persistLocalState(modpacks: Modpack[]) {
@@ -93,28 +175,77 @@ function persistLocalState(modpacks: Modpack[]) {
 }
 
 interface ModpackState {
+  /** Online instances currently reachable ("en línea") — the catalog. */
   modpacks: Modpack[];
+  /** "Pasadas": online instances you left / were removed from / got deleted,
+   *  as Modpacks with `outOfNetwork` set and no repoUrl. Installed or not. */
+  pastModpacks: Modpack[];
+  /** Per-user record behind pastModpacks + the archived flags (lib/online-history.ts). */
+  history: OnlineHistory;
+  /** True once loadModpacks has finished at least once. */
+  loaded: boolean;
   loading: boolean;
   error: string | null;
+  /** Repos whose catalog failed to load on the last loadModpacks, by repo URL
+   *  (the rest still loaded fine). */
+  sourceErrors: Record<string, string>;
   loadModpacks: () => Promise<void>;
   updateModpackStatus: (id: string, updates: Partial<Modpack>) => void;
+  /** Leaves an online instance: drops your grant in Firebase, optionally deletes
+   *  its files, and moves it to "past" (reason "left"). */
+  leaveInstance: (pack: Modpack, keepFiles: boolean) => Promise<void>;
+  /** Hides/shows an instance (online or past) in the carousel. */
+  setArchived: (id: string, archived: boolean) => void;
+}
+
+function pastFromHistory(history: OnlineHistory, installedState: Record<string, InstalledState>): Modpack[] {
+  return Object.values(history)
+    .filter((e) => e.status === "past")
+    .sort((a, b) => (b.since ?? 0) - (a.since ?? 0))
+    .map((e) => pastEntryToModpack(e, installedState[e.id]?.installed ? installedState[e.id].installedVersion : undefined));
 }
 
 export const useModpacks = create<ModpackState>((set, get) => ({
   modpacks: [],
+  pastModpacks: [],
+  history: readOnlineHistory(useAuth.getState().uuid),
+  loaded: false,
   loading: false,
   error: null,
+  sourceErrors: {},
 
   loadModpacks: async () => {
-    set({ loading: true, error: null });
-    const repoUrl = getGithubRepo();
-    const token = getModpacksToken();
+    set({ loading: true, error: null, sourceErrors: {} });
+    const uuid = useAuth.getState().uuid;
 
     try {
-      const [remoteModpacks, installedState] = await Promise.all([
-        fetchModpacks(repoUrl, token || undefined),
+      const sources = allSourceUrls();
+      // One catalog per repo, in parallel — a repo that fails (revoked token,
+      // deleted repo, GitHub hiccup) only drops ITS packs, never the others.
+      const [results, installedState] = await Promise.all([
+        Promise.allSettled(sources.map(fetchSourceCatalog)),
         getInstalledState(),
       ]);
+
+      const sourceErrors: Record<string, string> = {};
+      const remoteModpacks: Modpack[] = [];
+      const catalogIdsByRepo = new Map<string, Set<string>>();
+      results.forEach((r, i) => {
+        if (r.status === "fulfilled") {
+          remoteModpacks.push(...r.value);
+          const key = repoKey(sources[i]);
+          if (key) catalogIdsByRepo.set(key, new Set(r.value.map((mp) => mp.id)));
+        } else {
+          sourceErrors[sources[i]] = r.reason?.message ?? "Error al cargar el repositorio";
+        }
+      });
+      // Only a full-screen error when nothing could be read at all.
+      if (sources.length > 0 && Object.keys(sourceErrors).length === sources.length) {
+        // Past instances are local — still show them even with the network down.
+        const history = readOnlineHistory(uuid);
+        set({ history, pastModpacks: pastFromHistory(history, installedState) });
+        throw new Error(Object.values(sourceErrors)[0]);
+      }
 
       const merged = remoteModpacks.map((mp) => {
         const local = installedState[mp.id];
@@ -129,11 +260,37 @@ export const useModpacks = create<ModpackState>((set, get) => ({
         };
       });
 
-      const visible = await filterByAccess(merged);
-      set({ modpacks: visible, loading: false });
+      // Instance folders are named by id — two visible instances from different
+      // repos with the same id would share one folder, so only the first is
+      // kept (new ids get a unique suffix at creation, lib/sources.ts'
+      // uniqueModpackId, so this is rare). After filtering, so an instance you
+      // can't see never hides one you can.
+      const { accessible, accessKnown } = await filterByAccess(merged);
+      const visible: Modpack[] = [];
+      for (const mp of accessible) {
+        if (visible.some((other) => other.id === mp.id)) {
+          console.warn(`[modpacks] id "${mp.id}" repetido en ${mp.repoUrl}; se ignora.`);
+          continue;
+        }
+        visible.push(mp);
+      }
+
+      // The user may have switched accounts since the last load — always
+      // reconcile against THEIR history, not whatever the store held.
+      const history = reconcileHistory(readOnlineHistory(uuid), accessible, catalogIdsByRepo, accessKnown);
+      writeOnlineHistory(uuid, history);
+
+      set({
+        modpacks: visible,
+        pastModpacks: pastFromHistory(history, installedState),
+        history,
+        loaded: true,
+        loading: false,
+        sourceErrors,
+      });
       sweepXrayContent(visible);
     } catch (e: any) {
-      set({ loading: false, error: e?.message ?? "Error al cargar modpacks" });
+      set({ loaded: true, loading: false, error: e?.message ?? "Error al cargar modpacks" });
     }
   },
 
@@ -142,4 +299,43 @@ export const useModpacks = create<ModpackState>((set, get) => ({
     set({ modpacks: newModpacks });
     persistLocalState(newModpacks);
   },
+
+  leaveInstance: async (pack, keepFiles) => {
+    const uuid = useAuth.getState().uuid;
+    if (!uuid || !pack.repoUrl) throw new Error("No se puede salir de esta instancia.");
+    if (sameRepo(pack.repoUrl, getMySource()?.repoUrl)) {
+      throw new Error("Es una instancia tuya: no puedes salir de ella (puedes archivarla).");
+    }
+    // Files first: if the game is running this fails, and nothing has changed yet.
+    if (!keepFiles && pack.installed && isElectron) {
+      await eAPI.deleteOnlineInstanceFiles({ id: pack.id });
+    }
+    await revokeAccess(pack.repoUrl, pack.id, uuid);
+    const history = readOnlineHistory(uuid);
+    history[pack.id] = markPast(history[pack.id] ?? historyEntryFrom(pack), "left");
+    writeOnlineHistory(uuid, history);
+    set({ history });
+    await get().loadModpacks();
+  },
+
+  setArchived: (id, archived) => {
+    const uuid = useAuth.getState().uuid;
+    const history = readOnlineHistory(uuid);
+    if (!history[id]) return;
+    history[id] = { ...history[id], archived };
+    writeOnlineHistory(uuid, history);
+    set({ history });
+  },
 }));
+
+/** What the home carousel shows: online instances plus past ones that still
+ *  have their files, minus anything archived. */
+export function useCarouselModpacks(): Modpack[] {
+  const modpacks = useModpacks((s) => s.modpacks);
+  const pastModpacks = useModpacks((s) => s.pastModpacks);
+  const history = useModpacks((s) => s.history);
+  return useMemo(
+    () => [...modpacks, ...pastModpacks.filter((p) => p.installed)].filter((p) => !history[p.id]?.archived),
+    [modpacks, pastModpacks, history]
+  );
+}

@@ -16,13 +16,24 @@ export interface Modpack {
   totalSizeMb: number;
   /** When on, clients filter/delete anything with "xray" in the filename for this pack. */
   antiXray?: boolean;
+  /** Repo this online instance was read from ("https://github.com/owner/repo").
+   *  Set by fetchModpacks — every install/update/changelog call must go to THIS
+   *  repo (see lib/sources.ts), there's no global catalog anymore. */
+  repoUrl?: string;
   /** Absent/"github" = published catalog pack. "custom" = created locally in the Hub, never touches GitHub. */
   source?: "github" | "custom";
   /** Only set for source === "custom" — the resolved Forge/NeoForge/Fabric build, e.g. "47.4.0". */
   loaderVersion?: string;
   /** Only set for source === "custom" — epoch ms from alaunchi-meta.json, for "recientes" sorting. */
   installedAt?: number;
+  /** Set on a "past" online instance (lib/online-history.ts) — why it's out of
+   *  the network. Such a pack has no repoUrl: no updates, no instance chat/presence. */
+  outOfNetwork?: OfflineReason;
 }
+
+/** Why an online instance became "past": you left it, its creator removed
+ *  your access, or its creator deleted it. */
+export type OfflineReason = "left" | "kicked" | "deleted";
 
 export interface NewModpackData {
   id: string;
@@ -177,9 +188,8 @@ async function withRateLimitRetry<T extends MinimalResponse>(
   }
 }
 
-// Every regular player shares one embedded read-only token (app-config.ts'
-// getModpacksToken) unless they've set their own in Ajustes for publishing — several
-// friends checking for updates around the same time (e.g. right after an announcement)
+// Every player reading a private repo shares its creator's read-only token (handed
+// over through the access code, see lib/sources.ts) — several friends checking for updates around the same time (e.g. right after an announcement)
 // can trip GitHub's secondary (burst) rate limit on that shared token even though the
 // group is nowhere near the 5000/hour primary budget. Retry that automatically instead
 // of surfacing it as "modpack not found" (the exact bug fetchSnapshot/fetchModpacks
@@ -215,7 +225,7 @@ async function ghApiFetch(
       const resetEpoch = parseInt(res.headers.get("x-ratelimit-reset") || "", 10);
       const resetAt = Number.isFinite(resetEpoch) ? new Date(resetEpoch * 1000) : null;
       throw new Error(
-        `Límite de peticiones a GitHub agotado (compartido entre todos los usuarios sin token propio).` +
+        `Límite de peticiones a GitHub agotado (compartido entre todos los que usan el token de este repositorio).` +
           (resetAt ? ` Se restablece a las ${resetAt.toLocaleTimeString()}.` : "")
       );
     }
@@ -318,8 +328,10 @@ export async function fetchModpacks(repoUrl: string, token?: string): Promise<Mo
     data = await res.json();
   }
 
+  const canonicalUrl = `https://github.com/${owner}/${repo}`;
   return data.map((mp) => ({
     ...mp,
+    repoUrl: canonicalUrl,
     installed: false,
     updateAvailable: false,
   }));
@@ -975,4 +987,124 @@ export async function deleteModpack(
   if (manifestFile) {
     await deleteFileContents(owner, repo, manifestPath, `Delete manifest for ${modpackId}`, token, manifestFile.sha);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Creator repo setup (Ajustes → Mi repositorio)
+// ---------------------------------------------------------------------------
+
+export interface RepoVerification {
+  /** Canonical "https://github.com/owner/repo". */
+  repoUrl: string;
+  /** What GitHub says — the private/public switch in Ajustes follows this. */
+  isPrivate: boolean;
+  /** modpacks.json didn't exist yet and was created empty ("[]"). */
+  initialized: boolean;
+  /** Non-blocking notes to show the creator. */
+  warnings: string[];
+}
+
+/** A write that changes nothing visible: an unreferenced git blob (GitHub
+ *  garbage-collects it). Needs Contents: write — so it tells a read-only token
+ *  apart from a write-capable one, which the repo's `permissions` field can't
+ *  do for fine-grained tokens. "empty" = the repo has no commits yet (blobs
+ *  can't be created there), so the caller has to prove write access another way. */
+async function probeWrite(owner: string, repo: string, token: string): Promise<"yes" | "no" | "empty"> {
+  try {
+    await ghApiFetch(`/repos/${owner}/${repo}/git/blobs`, token, {
+      method: "POST",
+      body: JSON.stringify({ content: "alaunchi-write-check", encoding: "utf-8" }),
+    });
+    return "yes";
+  } catch (e: any) {
+    if (e?.status === 409) return "empty";
+    if (e?.status === 403 || e?.status === 404) return "no";
+    throw e;
+  }
+}
+
+function friendlyTokenError(e: any, which: string): Error {
+  if (e?.status === 401) return new Error(`El token ${which} no es válido o ha caducado.`);
+  if (e?.status === 404)
+    return new Error(`Con el token ${which} no se ve el repositorio: comprueba la URL y que el token tenga acceso a ese repo.`);
+  return new Error(e?.message || `No se pudo comprobar el token ${which}.`);
+}
+
+/**
+ * Checks a creator's repo setup end to end before it's saved:
+ *  - the admin token can see the repo AND write to it (else no ADMIN button);
+ *  - modpacks.json exists (created empty if not — a brand-new repo just works);
+ *  - for a private repo, the players' read token can read it but NOT write —
+ *    that token is handed to everyone with an access code, so a write-capable
+ *    one pasted there by mistake must be refused, not shared.
+ */
+export async function verifyCreatorRepo(
+  repoUrl: string,
+  adminToken: string,
+  readToken?: string
+): Promise<RepoVerification> {
+  const parsed = parseRepo(repoUrl);
+  if (!parsed) throw new Error("URL de repositorio no válida. Usa https://github.com/usuario/repo o usuario/repo.");
+  if (!adminToken) throw new Error("Falta el token de administrador.");
+  const { owner, repo } = parsed;
+  const warnings: string[] = [];
+
+  let info: any;
+  try {
+    info = await ghApiFetch(`/repos/${owner}/${repo}`, adminToken);
+  } catch (e) {
+    throw friendlyTokenError(e, "de administrador");
+  }
+  // GitHub's canonical casing, so every client computes the same repo URL.
+  const canonicalOwner: string = info.owner?.login ?? owner;
+  const canonicalRepo: string = info.name ?? repo;
+  const isPrivate = !!info.private;
+  if (info.default_branch && info.default_branch !== "main") {
+    warnings.push(
+      `La rama principal del repo es "${info.default_branch}". ALaunchi lee los repos públicos desde "main": renómbrala a "main" en GitHub.`
+    );
+  }
+
+  let initialized = false;
+  const write = await probeWrite(canonicalOwner, canonicalRepo, adminToken);
+  if (write === "no") {
+    throw new Error("El token de administrador no puede escribir en el repo. Dale el permiso Contents: Read and write.");
+  }
+  const catalog = await getFileContents(canonicalOwner, canonicalRepo, "modpacks.json", adminToken);
+  if (!catalog) {
+    // Also proves write access on an empty repo, where probeWrite can't.
+    try {
+      await putFileContents(canonicalOwner, canonicalRepo, "modpacks.json", "[]\n", "Init ALaunchi catalog", adminToken);
+      initialized = true;
+    } catch (e: any) {
+      if (e?.status === 403 || e?.status === 404) {
+        throw new Error("El token de administrador no puede escribir en el repo. Dale el permiso Contents: Read and write.");
+      }
+      throw e;
+    }
+  }
+
+  if (isPrivate) {
+    if (!readToken) throw new Error("El repositorio es privado: falta el token de lectura para los jugadores.");
+    if (readToken === adminToken) {
+      throw new Error("El token de lectura no puede ser el mismo que el de administrador: se comparte con los jugadores.");
+    }
+    try {
+      await ghApiFetch(`/repos/${canonicalOwner}/${canonicalRepo}/contents/modpacks.json`, readToken);
+    } catch (e) {
+      throw friendlyTokenError(e, "de lectura");
+    }
+    if ((await probeWrite(canonicalOwner, canonicalRepo, readToken)) === "yes") {
+      throw new Error(
+        "El token de lectura también puede ESCRIBIR en el repo, y se compartirá con los jugadores. Crea uno con Contents: Read-only."
+      );
+    }
+  }
+
+  return {
+    repoUrl: `https://github.com/${canonicalOwner}/${canonicalRepo}`,
+    isPrivate,
+    initialized,
+    warnings,
+  };
 }

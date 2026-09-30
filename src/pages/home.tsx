@@ -23,7 +23,8 @@ import { markPlayingInstance } from "@/services/user-activity";
 import { touchUserDirectory } from "@/services/chat";
 import { getAzureClientId } from "@/services/auth";
 import { toast } from "sonner";
-import { Modpack, SnapshotManifest, fetchSnapshot, snapshotBaseUrl, getCachedSnapshot } from "@/services/github";
+import { Modpack, SnapshotManifest, fetchSnapshot, snapshotBaseUrl, getCachedSnapshot, type OfflineReason } from "@/services/github";
+import { OFFLINE_REASON_LABEL } from "@/lib/online-history";
 import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AccountMenuButton } from "@/components/account-menu-button";
@@ -34,7 +35,7 @@ import { ChatWindow } from "@/components/chat-window";
 import { ChatBubbleRow } from "@/components/chat-bubble-row";
 import type { ChatMode } from "@/lib/instance-context";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
-import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
+import { findPackSource, requirePackSource, useCarouselModpacks } from "@/hooks/use-modpacks";
 import { reportCaughtError } from "@/services/error-reporter";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
@@ -103,9 +104,9 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   useEffect(() => {
     if (!pack.updateAvailable) return;
     let cancelled = false;
-    const repoUrl = getGithubRepo();
-    const token = getModpacksToken();
-    fetchSnapshot(repoUrl, pack.id, token || undefined)
+    const source = findPackSource(pack);
+    if (!source) return;
+    fetchSnapshot(source.repoUrl, pack.id, source.token)
       .then((manifest) => {
         if (!cancelled) setUpdateManifest(manifest);
       })
@@ -200,8 +201,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
     setProgress(0);
     setStageLabel("Obteniendo manifiesto...");
     try {
-      const repoUrl = getGithubRepo();
-      const token = getModpacksToken();
+      const { repoUrl, token } = requirePackSource(pack);
       // A code redeem pre-fetches this in the background (redeem-code-dialog.tsx)
       // so the pack's very first install can skip straight to downloading files
       // — never for "updating" though, that always needs the true latest manifest.
@@ -300,7 +300,8 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
         xuid: auth.xuid,
         clientId: getAzureClientId(),
       });
-      markOnline(pack.id, auth.uuid, auth.username).catch(() => {});
+      // Out-of-network (past) instances have no instance presence anymore.
+      if (!pack.outOfNetwork) markOnline(pack.id, auth.uuid, auth.username).catch(() => {});
       markPlayingInstance(auth.uuid, auth.username, pack.id, pack.name, "github").catch(() => {});
       toast.success(`¡${pack.name} iniciado!`);
     } catch (e: any) {
@@ -328,7 +329,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   const dashOffset = 100 - progress;
 
   return (
-    <div className="w-64">
+    <div className="relative w-64">
       <div ref={btnWrapRef}>
         <Button
           data-testid={pack.installed ? `button-play-${pack.id}` : `button-install-${pack.id}`}
@@ -365,6 +366,8 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
           Solo actualizar
         </Button>
       )}
+
+      {!isActing && pack.outOfNetwork && <OutOfNetworkNotice reason={pack.outOfNetwork} />}
 
       {isActing && g && (
         <svg
@@ -438,13 +441,60 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   );
 }
 
+/** Red "Instancia fuera de red" button under Play for a past online instance
+ *  (you left, were removed, or it was deleted) — expands into what that means.
+ *  The explanation opens upwards, over the carousel: the footer has no room below. */
+function OutOfNetworkNotice({ reason }: { reason: OfflineReason }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full mt-1.5 h-7 flex items-center justify-center gap-1.5 rounded-md border border-red-500/40 bg-red-500/15 text-xs font-semibold text-red-400 hover:bg-red-500/25 transition-colors"
+      >
+        <AlertTriangle className="h-3.5 w-3.5" />
+        Instancia fuera de red
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+            transition={{ duration: 0.15 }}
+            className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-80 z-30 rounded-lg border border-red-500/40 bg-card/95 backdrop-blur p-4 shadow-2xl space-y-2"
+          >
+            <div className="flex items-center gap-2 text-sm font-semibold text-red-400">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              Instancia fuera de red
+            </div>
+            <p className="text-xs text-red-300/90">{OFFLINE_REASON_LABEL[reason]}.</p>
+            <p className="text-xs text-gray-300 leading-relaxed">
+              Esta instancia ya no está conectada a su red: no recibirás más actualizaciones y ya no tendrás el chat
+              cooperativo con las personas de esta instancia (el panel de jugadores tampoco mostrará a quienes estaban en
+              ella). Tus amigos y tus conversaciones con ellos se mantienen.
+            </p>
+            <p className="text-xs text-gray-400">Puedes seguir jugándola con los archivos que tienes.</p>
+            <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={() => setOpen(false)}>
+              Entendido
+            </Button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
+
 type JavaStatus = "checking" | "ok" | "missing";
 type JavaInstallStage = "idle" | "fetching" | "downloading" | "extracting" | "done";
 
 export default function Home() {
   const { isAuthenticated, username, uuid } = useAuth();
   const [, setLocation] = useLocation();
-  const { modpacks, loadModpacks, loading, error: modpacksError } = useModpacks();
+  const { loadModpacks, loading, error: modpacksError } = useModpacks();
+  // The carousel's own list — online + past-with-files, minus archived — not the raw catalog.
+  const modpacks = useCarouselModpacks();
   const isAdmin = useIsAdmin();
   const [redeemOpen, setRedeemOpen] = useState(false);
 
@@ -548,8 +598,10 @@ export default function Home() {
 
   const currentPack = modpacks[currentIndex];
   // Shared by PresenceButton and ChatWindow below — both need "which carousel
-  // pack (if any) is this page currently showing" in the same shape.
-  const viewContext: ChatMode = currentPack ? { type: "carousel", pack: currentPack } : { type: "general" };
+  // pack (if any) is this page currently showing" in the same shape. A past
+  // (out-of-network) instance has no instance chat/players anymore → general.
+  const viewContext: ChatMode =
+    currentPack && !currentPack.outOfNetwork ? { type: "carousel", pack: currentPack } : { type: "general" };
 
   useEffect(() => {
     if (currentPack) localStorage.setItem(CAROUSEL_POSITION_KEY, currentPack.id);
@@ -631,7 +683,9 @@ export default function Home() {
       </AnimatePresence>
 
       <main className="flex-1 relative overflow-hidden min-h-0">
-        {loading ? (
+        {/* Only the first load blanks the page — a reload (Recargar, a redeemed
+            code) keeps the current list and the footer's open popups. */}
+        {loading && modpacks.length === 0 ? (
           // absolute inset-0 (not h-full) — same reasoning as the two states below:
           // main's real height only resolves reliably for absolutely-positioned children,
           // the same trick the loaded carousel below already relies on.
@@ -658,7 +712,7 @@ export default function Home() {
                 <AlertTriangle className="h-7 w-7 text-destructive" />
               </div>
               <div className="space-y-2">
-                <h2 className="text-lg font-semibold text-foreground">No se pudo cargar el catálogo</h2>
+                <h2 className="text-lg font-semibold text-foreground">No se pudieron cargar las instancias online</h2>
                 <p className="text-sm text-muted-foreground leading-relaxed">{modpacksError}</p>
               </div>
               <Button className="w-full font-bold" onClick={() => loadModpacks()}>
@@ -676,23 +730,23 @@ export default function Home() {
               </div>
               <div className="space-y-2">
                 <h2 className="text-lg font-semibold text-foreground">
-                  {isAdmin ? "No hay modpacks disponibles" : "Aún no tienes ningún modpack"}
+                  {isAdmin ? "Aún no has creado instancias online" : "Aún no tienes instancias online"}
                 </h2>
                 <p className="text-sm text-muted-foreground leading-relaxed">
                   {isAdmin
-                    ? "Configura el repositorio de GitHub en Ajustes para empezar a publicar y jugar modpacks."
-                    : "Pídele a un administrador un código de acceso y añádelo aquí para empezar a jugar."}
+                    ? "Crea la primera en ADMIN y comparte su código de acceso, o canjea el código de otra persona."
+                    : "Pide a quien haya creado una instancia online su código de acceso y canjéalo aquí. Para crear las tuyas, conecta tu repositorio en Ajustes."}
                 </p>
               </div>
               {isAdmin ? (
-                <Button className="w-full font-bold" onClick={() => setLocation("/settings")}>
+                <Button className="w-full font-bold" onClick={() => setLocation("/admin")}>
                   <Settings className="mr-2 h-4 w-4" />
-                  Ir a Ajustes
+                  Ir a ADMIN
                 </Button>
               ) : (
                 <Button className="w-full font-bold" onClick={() => setRedeemOpen(true)}>
                   <KeyRound className="mr-2 h-4 w-4" />
-                  Añadir con código
+                  Canjear código
                 </Button>
               )}
             </div>
@@ -781,8 +835,9 @@ export default function Home() {
         )}
       </main>
 
-      {!loading && (
-        <footer className="relative h-20 border-t border-white/5 bg-card/50 backdrop-blur flex items-center justify-between px-6 shrink-0">
+      {/* Always mounted: the account menu (Instancias online included) and chats
+          don't depend on the catalog, and unmounting would close whatever popup is open. */}
+      <footer className="relative h-20 border-t border-white/5 bg-card/50 backdrop-blur flex items-center justify-between px-6 shrink-0">
           {/* Always here — the account menu (Skin, Ajustes…) and your chats
               don't need a selected modpack. */}
           <div className="flex items-center gap-1">
@@ -808,7 +863,7 @@ export default function Home() {
               </div>
 
               <div className="flex items-center gap-1">
-                <ChangelogHistoryButton modpackId={currentPack.id} />
+                {!currentPack.outOfNetwork && <ChangelogHistoryButton modpackId={currentPack.id} />}
                 <button
                   type="button"
                   onClick={() => setLocation(`/modpack/${currentPack.id}`)}
@@ -822,7 +877,6 @@ export default function Home() {
             </>
           )}
         </footer>
-      )}
 
       <RedeemCodeDialog open={redeemOpen} onOpenChange={setRedeemOpen} onRedeemed={() => loadModpacks()} />
     </div>

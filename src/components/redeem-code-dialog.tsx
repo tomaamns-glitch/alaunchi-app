@@ -8,7 +8,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogD
 import { useAuth } from "@/hooks/use-auth";
 import { redeemAccessCode } from "@/services/access-codes";
 import { fetchSnapshot, cacheSnapshot } from "@/services/github";
-import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
+import { addGrantedSource, getReadToken } from "@/lib/sources";
+import { normalizeCode } from "@/services/access-codes";
 
 interface RedeemCodeDialogProps {
   open: boolean;
@@ -35,19 +36,21 @@ export function RedeemCodeDialog({ open, onOpenChange, onRedeemed }: RedeemCodeD
     setSubmitting(true);
     setError(null);
     try {
-      const modpackId = await redeemAccessCode(code, uuid, username);
-      if (!modpackId) {
+      const access = await redeemAccessCode(code, uuid, username);
+      if (!access) {
         setError("Código no válido.");
         return;
       }
-      toast.success("Modpack añadido a tu carrusel.");
+      // The code carries the repo (and its read token, if private) — adding it
+      // as a source is what makes the catalog read that repo at all.
+      addGrantedSource({ repoUrl: access.repoUrl, readToken: access.readToken, codes: [normalizeCode(code)] });
+      const { modpackId, repoUrl } = access;
+      toast.success("Instancia online añadida.");
       // Fire-and-forget — by the time the player finds the pack in the
       // carousel and hits "Instalar", the manifest is (usually) already
       // sitting in the cache, so that first click skips straight to
       // downloading files instead of waiting on this fetch too.
-      const repoUrl = getGithubRepo();
-      const token = getModpacksToken();
-      fetchSnapshot(repoUrl, modpackId, token || undefined)
+      fetchSnapshot(repoUrl, modpackId, getReadToken(repoUrl))
         .then((manifest) => manifest && cacheSnapshot(modpackId, manifest))
         .catch(() => {});
       onRedeemed();
@@ -70,7 +73,7 @@ export function RedeemCodeDialog({ open, onOpenChange, onRedeemed }: RedeemCodeD
     >
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Añadir modpack</DialogTitle>
+          <DialogTitle>Añadir instancia online</DialogTitle>
           <DialogDescription>Introduce el código de acceso que te han pasado.</DialogDescription>
         </DialogHeader>
 
@@ -86,10 +89,10 @@ export function RedeemCodeDialog({ open, onOpenChange, onRedeemed }: RedeemCodeD
             onKeyDown={(e) => {
               if (e.key === "Enter") handleSubmit();
             }}
-            placeholder="AB2CDF"
-            maxLength={6}
+            placeholder="ABCDE-FGH23"
+            maxLength={16}
             autoFocus
-            className="font-mono tracking-[0.3em] text-center text-lg uppercase"
+            className="font-mono tracking-[0.2em] text-center text-lg uppercase"
           />
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>

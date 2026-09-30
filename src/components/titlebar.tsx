@@ -4,7 +4,8 @@ import { ArrowLeft, GalleryHorizontal, Home, KeyRound, Minus, Server, Square, Co
 import { isElectron } from "@/services/electron";
 import { getLastViewPath } from "@/lib/last-view";
 import { useIsAdmin } from "@/hooks/use-is-admin";
-import { useModpacks } from "@/hooks/use-modpacks";
+import { useCarouselModpacks, useModpacks } from "@/hooks/use-modpacks";
+import { useAuth } from "@/hooks/use-auth";
 import { RedeemCodeDialog } from "@/components/redeem-code-dialog";
 
 const api = (window as any).electronAPI;
@@ -26,6 +27,10 @@ export function Titlebar() {
   const isAdmin = useIsAdmin();
   const [redeemOpen, setRedeemOpen] = useState(false);
   const { loadModpacks } = useModpacks();
+  const isAuthenticated = useAuth((s) => s.isAuthenticated);
+  // The Hub's "go to the carousel" button only exists when the carousel has
+  // something to show — otherwise that spot is just the app's logo.
+  const hasCarousel = useCarouselModpacks().length > 0;
 
   useEffect(() => {
     if (!isElectron) return;
@@ -33,6 +38,14 @@ export function Titlebar() {
     const off = api.onMaximizedChange(setMaximized);
     return off;
   }, []);
+
+  // Starting on the Hub never loads the catalog (only Home does) — load it
+  // once here so hasCarousel is known wherever the app opens.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const { loaded, loading } = useModpacks.getState();
+    if (!loaded && !loading) loadModpacks();
+  }, [isAuthenticated, loadModpacks]);
 
   if (!isElectron) return null;
 
@@ -43,20 +56,26 @@ export function Titlebar() {
         className="h-11 shrink-0 flex items-center justify-between bg-black/40 border-b border-white/5 select-none"
       >
         <div className="flex items-center gap-1 px-2">
-          <button
-            style={noDragStyle}
-            onClick={() => setLocation(onHub ? "/" : showBack ? getLastViewPath() : "/hub")}
-            className="h-7 w-7 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-            aria-label={onHub ? "Ir al carrusel" : showBack ? "Volver" : "Panel"}
-          >
-            {onHub ? (
-              <GalleryHorizontal className="h-4 w-4" />
-            ) : showBack ? (
-              <ArrowLeft className="h-4 w-4" />
-            ) : (
-              <Home className="h-4 w-4" />
-            )}
-          </button>
+          {onHub && !hasCarousel ? (
+            <div className="h-7 w-7 flex items-center justify-center">
+              <img src="./logo.png" alt="ALaunchi" className="h-5 w-5 object-contain" draggable={false} />
+            </div>
+          ) : (
+            <button
+              style={noDragStyle}
+              onClick={() => setLocation(onHub ? "/" : showBack ? getLastViewPath() : "/hub")}
+              className="h-7 w-7 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+              aria-label={onHub ? "Ir a las instancias online" : showBack ? "Volver" : "Panel"}
+            >
+              {onHub ? (
+                <GalleryHorizontal className="h-4 w-4" />
+              ) : showBack ? (
+                <ArrowLeft className="h-4 w-4" />
+              ) : (
+                <Home className="h-4 w-4" />
+              )}
+            </button>
+          )}
           <span className="font-bold tracking-tight text-white text-sm">
             <span className="text-accent">AL</span>aunchi
           </span>

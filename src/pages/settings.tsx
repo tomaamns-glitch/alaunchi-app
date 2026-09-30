@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
-import { useIsAdmin } from "@/hooks/use-is-admin";
+import { useIsAppOwner } from "@/hooks/use-is-admin";
+import { MyRepoCard } from "@/components/my-repo-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ArrowLeft, Save, LogOut, Cpu, FolderOpen, FolderCog, ShieldCheck, Github, Bell, Volume2 } from "lucide-react";
+import { ArrowLeft, Save, LogOut, Cpu, FolderOpen, FolderCog, ShieldCheck, Bell, Volume2 } from "lucide-react";
 import { readSettings, writeSettings, isElectron, getDataDir, chooseDataDir, openDataDir } from "@/services/electron";
 import {
   NOTIFICATION_SOUNDS,
@@ -21,7 +22,7 @@ import {
 
 export default function Settings() {
   const { isAuthenticated, logout } = useAuth();
-  const isAdmin = useIsAdmin();
+  const isAppOwner = useIsAppOwner();
   const [, setLocation] = useLocation();
 
   const [maxMemoryMb, setMaxMemoryMb] = useState(2048);
@@ -32,19 +33,15 @@ export default function Settings() {
   const [changingDataDir, setChangingDataDir] = useState(false);
 
   const [azureClientId, setAzureClientId] = useState("");
-  const [repoUrl, setRepoUrl] = useState("");
-  const [token, setToken] = useState("");
 
   useEffect(() => {
     readSettings().then((s) => { if (s.maxMemoryMb) setMaxMemoryMb(s.maxMemoryMb); });
     setNotificationSoundState(getNotificationSound());
     getDataDir().then((d) => { if (d) { setDataDir(d.dataDir); setDataDirCustom(d.isCustom); } });
-    setRepoUrl(localStorage.getItem("githubRepo") || "");
-    setToken(localStorage.getItem("githubToken") || "");
-    if (isAdmin) {
+    if (isAppOwner) {
       setAzureClientId(localStorage.getItem("azureClientId") || "");
     }
-  }, [isAdmin]);
+  }, [isAppOwner]);
 
   const handleSavePerformance = async () => {
     const current = await readSettings();
@@ -69,12 +66,6 @@ export default function Settings() {
     setNotificationSoundState(id);
     setNotificationSound(id);
     playNotificationSound(id);
-  };
-
-  const handleSaveRepo = () => {
-    localStorage.setItem("githubRepo", repoUrl);
-    localStorage.setItem("githubToken", token);
-    toast.success("Repositorio guardado");
   };
 
   const handleSaveAdmin = () => {
@@ -207,54 +198,9 @@ export default function Settings() {
           </Card>
         )}
 
-        {isElectron && isAdmin && (
-          <Card className="bg-card/50 border-white/5">
-            <CardHeader>
-              <CardTitle className="text-white flex items-center gap-2">
-                <Github className="h-5 w-5 text-amber-400" /> Repositorio de modpacks (admin)
-              </CardTitle>
-              <CardDescription>
-                Tu token de administrador, con permiso de escritura, para publicar y editar
-                modpacks desde el panel de admin. Los jugadores normales no necesitan configurar
-                nada aquí — la app ya trae acceso de lectura integrado.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-2">
-                <Label htmlFor="repo">Repositorio de modpacks</Label>
-                <Input
-                  id="repo"
-                  value={repoUrl}
-                  onChange={(e) => setRepoUrl(e.target.value)}
-                  className="bg-background/50 border-white/10 text-white"
-                  placeholder="usuario/modpacks-repo"
-                />
-              </div>
+        <MyRepoCard />
 
-              <div className="space-y-2">
-                <Label htmlFor="token">Token GitHub (admin)</Label>
-                <Input
-                  id="token"
-                  type="password"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  className="bg-background/50 border-white/10 text-white"
-                  placeholder="github_pat_..."
-                />
-                <p className="text-xs text-muted-foreground">
-                  Necesario para publicar, editar o borrar modpacks. Se guarda únicamente en este
-                  dispositivo, nunca se comparte.
-                </p>
-              </div>
-
-              <Button onClick={handleSaveRepo} className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold w-full">
-                <Save className="mr-2 h-4 w-4" /> Guardar repositorio
-              </Button>
-            </CardContent>
-          </Card>
-        )}
-
-        {isAdmin && (
+        {isAppOwner && (
           <Card className="bg-card/50 border-amber-500/20 border">
             <CardHeader>
               <CardTitle className="text-white flex items-center gap-2">

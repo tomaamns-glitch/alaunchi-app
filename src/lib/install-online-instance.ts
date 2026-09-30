@@ -1,7 +1,6 @@
-import { useModpacks } from "@/hooks/use-modpacks";
+import { requirePackSource, useModpacks } from "@/hooks/use-modpacks";
 import { fetchSnapshot, snapshotBaseUrl, type Modpack } from "@/services/github";
 import { installSnapshot } from "@/services/electron";
-import { getGithubRepo, getModpacksToken } from "@/lib/app-config";
 import { reportCaughtError } from "@/services/error-reporter";
 
 /**
@@ -12,9 +11,8 @@ import { reportCaughtError } from "@/services/error-reporter";
  * a closure scoped to that page's own per-pack state.
  */
 export async function installOnlineInstance(pack: Modpack): Promise<void> {
-  const repoUrl = getGithubRepo();
-  const token = getModpacksToken();
   try {
+    const { repoUrl, token } = requirePackSource(pack);
     const manifest = await fetchSnapshot(repoUrl, pack.id, token || undefined);
     if (!manifest) throw new Error("No hay manifiesto publicado para este modpack todavía.");
     const baseUrl = snapshotBaseUrl(repoUrl, manifest);

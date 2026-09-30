@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Custom (locally-created) instances
   createInstance: (args) => ipcRenderer.invoke("instances:create", args),
   deleteInstance: (args) => ipcRenderer.invoke("instances:delete", args),
+  deleteOnlineInstanceFiles: (args) => ipcRenderer.invoke("instances:delete-online", args),
   listMinecraftVersions: () => ipcRenderer.invoke("versions:list-minecraft"),
   listForgeVersions: (args) => ipcRenderer.invoke("versions:list-forge", args),
   listNeoforgeVersions: (args) => ipcRenderer.invoke("versions:list-neoforge", args),
@@ -79,6 +80,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   readAuth: () => ipcRenderer.invoke("fs:read-auth"),
   writeAuth: (auth) => ipcRenderer.invoke("fs:write-auth", auth),
   clearAuth: () => ipcRenderer.invoke("fs:clear-auth"),
+  readSecrets: () => ipcRenderer.invoke("secrets:read"),
+  writeSecrets: (secrets) => ipcRenderer.invoke("secrets:write", secrets),
   getDataDir: () => ipcRenderer.invoke("fs:get-data-dir"),
   chooseDataDir: () => ipcRenderer.invoke("fs:choose-data-dir"),
   openDataDir: () => ipcRenderer.invoke("fs:open-data-dir"),

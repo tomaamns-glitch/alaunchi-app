@@ -114,7 +114,7 @@ export type HeaderOverlay = "profile" | "presence" | "presence-all-instance" | n
 /** Which screen the account menu shows. Lives here (not in the menu itself) so
  *  other footer popups can open it straight on a given screen — e.g. the
  *  players panel's "Amigos" heading opens it on "friends". */
-export type ProfileView = "menu" | "skin" | "friends";
+export type ProfileView = "menu" | "skin" | "friends" | "profile" | "user" | "online";
 
 interface HeaderOverlayState {
   active: HeaderOverlay;
@@ -123,6 +123,13 @@ interface HeaderOverlayState {
   /** Opens the account menu on a specific screen. */
   openProfile: (view: ProfileView) => void;
   setProfileView: (view: ProfileView) => void;
+  /** Whose profile the "user" screen shows. */
+  viewedUserUuid: string | null;
+  /** Screen "Volver" goes back to from the "user" screen. */
+  userProfileFrom: ProfileView;
+  /** Opens the account menu on someone else's profile (EXPERIMENTAL — replaces
+   *  navigating to the /profile/:uuid page, which still exists). */
+  openUserProfile: (uuid: string) => void;
   close: () => void;
 }
 
@@ -130,7 +137,7 @@ interface HeaderOverlayState {
 // a circular import: opening the skins/players/"todos" panel has to minimize
 // an open chat, and opening a chat has to close whichever of these is open —
 // each store calls the other's getState() directly.
-export const useHeaderOverlay = create<HeaderOverlayState>((set) => ({
+export const useHeaderOverlay = create<HeaderOverlayState>((set, get) => ({
   active: null,
   profileView: "menu",
   open: (kind) => {
@@ -142,6 +149,20 @@ export const useHeaderOverlay = create<HeaderOverlayState>((set) => ({
     set({ active: "profile", profileView: view });
   },
   setProfileView: (view) => set({ profileView: view }),
+  viewedUserUuid: null,
+  userProfileFrom: "menu",
+  openUserProfile: (uuid) => {
+    const { active, profileView } = get();
+    useChatHeads.getState().minimizeChat();
+    set({
+      active: "profile",
+      profileView: "user",
+      viewedUserUuid: uuid,
+      // Opened from inside the menu (e.g. the friends list) → Volver returns
+      // there; from anywhere else → the main menu.
+      userProfileFrom: active === "profile" && profileView !== "user" ? profileView : "menu",
+    });
+  },
   // profileView isn't reset here (the menu would swap screens mid-collapse) —
   // open() puts it back to "menu", so it never reopens mid-skin-editing.
   close: () => set({ active: null }),
