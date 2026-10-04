@@ -11,6 +11,7 @@ import {
   MessageSquare,
   MoreVertical,
   Play,
+  Square,
   UserMinus,
   UserPlus,
 } from "lucide-react";
@@ -438,15 +439,15 @@ function PackInfo({ name, minecraftVersion, loaderType, extra }: { name: string;
 
 /** A catalog modpack you ALSO have installed — your own launch flow. */
 function OwnedOnlineRow({ pack, onOpen }: { pack: Modpack; onOpen: () => void }) {
-  const { launching, launch } = useLaunchModpack(pack);
+  const { busy, running, toggle } = useLaunchModpack(pack);
   return (
     <RowShell>
       <button type="button" onClick={onOpen} className="flex items-center gap-2.5 flex-1 min-w-0 text-left">
         <Thumb url={pack.imageUrl} fallback={pack.name} />
         <PackInfo name={pack.name} minecraftVersion={pack.minecraftVersion} loaderType={pack.loaderType} />
       </button>
-      <RowAction title="Jugar" onClick={launch} disabled={launching}>
-        {launching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3 w-3 fill-current" />}
+      <RowAction title={running ? "Cerrar Minecraft" : "Jugar"} onClick={toggle} disabled={busy}>
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : running ? <Square className="h-3 w-3 fill-current" /> : <Play className="h-3 w-3 fill-current" />}
       </RowAction>
     </RowShell>
   );

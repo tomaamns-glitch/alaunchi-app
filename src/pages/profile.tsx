@@ -14,12 +14,14 @@ import {
   Pencil,
   Play,
   Shirt,
+  Square,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { useInstanceFolders } from "@/hooks/use-instance-folders";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
+import { runStateBusyLabel } from "@/hooks/use-instance-run-state";
 import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
 import { ProfileFrame } from "@/components/profile-frame";
 import { ProfileEditDialog } from "@/components/profile-edit-dialog";
@@ -64,7 +66,7 @@ const tabTrigger =
   "rounded-none border-b-2 border-transparent bg-transparent px-1 pb-3 text-sm font-semibold text-muted-foreground shadow-none data-[state=active]:bg-transparent data-[state=active]:text-accent data-[state=active]:border-accent";
 
 function InstanceCard({ pack, onOpen }: { pack: Modpack; onOpen: () => void }) {
-  const { launching, launch } = useLaunchModpack(pack);
+  const { busy, running, runState, toggle } = useLaunchModpack(pack);
   const cover = pack.bannerUrl || pack.imageUrl;
 
   return (
@@ -87,9 +89,21 @@ function InstanceCard({ pack, onOpen }: { pack: Modpack; onOpen: () => void }) {
         </div>
       </button>
       <div className="px-4 pb-4">
-        <Button size="sm" className="w-full rounded-full font-bold" onClick={launch} disabled={launching}>
-          {launching ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1.5 h-3.5 w-3.5 fill-current" />}
-          JUGAR
+        <Button
+          size="sm"
+          variant={running ? "destructive" : "default"}
+          className="w-full rounded-full font-bold"
+          onClick={toggle}
+          disabled={busy}
+        >
+          {busy ? (
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          ) : running ? (
+            <Square className="mr-1.5 h-3.5 w-3.5 fill-current" />
+          ) : (
+            <Play className="mr-1.5 h-3.5 w-3.5 fill-current" />
+          )}
+          {busy ? runStateBusyLabel(runState) : running ? "CERRAR" : "JUGAR"}
         </Button>
       </div>
     </div>

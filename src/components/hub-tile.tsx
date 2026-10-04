@@ -1,6 +1,7 @@
-import { FolderMinus, Loader2, Play, Star } from "lucide-react";
+import { FolderMinus, Loader2, Play, Square, Star } from "lucide-react";
 import type { Modpack } from "@/services/github";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
+import { runStateBusyLabel } from "@/hooks/use-instance-run-state";
 import { useInstanceThumbnail } from "@/hooks/use-instance-thumbnail";
 import { Button } from "@/components/ui/button";
 import { LoaderIcon } from "@/components/loader-icon";
@@ -43,7 +44,7 @@ interface InstanceTileProps {
 }
 
 export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onRemoveFromFolder }: InstanceTileProps) {
-  const { launching, launch } = useLaunchModpack(instance);
+  const { busy, running, runState, toggle } = useLaunchModpack(instance);
   const shot = useInstanceThumbnail(instance.id);
   const cover = shot || instance.bannerUrl || instance.imageUrl;
 
@@ -93,13 +94,21 @@ export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onR
           </button>
 
           <div className="px-3 pb-3 pt-1">
-            <Button size="sm" className="w-full h-8 font-bold" onClick={launch} disabled={launching}>
-              {launching ? (
+            <Button
+              size="sm"
+              variant={running ? "destructive" : "default"}
+              className="w-full h-8 font-bold"
+              onClick={toggle}
+              disabled={busy}
+            >
+              {busy ? (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : running ? (
+                <Square className="mr-1.5 h-3.5 w-3.5 fill-current" />
               ) : (
                 <Play className="mr-1.5 h-3.5 w-3.5 fill-current" />
               )}
-              JUGAR
+              {busy ? runStateBusyLabel(runState) : running ? "CERRAR" : "JUGAR"}
             </Button>
           </div>
         </div>

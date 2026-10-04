@@ -10,6 +10,7 @@ import {
   LogOut,
   Play,
   RefreshCw,
+  Square,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useModpacks } from "@/hooks/use-modpacks";
@@ -197,7 +198,7 @@ interface InstanceRowProps {
 }
 
 function InstanceRow({ pack, creator, archived, canLeave, onOpen, onToggleArchive, onLeave }: InstanceRowProps) {
-  const { launching, launch } = useLaunchModpack(pack);
+  const { busy, running, toggle } = useLaunchModpack(pack);
   const [installing, setInstalling] = useState(false);
   const isPast = !!pack.outOfNetwork;
 
@@ -273,13 +274,15 @@ function InstanceRow({ pack, creator, archived, canLeave, onOpen, onToggleArchiv
       {pack.installed ? (
         <button
           type="button"
-          onClick={launch}
-          disabled={launching}
-          title={pack.updateAvailable ? "Actualizar y jugar" : "Jugar"}
-          aria-label="Jugar"
-          className="h-7 w-7 shrink-0 flex items-center justify-center rounded-full bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-60 transition-colors"
+          onClick={toggle}
+          disabled={busy}
+          title={running ? "Cerrar Minecraft" : pack.updateAvailable ? "Actualizar y jugar" : "Jugar"}
+          aria-label={running ? "Cerrar Minecraft" : "Jugar"}
+          className={`h-7 w-7 shrink-0 flex items-center justify-center rounded-full disabled:opacity-60 transition-colors ${
+            running ? "bg-red-600 text-white hover:bg-red-500" : "bg-accent text-accent-foreground hover:bg-accent/90"
+          }`}
         >
-          {launching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3 w-3 fill-current" />}
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : running ? <Square className="h-3 w-3 fill-current" /> : <Play className="h-3 w-3 fill-current" />}
         </button>
       ) : !isPast ? (
         <button

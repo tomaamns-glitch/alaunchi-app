@@ -15,6 +15,7 @@ import {
   Package,
   KeyRound,
   Settings,
+  Square,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { installSnapshot, launchMinecraft, onClosedToTray } from "@/services/electron";
@@ -40,6 +41,14 @@ import { reportCaughtError } from "@/services/error-reporter";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
 import { RedeemCodeDialog } from "@/components/redeem-code-dialog";
+import {
+  getInstanceRunState,
+  isRunStateBusy,
+  runStateBusyLabel,
+  setInstancePending,
+  stopInstance,
+  useInstanceRunState,
+} from "@/hooks/use-instance-run-state";
 
 const api = (window as any).electronAPI;
 
@@ -92,6 +101,10 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   const [stageLabel, setStageLabel] = useState("");
   const { updateModpackStatus } = useModpacks();
   const { getValidTokenForLaunch } = useAuth();
+  // Shared with every other Play button of this instance (hub tile, instance
+  // manager...): busy while any of them is launching it, "Cerrar" once its
+  // Minecraft window is open.
+  const runState = useInstanceRunState(pack.id);
 
   // Update announcement — shown once per arrival at this pack in the carousel
   // (this component remounts fresh each time via `key={currentPack.id}` below,
@@ -254,6 +267,8 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   };
 
   const handlePlay = async () => {
+    if (getInstanceRunState(pack.id) !== "idle") return;
+    setInstancePending(pack.id, true);
     try {
       if (pack.updateAvailable) {
         const manifest = await installFromSnapshot("updating");
@@ -309,10 +324,25 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
       toast.error(e?.message || "Error al iniciar.");
       setStatus("idle");
       setStageLabel("");
+    } finally {
+      setInstancePending(pack.id, false);
+    }
+  };
+
+  const handleStop = async () => {
+    try {
+      await stopInstance(pack.id);
+    } catch (e: any) {
+      reportCaughtError(`modpack:stopping:${pack.id}`, e);
+      toast.error(e?.message || "No se pudo cerrar Minecraft.");
     }
   };
 
   const isActing = status !== "idle";
+  const isRunning = !isActing && runState === "running";
+  // Busy because of something this bar isn't driving itself (another button
+  // launched it, the game window is still opening, or it's closing).
+  const isBusyElsewhere = !isActing && isRunStateBusy(runState);
 
   // One continuous line per side, from the button's top-center, around its
   // border to a bottom corner, then straight out to that side's screen edge.
@@ -334,18 +364,25 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
         <Button
           data-testid={pack.installed ? `button-play-${pack.id}` : `button-install-${pack.id}`}
           className={`w-full font-bold h-14 text-base tracking-wide transition-all border-transparent focus-visible:ring-0 focus-visible:ring-offset-0 ${
-            pack.installed
+            isRunning
+              ? "bg-red-600 hover:bg-red-500 text-white shadow-[0_0_15px_rgba(220,38,38,0.25)]"
+              : pack.installed
               ? "bg-accent hover:bg-accent/90 text-accent-foreground shadow-[0_0_15px_hsl(var(--accent)/0.25)]"
               : "bg-white/10 hover:bg-white/20 text-white"
           }`}
-          onClick={pack.installed ? handlePlay : handleInstall}
-          disabled={isActing}
+          onClick={isRunning ? handleStop : pack.installed ? handlePlay : handleInstall}
+          disabled={isActing || isBusyElsewhere}
         >
-          {isActing ? (
+          {isActing || isBusyElsewhere ? (
             <span className="flex items-center gap-2 min-w-0">
               <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-              <span className="truncate text-sm">{stageLabel}</span>
+              <span className="truncate text-sm">{isActing ? stageLabel : runStateBusyLabel(runState)}</span>
             </span>
+          ) : isRunning ? (
+            <>
+              <Square className="mr-2 h-4 w-4 fill-current" />
+              CERRAR
+            </>
           ) : (
             <>
               {!pack.installed && <Download className="mr-2 h-4 w-4" />}
@@ -356,7 +393,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
         </Button>
       </div>
 
-      {!isActing && pack.installed && pack.updateAvailable && (
+      {!isActing && runState === "idle" && pack.installed && pack.updateAvailable && (
         <Button
           variant="ghost"
           size="sm"

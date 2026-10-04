@@ -8,6 +8,13 @@ import { getAzureClientId } from "@/services/auth";
 import { Modpack, fetchSnapshot, snapshotBaseUrl } from "@/services/github";
 import { requirePackSource } from "@/hooks/use-modpacks";
 import { reportCaughtError } from "@/services/error-reporter";
+import {
+  getInstanceRunState,
+  isRunStateBusy,
+  setInstancePending,
+  stopInstance,
+  useInstanceRunState,
+} from "@/hooks/use-instance-run-state";
 import { toast } from "sonner";
 
 export type LaunchStage = "idle" | "updating" | "launching";
@@ -17,14 +24,22 @@ export type LaunchStage = "idle" | "updating" | "launching";
  * Kept separate from the home carousel's own play button, which drives a richer
  * per-stage progress trail — this is the plain spinner-and-toast version for
  * places (like the instance manager) that just need a working play button.
+ *
+ * The button state itself (`runState`/`busy`/`running`) is global per instance —
+ * see use-instance-run-state.ts — so every Play button of the same instance shows
+ * the same thing, and once the game window is open they all become "Cerrar".
  */
 export function useLaunchModpack(pack: Modpack | undefined) {
   const [stage, setStage] = useState<LaunchStage>("idle");
   const { getValidTokenForLaunch } = useAuth();
   const { updateModpackStatus } = useModpacks();
+  const runState = useInstanceRunState(pack?.id);
 
   const launch = useCallback(async () => {
     if (!pack) return;
+    // Another button of this same instance may have launched it already.
+    if (getInstanceRunState(pack.id) !== "idle") return;
+    setInstancePending(pack.id, true);
     try {
       if (pack.updateAvailable) {
         setStage("updating");
@@ -86,12 +101,34 @@ export function useLaunchModpack(pack: Modpack | undefined) {
       toast.error(e?.message || "Error al iniciar.");
     } finally {
       setStage("idle");
+      setInstancePending(pack.id, false);
     }
   }, [pack, getValidTokenForLaunch, updateModpackStatus]);
 
+  const stop = useCallback(async () => {
+    if (!pack) return;
+    try {
+      await stopInstance(pack.id);
+    } catch (e: any) {
+      reportCaughtError(`modpack:stopping:${pack.id}`, e);
+      toast.error(e?.message || "No se pudo cerrar Minecraft.");
+    }
+  }, [pack]);
+
+  const busy = stage !== "idle" || isRunStateBusy(runState);
+  const running = runState === "running";
+
   return {
     stage,
-    launching: stage !== "idle",
+    runState,
+    /** Kept for existing callers: true while anything is in progress (not while running). */
+    launching: busy,
+    busy,
+    running,
+    stopping: runState === "stopping",
     launch,
+    stop,
+    /** What a single Play/Cerrar button should do on click. */
+    toggle: running ? stop : launch,
   };
 }

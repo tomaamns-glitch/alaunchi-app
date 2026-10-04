@@ -38,6 +38,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   devPackGet: (kind, name) => ipcRenderer.invoke("dev:pack-get", { kind, name }),
   getLoaderIcons: () => ipcRenderer.invoke("mc:get-loader-icons"),
   launchMinecraft: (args) => ipcRenderer.invoke("mc:launch", args),
+  getInstanceRunState: () => ipcRenderer.invoke("instances:get-run-state"),
+  stopInstance: (args) => ipcRenderer.invoke("instances:stop", args),
+  onInstanceRunState: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("instances:run-state", handler);
+    return () => ipcRenderer.removeListener("instances:run-state", handler);
+  },
   checkJava: () => ipcRenderer.invoke("mc:check-java"),
   installJava: () => ipcRenderer.invoke("mc:install-java"),
 

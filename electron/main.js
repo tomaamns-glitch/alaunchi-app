@@ -193,17 +193,153 @@ const inFlightObjects = new Map();
 const activeModpackOps = new Map(); // modpackId -> "installing" | "launching"
 
 function acquireModpackOp(modpackId, kind) {
+  // Never install/update or relaunch on top of a running game: the files are in use
+  // and it would be a second JVM against the same world.
+  if (runningInstances.has(modpackId)) {
+    throw new Error("Esta instancia ya está abierta. Ciérrala antes de volver a iniciarla o actualizarla.");
+  }
   const existing = activeModpackOps.get(modpackId);
   if (existing) {
     const verb = existing === "installing" ? "instalando o actualizando" : "iniciando";
     throw new Error(`Este modpack ya se está ${verb}. Espera a que termine antes de intentarlo de nuevo.`);
   }
   activeModpackOps.set(modpackId, kind);
+  broadcastRunState();
 }
 
 function releaseModpackOp(modpackId) {
   activeModpackOps.delete(modpackId);
+  broadcastRunState();
 }
+
+// ─── ESTADO DE EJECUCIÓN POR INSTANCIA ──────────────────────────────────────
+// Single source of truth for every Play button in the renderer: each instance is
+// "installing"/"launching" (holding the op lock above), "starting" (JVM spawned,
+// waiting for the Minecraft window), "running" (window open → the button becomes
+// "Cerrar") or "stopping". Pushed to the renderer on every change so all buttons
+// of the same instance (carousel, hub tile, instance manager...) stay in sync.
+const runningInstances = new Map(); // modpackId -> { pid, state: "starting" | "running" | "stopping" }
+
+function runStateSnapshot() {
+  const out = {};
+  for (const [id, kind] of activeModpackOps) out[id] = kind;
+  for (const [id, r] of runningInstances) out[id] = r.state;
+  return out;
+}
+
+function broadcastRunState() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("instances:run-state", runStateSnapshot());
+  }
+}
+
+function setRunningState(modpackId, pid, state) {
+  const r = runningInstances.get(modpackId);
+  if (!r || r.pid !== pid || r.state === state) return;
+  r.state = state;
+  broadcastRunState();
+}
+
+// Windows: the JVM owns the LWJGL/GLFW window, so a non-zero MainWindowHandle on
+// the java process means the game window (or Forge's early loading window) is up.
+function processHasWindow(pid) {
+  return new Promise((resolve) => {
+    exec(
+      `powershell -NoProfile -NonInteractive -Command "(Get-Process -Id ${Number(pid)} -ErrorAction SilentlyContinue).MainWindowHandle"`,
+      { windowsHide: true, timeout: 5000 },
+      (err, stdout) => resolve(!err && /^[1-9]\d*$/.test(String(stdout).trim()))
+    );
+  });
+}
+
+// Log lines printed when the game window gets created, across vanilla 1.13+
+// ("Backend library"), legacy LWJGL2 ("LWJGL Version") and Forge/NeoForge's early
+// loading window. Fallback for non-Windows (and a second signal on Windows).
+const WINDOW_LOG_MARKERS = /Backend library:|LWJGL Version:|ImmediateWindowProvider|fmlearlywindow|EARLYDISPLAY/i;
+
+// Flips a freshly spawned instance from "starting" to "running" once its window
+// exists. Gives up waiting after 3 min and marks it running anyway — the process
+// is alive, so the button must still offer "Cerrar".
+function waitForGameWindow(modpackId, pid, logFile) {
+  const deadline = Date.now() + 180_000;
+  let logOffset = 0;
+  let busy = false;
+  const logShowsWindow = async () => {
+    try {
+      const fh = await fs.open(logFile, "r");
+      try {
+        const { size } = await fh.stat();
+        if (size <= logOffset) return false;
+        const len = Math.min(size - logOffset, 4 * 1024 * 1024);
+        const buf = Buffer.alloc(len);
+        await fh.read(buf, 0, len, logOffset);
+        // Keep a small overlap so a marker split across two reads isn't missed.
+        logOffset = Math.max(0, logOffset + len - 64);
+        return WINDOW_LOG_MARKERS.test(buf.toString("utf8"));
+      } finally {
+        await fh.close();
+      }
+    } catch {
+      return false;
+    }
+  };
+  const tick = async () => {
+    const r = runningInstances.get(modpackId);
+    if (!r || r.pid !== pid || r.state !== "starting") return clearInterval(timer);
+    if (busy) return;
+    busy = true;
+    try {
+      let ready = Date.now() > deadline || (await logShowsWindow());
+      if (!ready && process.platform === "win32") ready = await processHasWindow(pid);
+      if (ready) {
+        clearInterval(timer);
+        setRunningState(modpackId, pid, "running");
+      }
+    } finally {
+      busy = false;
+    }
+  };
+  const timer = setInterval(tick, 1500);
+  tick();
+}
+
+// Kills the whole process tree (Forge/NeoForge can leave helper processes). First a
+// graceful close — on Windows `taskkill` without /F posts WM_CLOSE to the window,
+// which Minecraft handles like clicking the X (saves the world and quits); SIGTERM
+// elsewhere runs the JVM shutdown hooks — and a forced kill if it's still alive later.
+function killProcessTree(pid, force) {
+  return new Promise((resolve) => {
+    if (process.platform === "win32") {
+      exec(`taskkill /PID ${Number(pid)} /T${force ? " /F" : ""}`, { windowsHide: true }, () => resolve());
+    } else {
+      try { process.kill(-pid, force ? "SIGKILL" : "SIGTERM"); } catch {
+        try { process.kill(pid, force ? "SIGKILL" : "SIGTERM"); } catch {}
+      }
+      resolve();
+    }
+  });
+}
+
+ipcMain.handle("instances:get-run-state", () => runStateSnapshot());
+
+ipcMain.handle("instances:stop", async (_event, { modpackId }) => {
+  assertSafeInstanceId(modpackId);
+  const r = runningInstances.get(modpackId);
+  if (!r) return { success: true, alreadyStopped: true };
+  if (r.state === "stopping") return { success: true };
+  const { pid } = r;
+  setRunningState(modpackId, pid, "stopping");
+  await killProcessTree(pid, false);
+  // Give Minecraft time to save the world before forcing it.
+  const forceAt = Date.now() + 20_000;
+  while (isPidAlive(pid) && Date.now() < forceAt) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  if (isPidAlive(pid)) await killProcessTree(pid, true);
+  // The playtime watcher notices the dead pid, clears the entry and credits the
+  // session — nothing else to do here.
+  return { success: true };
+});
 
 async function ensureObject(hash, downloadUrl, headers) {
   const cachePath = objectCachePath(hash);
@@ -930,15 +1066,24 @@ async function creditPlaytimeAndClearSession(modpackId, startedAt) {
   }
 }
 
-function watchProcessForPlaytime(modpackId, pid, startedAt) {
+// Also registers the instance in runningInstances (drives the Play/Cerrar buttons),
+// which is why it polls every 2 s: the button has to go back to "Jugar" right after
+// the game closes. process.kill(pid, 0) is just a syscall, so this is cheap.
+function watchProcessForPlaytime(modpackId, pid, startedAt, initialState = "running") {
   const existing = activePlaytimeWatchers.get(modpackId);
   if (existing) clearInterval(existing);
+  runningInstances.set(modpackId, { pid, state: initialState });
+  broadcastRunState();
   const interval = setInterval(() => {
     if (isPidAlive(pid)) return;
     clearInterval(interval);
     activePlaytimeWatchers.delete(modpackId);
+    if (runningInstances.get(modpackId)?.pid === pid) {
+      runningInstances.delete(modpackId);
+      broadcastRunState();
+    }
     creditPlaytimeAndClearSession(modpackId, startedAt);
-  }, 30_000);
+  }, 2000);
   activePlaytimeWatchers.set(modpackId, interval);
 }
 
@@ -2449,10 +2594,12 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
     const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
     meta.activeSession = { pid: child.pid, startedAt: playtimeStartedAt };
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
-    watchProcessForPlaytime(modpackId, child.pid, playtimeStartedAt);
   } catch (e) {
     console.warn("[Playtime] No se pudo iniciar el seguimiento de tiempo jugado:", e.message);
   }
+  // Registered even if the meta write failed — the Play/Cerrar buttons depend on it.
+  watchProcessForPlaytime(modpackId, child.pid, playtimeStartedAt, "starting");
+  waitForGameWindow(modpackId, child.pid, logFile);
 
   child.unref();
   win?.webContents.send("launch-status", { modpackId, stage: "launched" });
