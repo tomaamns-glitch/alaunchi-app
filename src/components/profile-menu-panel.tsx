@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Clock, ExternalLink, Gamepad2, Heart, Loader2, LogOut, MoreVertical, Palette, Pencil, Play } from "lucide-react";
+import { Clock, ExternalLink, Gamepad2, Heart, Loader2, LogOut, MoreVertical, Palette, Pencil, Play, Square } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
@@ -306,7 +306,7 @@ function Empty({ text }: { text: string }) {
 }
 
 function InstanceRow({ pack, onOpen }: { pack: Modpack; onOpen: () => void }) {
-  const { launching, launch } = useLaunchModpack(pack);
+  const { busy, running, toggle } = useLaunchModpack(pack);
   return (
     <div className="flex items-center gap-2.5 rounded-lg border border-white/5 bg-white/[0.03] px-2 py-1.5 hover:bg-white/[0.07] hover:border-white/10 transition-colors">
       <button type="button" onClick={onOpen} className="flex items-center gap-2.5 flex-1 min-w-0 text-left">
@@ -320,13 +320,15 @@ function InstanceRow({ pack, onOpen }: { pack: Modpack; onOpen: () => void }) {
       </button>
       <button
         type="button"
-        onClick={launch}
-        disabled={launching}
-        title="Jugar"
-        aria-label="Jugar"
-        className="h-7 w-7 shrink-0 flex items-center justify-center rounded-full bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-60 transition-colors"
+        onClick={toggle}
+        disabled={busy}
+        title={running ? "Cerrar Minecraft" : "Jugar"}
+        aria-label={running ? "Cerrar Minecraft" : "Jugar"}
+        className={`h-7 w-7 shrink-0 flex items-center justify-center rounded-full disabled:opacity-60 transition-colors ${
+            running ? "bg-red-600 text-white hover:bg-red-500" : "bg-accent text-accent-foreground hover:bg-accent/90"
+          }`}
       >
-        {launching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3 w-3 fill-current" />}
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : running ? <Square className="h-3 w-3 fill-current" /> : <Play className="h-3 w-3 fill-current" />}
       </button>
     </div>
   );

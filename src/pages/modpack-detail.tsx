@@ -37,6 +37,7 @@ import {
   UploadCloud,
   Camera,
   Trash2,
+  Square,
 } from "lucide-react";
 import { SnapshotEntry, fetchSnapshot } from "@/services/github";
 import {
@@ -104,6 +105,7 @@ import { ImageLightbox } from "@/components/image-lightbox";
 import { resolveContentConflict, resolveNoIdentityConflict, type ConflictResolution } from "@/lib/content-conflict";
 import { translateHtmlAwareToSpanish } from "@/services/translate";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
+import { runStateBusyLabel } from "@/hooks/use-instance-run-state";
 import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
 import { useAuth } from "@/hooks/use-auth";
 import { usePlayerSkinUrl } from "@/hooks/use-player-head";
@@ -198,7 +200,7 @@ export default function ModpackDetail() {
     modpacks.find((p) => p.id === id) ??
     instances.find((p) => p.id === id) ??
     pastModpacks.find((p) => p.id === id && p.installed);
-  const { launching: playLaunching, launch: playLaunch } = useLaunchModpack(pack);
+  const { busy: playBusy, running: playRunning, runState: playRunState, toggle: playToggle } = useLaunchModpack(pack);
   useDynamicAccent(pack?.bannerUrl || pack?.imageUrl);
 
   const [loading, setLoading] = useState(false);
@@ -304,18 +306,27 @@ export default function ModpackDetail() {
   const [genreFilter, setGenreFilter] = useState<string | null>(null);
   const [availableGenres, setAvailableGenres] = useState<string[]>([]);
 
+  // A mod counts as present whether it ships with the pack (mandatory) or the
+  // player added it themselves (optional) — private instances have no manifest,
+  // so everything there is optional. Matches the jar name or the Modrinth title.
+  const hasMod = (pattern: RegExp) =>
+    [...(content?.mods ?? []), ...optionalContent.mods].some(
+      (f) => pattern.test(fileName(f.path)) || pattern.test(modrinthMatches.get(f.path)?.title ?? "")
+    );
+
   // Emotecraft emotes — a separate, read-only tab alongside mods/shaders/resourcepacks,
-  // only shown when that mod is present in the published manifest.
+  // shown when that mod is installed (mandatory or optional).
   const [emotesOpen, setEmotesOpen] = useState(false);
   const [emotes, setEmotes] = useState<EmoteFile[]>([]);
   const [emotesLoading, setEmotesLoading] = useState(false);
   const [selectedEmote, setSelectedEmote] = useState<EmoteFile | null>(null);
-  const emotecraftInstalled = (content?.mods ?? []).some((f) => f.path.toLowerCase().includes("emotecraft"));
+  const emotecraftInstalled = hasMod(/emotecraft/i);
 
   // Schematics (.litematic/.schem/.schematic/.nbt) — same read-only-tab pattern as
-  // emotes, but the button only shows once the recursive folder scan (below, tied
-  // to instance load) actually finds files, since these aren't gated behind any one
-  // mod being installed the way Emotecraft is.
+  // emotes. The button shows when Litematica (or its Forge port Forgematica) is
+  // installed, or when the recursive folder scan (below, tied to instance load)
+  // already found files (e.g. WorldEdit schematics without Litematica).
+  const litematicaInstalled = hasMod(/litematica|forgematica/i);
   const [schematicsOpen, setSchematicsOpen] = useState(false);
   const [schematics, setSchematics] = useState<SchematicFile[]>([]);
   const [selectedSchematic, setSelectedSchematic] = useState<SchematicFile | null>(null);
@@ -1410,16 +1421,28 @@ export default function ModpackDetail() {
                 </DropdownMenu>
                 <div className="flex flex-col items-center gap-1 shrink-0">
                   <Button
-                    onClick={playLaunch}
-                    disabled={playLaunching}
-                    className="shrink-0 bg-accent hover:bg-accent/90 text-accent-foreground border-transparent font-bold gap-1.5"
+                    onClick={playToggle}
+                    disabled={playBusy}
+                    className={`shrink-0 border-transparent font-bold gap-1.5 ${
+                      playRunning
+                        ? "bg-red-600 hover:bg-red-500 text-white"
+                        : "bg-accent hover:bg-accent/90 text-accent-foreground"
+                    }`}
                   >
-                    {playLaunching ? (
+                    {playBusy ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : playRunning ? (
+                      <Square className="h-4 w-4 fill-current" />
                     ) : (
                       <Play className="h-4 w-4 fill-current" />
                     )}
-                    {playLaunching ? "" : pack.updateAvailable ? "ACTUALIZAR Y JUGAR" : "JUGAR"}
+                    {playBusy
+                      ? runStateBusyLabel(playRunState)
+                      : playRunning
+                        ? "CERRAR"
+                        : pack.updateAvailable
+                          ? "ACTUALIZAR Y JUGAR"
+                          : "JUGAR"}
                   </Button>
                   {totalPlaytimeMs > 0 && (
                     <span className="text-[10px] text-muted-foreground whitespace-nowrap">
@@ -1764,7 +1787,7 @@ export default function ModpackDetail() {
                           Emotes
                         </button>
                       )}
-                      {schematics.length > 0 && (
+                      {(litematicaInstalled || schematics.length > 0) && (
                         <button
                           type="button"
                           onClick={() => {
