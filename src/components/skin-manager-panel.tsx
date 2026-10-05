@@ -1,5 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
-import { motion } from "framer-motion";
+import { createPortal } from "react-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
 import { invalidatePlayerHead } from "@/hooks/use-player-head";
 import { useShowcaseSkin } from "@/hooks/use-showcase-skin";
@@ -31,9 +32,12 @@ interface SkinManagerPanelProps {
   username: string | null;
   /** Rendered right under the character (the account menu puts its "Volver" here). */
   viewerFooter?: React.ReactNode;
+  /** Where the Aplicar/descartar buttons go while previewing (the account menu
+   *  puts them in its bottom bar). Without one they render under the character. */
+  previewActionsSlot?: HTMLElement | null;
 }
 
-export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPanelProps) {
+export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsSlot }: SkinManagerPanelProps) {
   const { mcToken } = useAuth();
   const decoration = useAvatarDecoration(uuid);
   const [profile, setProfile] = useState<SkinProfile | null>(null);
@@ -54,8 +58,27 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
   const [newShowcaseName, setNewShowcaseName] = useState("");
   const [tab, setTab] = useState("library");
 
+  // Clicking a skin or cape only tries it on the character; nothing reaches the
+  // Mojang account until "Aplicar". `previewCapeId` undefined = cape untouched,
+  // null = previewing no cape.
+  const [previewSkin, setPreviewSkin] = useState<PreviewSkin | null>(null);
+  const [previewCapeId, setPreviewCapeId] = useState<string | null | undefined>(undefined);
+
   const activeSkin = profile?.skins.find((s) => s.state === "ACTIVE") ?? null;
   const activeCape = profile?.capes.find((c) => c.state === "ACTIVE") ?? null;
+  const activeSkinBase64 = skinDataUrl ? skinDataUrl.slice(skinDataUrl.indexOf(",") + 1) : null;
+
+  // An uploaded file that's still being named shows on the character too.
+  const shownSkin: PreviewSkin | null = pendingBase64
+    ? { key: "upload", label: pendingName || "Skin sin nombre", base64: pendingBase64, variant: pendingVariant }
+    : previewSkin;
+  const shownCapeId = previewCapeId !== undefined ? previewCapeId : activeCape?.id ?? null;
+  const shownCape = profile?.capes.find((c) => c.id === shownCapeId) ?? null;
+  const [shownCapeDataUrl, setShownCapeDataUrl] = useState<string | null>(null);
+  const hasPreview = shownSkin !== null || previewCapeId !== undefined;
+  const shownVariant: "slim" | "classic" | null = shownSkin
+    ? shownSkin.variant
+    : activeSkin ? (activeSkin.variant === "SLIM" ? "slim" : "classic") : null;
 
   const refresh = useCallback(async () => {
     if (!mcToken) return;
@@ -96,6 +119,20 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
     return () => { cancelled = true; };
   }, [activeCape?.url]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!shownCape?.url) {
+      setShownCapeDataUrl(null);
+    } else if (shownCape.url === activeCape?.url && capeDataUrl) {
+      setShownCapeDataUrl(capeDataUrl);
+    } else {
+      fetchTextureAsDataUrl(shownCape.url)
+        .then((url) => { if (!cancelled) setShownCapeDataUrl(url); })
+        .catch(() => {});
+    }
+    return () => { cancelled = true; };
+  }, [shownCape?.url, activeCape?.url, capeDataUrl]);
+
   // Backs up whatever skin is equipped the moment you open this panel, so if you
   // then change to something else, the old one is still in your library instead
   // of just gone. Runs once per open; skipped if that exact skin is already saved.
@@ -117,6 +154,7 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
   }, [activeSkin, skinDataUrl, library, username]);
 
   const handleFileChosen = async (file: File) => {
+    setPreviewSkin(null);
     setPendingName(file.name.replace(/\.png$/i, ""));
     const base64 = await fileToBase64(file);
     setPendingBase64(base64);
@@ -130,17 +168,39 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const handleApply = async () => {
-    if (!mcToken || !pendingBase64) return;
+  const previewSkinEntry = (entry: PreviewSkin) => {
+    clearPending();
+    setPreviewSkin((prev) => (prev?.key === entry.key || entry.base64 === activeSkinBase64 ? null : entry));
+  };
+
+  const previewCape = (capeId: string) => {
+    const next = shownCapeId === capeId ? null : capeId;
+    setPreviewCapeId(next === (activeCape?.id ?? null) ? undefined : next);
+  };
+
+  const discardPreview = () => {
+    clearPending();
+    setPreviewSkin(null);
+    setPreviewCapeId(undefined);
+  };
+
+  const handleApplyPreview = async () => {
+    if (!mcToken || !hasPreview) return;
     setBusy(true);
     try {
-      const updated = await changeSkin(mcToken, pendingVariant, pendingBase64);
-      setProfile(updated);
-      invalidatePlayerHead(uuid);
-      toast.success("Skin actualizada en tu cuenta.");
-      clearPending();
+      if (shownSkin) {
+        const updated = await changeSkin(mcToken, shownSkin.variant, shownSkin.base64);
+        setProfile(updated);
+        invalidatePlayerHead(uuid);
+      }
+      if (previewCapeId !== undefined) {
+        const updated = await setCape(mcToken, previewCapeId);
+        setProfile(updated);
+      }
+      toast.success(shownSkin ? `${shownSkin.label} aplicada.` : "Capa actualizada.");
+      discardPreview();
     } catch (e: any) {
-      toast.error(e?.message || "Error al cambiar la skin.");
+      toast.error(e?.message || "Error al aplicar los cambios.");
     } finally {
       setBusy(false);
     }
@@ -160,44 +220,14 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
     }
   };
 
-  const handleApplyFromLibrary = async (entry: LibrarySkin) => {
-    if (!mcToken) return;
-    setBusy(true);
-    try {
-      const updated = await changeSkin(mcToken, entry.variant, entry.fileBase64);
-      setProfile(updated);
-      invalidatePlayerHead(uuid);
-      toast.success(`${entry.name} aplicada.`);
-    } catch (e: any) {
-      toast.error(e?.message || "Error al aplicar la skin.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const handleDeleteFromLibrary = async (id: string) => {
     setBusy(true);
     try {
       await deleteFromSkinLibrary(id);
       setLibrary((prev) => prev.filter((e) => e.id !== id));
+      setPreviewSkin((prev) => (prev?.key === `lib:${id}` ? null : prev));
     } catch (e: any) {
       toast.error(e?.message || "Error al eliminar.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleApplyShowcase = async (label: string, fullDataUrl: string, variant: "slim" | "classic") => {
-    if (!mcToken) return;
-    setBusy(true);
-    try {
-      const base64 = fullDataUrl.slice(fullDataUrl.indexOf(",") + 1);
-      const updated = await changeSkin(mcToken, variant, base64);
-      setProfile(updated);
-      invalidatePlayerHead(uuid);
-      toast.success(`Skin de ${label} aplicada.`);
-    } catch (e: any) {
-      toast.error(e?.message || "Error al aplicar la skin.");
     } finally {
       setBusy(false);
     }
@@ -225,20 +255,7 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
 
   const handleRemoveShowcaseName = (name: string) => {
     setShowcaseUsernames(removeShowcaseUsername(name));
-  };
-
-  const handleToggleCape = async (capeId: string) => {
-    if (!mcToken) return;
-    setBusy(true);
-    try {
-      const isActive = activeCape?.id === capeId;
-      const updated = await setCape(mcToken, isActive ? null : capeId);
-      setProfile(updated);
-    } catch (e: any) {
-      toast.error(e?.message || "Error al cambiar la capa.");
-    } finally {
-      setBusy(false);
-    }
+    setPreviewSkin((prev) => (prev?.key === `show:${name}` ? null : prev));
   };
 
   if (loading) {
@@ -248,6 +265,39 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
       </div>
     );
   }
+
+  const previewActions = (
+    <AnimatePresence>
+      {hasPreview && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.9 }}
+          transition={{ duration: 0.15 }}
+          className="flex gap-1.5"
+        >
+          <Button
+            onClick={handleApplyPreview}
+            disabled={busy}
+            size="sm"
+            className="h-8 px-3 bg-accent hover:bg-accent/90 text-accent-foreground text-xs font-bold"
+          >
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Aplicar"}
+          </Button>
+          <Button
+            onClick={discardPreview}
+            disabled={busy}
+            size="sm"
+            variant="outline"
+            title="Descartar cambios"
+            className="h-8 w-8 p-0"
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
 
   const libraryCols = gridCols(library.length);
   const showcaseCols = gridCols(showcaseUsernames.length);
@@ -260,21 +310,37 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
       <div className="flex flex-col items-center gap-2 shrink-0">
         <div className="rounded-xl bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.18),transparent_70%)]">
           <SkinViewerAnimated
-            skinUrl={skinDataUrl ?? `https://mc-heads.net/skin/${uuid}`}
-            capeUrl={capeDataUrl}
-            variant={activeSkin ? (activeSkin.variant === "SLIM" ? "slim" : "classic") : "auto-detect"}
+            skinUrl={
+              shownSkin
+                ? `data:image/png;base64,${shownSkin.base64}`
+                : skinDataUrl ?? `https://mc-heads.net/skin/${uuid}`
+            }
+            capeUrl={shownCapeDataUrl}
+            variant={shownVariant ?? "auto-detect"}
             width={150}
             height={200}
             effect={decoration}
             className="cursor-grab active:cursor-grabbing"
           />
         </div>
+        {/* Space is always reserved (even with nothing to preview), so the
+            label showing up never pushes "Volver" around. */}
+        <div className="h-5 flex items-center justify-center">
+          <AnimatePresence>
+            {hasPreview && (
+              <motion.span
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                className="px-2 py-0.5 rounded-full bg-accent/15 text-[9px] uppercase tracking-wide text-accent font-semibold whitespace-nowrap"
+              >
+                Vista previa
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </div>
         {viewerFooter}
-        {activeSkin && (
-          <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
-            Modelo {activeSkin.variant === "SLIM" ? "slim" : "clásico"}
-          </span>
-        )}
+        {previewActionsSlot ? createPortal(previewActions, previewActionsSlot) : previewActions}
       </div>
 
       <AnimatedWidth>
@@ -339,19 +405,9 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
                     Slim
                   </Button>
                 </div>
-                <div className="flex gap-2">
-                  <Button
-                    onClick={handleApply}
-                    disabled={busy}
-                    size="sm"
-                    className="flex-1 bg-accent hover:bg-accent/90 text-accent-foreground text-xs font-bold"
-                  >
-                    {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Aplicar ahora"}
-                  </Button>
-                  <Button onClick={handleSaveToLibrary} disabled={busy} size="sm" variant="outline" className="flex-1 text-xs">
-                    Guardar en biblioteca
-                  </Button>
-                </div>
+                <Button onClick={handleSaveToLibrary} disabled={busy} size="sm" variant="outline" className="w-full text-xs">
+                  Guardar en biblioteca
+                </Button>
                 <button
                   type="button"
                   onClick={clearPending}
@@ -375,35 +431,42 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
               <p className="text-xs text-muted-foreground text-center py-4">Aún no has guardado ninguna skin.</p>
             ) : (
               <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${libraryCols}, ${TILE_WIDTH})` }}>
-                {library.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className="relative group flex flex-col items-center gap-1 p-2 rounded-md bg-white/5 border border-white/5"
-                  >
-                    <LibrarySkinHead fileBase64={entry.fileBase64} alt={entry.name} />
-                    <span className="text-[10px] text-gray-300 truncate w-full text-center">{entry.name}</span>
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity absolute -top-1.5 -right-1.5">
-                      <button
-                        type="button"
-                        onClick={() => handleApplyFromLibrary(entry)}
-                        disabled={busy}
-                        title="Aplicar"
-                        className="h-5 w-5 flex items-center justify-center rounded-full bg-accent text-accent-foreground hover:bg-accent/90"
-                      >
-                        <Check className="h-3 w-3" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteFromLibrary(entry.id)}
-                        disabled={busy}
-                        title="Eliminar"
-                        className="h-5 w-5 flex items-center justify-center rounded-full bg-destructive text-white hover:bg-destructive/90"
-                      >
-                        <Trash className="h-3 w-3" />
-                      </button>
+                {library.map((entry) => {
+                  const key = `lib:${entry.id}`;
+                  const equipped = entry.fileBase64 === activeSkinBase64;
+                  const shown = shownSkin ? shownSkin.key === key : equipped;
+                  const preview = () =>
+                    previewSkinEntry({ key, label: entry.name, base64: entry.fileBase64, variant: entry.variant });
+                  return (
+                    <div
+                      key={entry.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={preview}
+                      onKeyDown={(e) => e.key === "Enter" && preview()}
+                      title={equipped ? "Skin actual" : "Probar esta skin"}
+                      className={`relative group flex flex-col items-center gap-1 p-2 rounded-md border cursor-pointer transition-colors ${tileClass(shown)}`}
+                    >
+                      <LibrarySkinHead fileBase64={entry.fileBase64} alt={entry.name} />
+                      <span className={`text-[10px] truncate w-full text-center ${shown ? "text-accent font-semibold" : "text-gray-300"}`}>
+                        {entry.name}
+                      </span>
+                      {equipped ? (
+                        <EquippedBadge />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); handleDeleteFromLibrary(entry.id); }}
+                          disabled={busy}
+                          title="Eliminar"
+                          className="absolute -top-1.5 -right-1.5 h-5 w-5 flex items-center justify-center rounded-full bg-destructive text-white hover:bg-destructive/90 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <Trash className="h-3 w-3" />
+                        </button>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             </TabBody>
@@ -442,7 +505,15 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
                     key={name}
                     username={name}
                     busy={busy}
-                    onApply={handleApplyShowcase}
+                    selected={shownSkin?.key === `show:${name}`}
+                    onPreview={(fullDataUrl, variant) =>
+                      previewSkinEntry({
+                        key: `show:${name}`,
+                        label: `Skin de ${name}`,
+                        base64: fullDataUrl.slice(fullDataUrl.indexOf(",") + 1),
+                        variant,
+                      })
+                    }
                     onSave={handleSaveShowcaseToLibrary}
                     onRemove={() => handleRemoveShowcaseName(name)}
                   />
@@ -456,34 +527,29 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
             <TabsContent value="capes" className="mt-3">
               <TabBody>
               <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${capesCols}, ${TILE_WIDTH})` }}>
-                {profile.capes.map((cape) => (
-                  <button
-                    key={cape.id}
-                    type="button"
-                    onClick={() => handleToggleCape(cape.id)}
-                    disabled={busy}
-                    title={cape.state === "ACTIVE" ? "Quitar capa" : "Ponerse esta capa"}
-                    className={`relative flex flex-col items-center gap-1.5 p-2 rounded-md border transition-colors ${
-                      cape.state === "ACTIVE"
-                        ? "bg-accent/15 border-accent/50"
-                        : "bg-white/5 border-white/5 hover:bg-white/10"
-                    }`}
-                  >
-                    <CapePreview url={cape.url} alt={cape.alias || "Capa"} />
-                    <span
-                      className={`text-[10px] truncate w-full text-center ${
-                        cape.state === "ACTIVE" ? "text-accent font-semibold" : "text-gray-300"
-                      }`}
+                {profile.capes.map((cape) => {
+                  const shown = cape.id === shownCapeId;
+                  return (
+                    <button
+                      key={cape.id}
+                      type="button"
+                      onClick={() => previewCape(cape.id)}
+                      disabled={busy}
+                      title={shown ? "Probar sin capa" : "Probar esta capa"}
+                      className={`relative flex flex-col items-center gap-1.5 p-2 rounded-md border transition-colors ${tileClass(shown)}`}
                     >
-                      {cape.alias || "Capa"}
-                    </span>
-                    {cape.state === "ACTIVE" && (
-                      <span className="absolute -top-1.5 -right-1.5 h-5 w-5 flex items-center justify-center rounded-full bg-accent text-accent-foreground">
-                        <Check className="h-3 w-3" />
+                      <CapePreview url={cape.url} alt={cape.alias || "Capa"} />
+                      <span
+                        className={`text-[10px] truncate w-full text-center ${
+                          shown ? "text-accent font-semibold" : "text-gray-300"
+                        }`}
+                      >
+                        {cape.alias || "Capa"}
                       </span>
-                    )}
-                  </button>
-                ))}
+                      {cape.state === "ACTIVE" && <EquippedBadge />}
+                    </button>
+                  );
+                })}
               </div>
               </TabBody>
             </TabsContent>
@@ -491,6 +557,31 @@ export function SkinManagerPanel({ uuid, username, viewerFooter }: SkinManagerPa
         </Tabs>
       </AnimatedWidth>
     </div>
+  );
+}
+
+interface PreviewSkin {
+  /** Which tile it came from ("lib:<id>", "show:<name>", "upload"), to highlight it. */
+  key: string;
+  label: string;
+  base64: string;
+  variant: "slim" | "classic";
+}
+
+/** Highlighted = what the character is wearing right now (preview or not). */
+function tileClass(shown: boolean): string {
+  return shown ? "bg-accent/15 border-accent/50" : "bg-white/5 border-white/5 hover:bg-white/10";
+}
+
+/** Marks what's actually equipped on the account, as opposed to just previewed. */
+function EquippedBadge() {
+  return (
+    <span
+      title="Equipada en tu cuenta"
+      className="absolute -top-1.5 -right-1.5 h-5 w-5 flex items-center justify-center rounded-full bg-accent text-accent-foreground"
+    >
+      <Check className="h-3 w-3" />
+    </span>
   );
 }
 
@@ -596,19 +687,33 @@ function CapePreview({ url, alt }: { url: string; alt: string }) {
 interface ShowcaseEntryProps {
   username: string;
   busy: boolean;
-  onApply: (label: string, fullDataUrl: string, variant: "slim" | "classic") => void;
+  selected: boolean;
+  onPreview: (fullDataUrl: string, variant: "slim" | "classic") => void;
   onSave: (label: string, fullDataUrl: string, variant: "slim" | "classic") => void;
   onRemove: () => void;
 }
 
-function ShowcaseEntry({ username, busy, onApply, onSave, onRemove }: ShowcaseEntryProps) {
+function ShowcaseEntry({ username, busy, selected, onPreview, onSave, onRemove }: ShowcaseEntryProps) {
   const { loading, error, headUrl, fullDataUrl, variant } = useShowcaseSkin(username);
+  const ready = !loading && !!headUrl && !!fullDataUrl;
+  const preview = () => {
+    if (ready) onPreview(fullDataUrl!, variant);
+  };
 
   return (
-    <div className="relative group flex flex-col items-center gap-1 p-2 rounded-md bg-white/5 border border-white/5">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={preview}
+      onKeyDown={(e) => e.key === "Enter" && preview()}
+      title={ready ? "Probar esta skin" : undefined}
+      className={`relative group flex flex-col items-center gap-1 p-2 rounded-md border transition-colors ${
+        ready ? "cursor-pointer" : ""
+      } ${tileClass(selected)}`}
+    >
       <button
         type="button"
-        onClick={onRemove}
+        onClick={(e) => { e.stopPropagation(); onRemove(); }}
         title="Quitar del escaparate"
         className="absolute -top-1.5 -left-1.5 h-4 w-4 flex items-center justify-center rounded-full bg-white/10 text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-white/20"
       >
@@ -632,29 +737,20 @@ function ShowcaseEntry({ username, busy, onApply, onSave, onRemove }: ShowcaseEn
         />
       )}
 
-      <span className="text-[10px] text-gray-300 truncate w-full text-center">{username}</span>
+      <span className={`text-[10px] truncate w-full text-center ${selected ? "text-accent font-semibold" : "text-gray-300"}`}>
+        {username}
+      </span>
 
-      {!loading && headUrl && fullDataUrl && (
-        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity absolute -top-1.5 -right-1.5">
-          <button
-            type="button"
-            onClick={() => onApply(username, fullDataUrl, variant)}
-            disabled={busy}
-            title="Aplicar"
-            className="h-5 w-5 flex items-center justify-center rounded-full bg-accent text-accent-foreground hover:bg-accent/90"
-          >
-            <Check className="h-3 w-3" />
-          </button>
-          <button
-            type="button"
-            onClick={() => onSave(username, fullDataUrl, variant)}
-            disabled={busy}
-            title="Guardar en biblioteca"
-            className="h-5 w-5 flex items-center justify-center rounded-full bg-white/10 text-gray-200 hover:bg-white/20"
-          >
-            <Store className="h-3 w-3" />
-          </button>
-        </div>
+      {ready && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onSave(username, fullDataUrl!, variant); }}
+          disabled={busy}
+          title="Guardar en biblioteca"
+          className="absolute -top-1.5 -right-1.5 h-5 w-5 flex items-center justify-center rounded-full bg-white/10 text-gray-200 hover:bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity"
+        >
+          <Store className="h-3 w-3" />
+        </button>
       )}
     </div>
   );
