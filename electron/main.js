@@ -43,11 +43,58 @@ if (process.platform === "win32") {
   app.setAppUserModelId("com.alaunchi.launcher");
 }
 
+// Main-process log on disk (%APPDATA%\ALaunchi\logs\main.log). Startup and
+// auto-update failures happen before the renderer exists, so the crash
+// reporter never sees them — without this file there's no way to know why the
+// launcher "doesn't open" on someone else's PC. Kept outside APP_DATA_DIR on
+// purpose: a broken data-dir override is one of the things it has to catch.
+const MAIN_LOG_FILE = path.join(app.getPath("userData"), "logs", "main.log");
+(function setupMainLog() {
+  try {
+    fsSync.mkdirSync(path.dirname(MAIN_LOG_FILE), { recursive: true });
+    // Start over once it gets big; one previous run is plenty of history.
+    if (fsSync.existsSync(MAIN_LOG_FILE) && fsSync.statSync(MAIN_LOG_FILE).size > 2 * 1024 * 1024) {
+      fsSync.renameSync(MAIN_LOG_FILE, `${MAIN_LOG_FILE}.old`);
+    }
+  } catch {}
+  const write = (level, args) => {
+    const text = args
+      .map((a) => (a instanceof Error ? a.stack || a.message : typeof a === "string" ? a : (() => { try { return JSON.stringify(a); } catch { return String(a); } })()))
+      .join(" ");
+    try { fsSync.appendFileSync(MAIN_LOG_FILE, `${new Date().toISOString()} [${level}] ${text}\n`); } catch {}
+  };
+  for (const level of ["log", "info", "warn", "error"]) {
+    const original = console[level].bind(console);
+    console[level] = (...args) => {
+      original(...args);
+      write(level, args);
+    };
+  }
+  console.info(`[startup] ALaunchi ${app.getVersion()} (pid ${process.pid})`);
+})();
+
+// Set once whenReady has run: (re)creates the main window. Used by
+// "second-instance" when the running copy has no window to bring forward.
+let launchMainWindow = null;
+let splashWindow = null;
+
 app.on("second-instance", () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.focus();
+    return;
+  }
+  // The running copy is alive but has no window (something failed before it
+  // got to create one): opening the launcher again must still show something,
+  // otherwise this process holds the single-instance lock forever and every
+  // later launch silently quits.
+  console.warn("[second-instance] Sin ventana principal — creándola.");
+  if (launchMainWindow) launchMainWindow();
 });
 
 // Safety net: an uncaught error in the main process would otherwise show Electron's
@@ -661,8 +708,19 @@ function createTray(win) {
 }
 
 app.whenReady().then(async () => {
-  await ensureDirs();
-  reconcileDanglingPlaytimeSessions();
+  // Nothing in here may stop the window from opening: an exception before
+  // launchMain() used to leave a windowless process holding the single-instance
+  // lock, so the launcher "didn't open" again until it was killed by hand.
+  try {
+    await ensureDirs();
+  } catch (e) {
+    console.error("[startup] No se pudieron crear las carpetas de datos:", e);
+  }
+  try {
+    reconcileDanglingPlaytimeSessions();
+  } catch (e) {
+    console.error("[startup] reconcileDanglingPlaytimeSessions falló:", e);
+  }
 
   // Consume the flag immediately (not just check it) so a crash-loop or a
   // second manual relaunch right after doesn't replay the sound.
@@ -673,14 +731,17 @@ app.whenReady().then(async () => {
       fsSync.unlinkSync(UPDATE_READY_FLAG);
     }
   } catch {}
+  if (justUpdated) console.info("[startup] Primera apertura tras actualizar.");
 
   const launchMain = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) return;
     mainWindow = createWindow();
-    createTray(mainWindow);
-    app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
-    });
+    if (!tray) createTray(mainWindow);
   };
+  launchMainWindow = launchMain;
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) launchMain();
+  });
 
   // Dev mode has no packaged installer to update, and constantly popping the
   // splash on every `npm run electron:dev` restart would just be noise.
@@ -689,12 +750,21 @@ app.whenReady().then(async () => {
     return;
   }
 
-  const splash = createSplashWindow();
+  let splash;
+  try {
+    splash = createSplashWindow();
+    splashWindow = splash;
+  } catch (e) {
+    console.error("[startup] No se pudo crear el splash:", e);
+    launchMain();
+    return;
+  }
   const sendSplashState = (data) => {
     if (!splash.isDestroyed()) splash.webContents.send("splash:state", data);
   };
 
   let launched = false;
+  let updateDownloaded = false;
   let updateWatchdog = null;
   const proceedToMain = () => {
     if (launched) return;
@@ -703,6 +773,7 @@ app.whenReady().then(async () => {
     launchMain();
     mainWindow.once("ready-to-show", () => {
       if (!splash.isDestroyed()) splash.close();
+      splashWindow = null;
       if (justUpdated) mainWindow.webContents.send("app:update-installed");
     });
   };
@@ -713,19 +784,36 @@ app.whenReady().then(async () => {
   // ever reaches the main window. Any failure along the way just falls back
   // to launching the current version rather than blocking forever.
   //
-  // That fallback only fires on an actual *error* event, though — checkForUpdates()
-  // and the download it triggers talk to a real network endpoint with no timeout of
-  // their own, so a connection that stalls silently (no error, no progress, nothing)
-  // would leave this frameless, closable-only-via-Alt+F4 splash spinning forever.
-  // Give up waiting after a generous window and open the app anyway; if the update
-  // does finish downloading later, install it on the next natural quit instead of
-  // force-quitting the app the player is by then already using.
-  const UPDATE_WATCHDOG_MS = 45_000;
-  updateWatchdog = setTimeout(() => {
-    console.warn(`[AutoUpdate] Sin respuesta tras ${UPDATE_WATCHDOG_MS / 1000}s — continuando sin esperar.`);
-    proceedToMain();
-  }, UPDATE_WATCHDOG_MS);
+  // The watchdog is a *stall* detector, not a total time limit: it's re-armed on
+  // every sign of life (update found, download progress). It used to be a flat
+  // 45 s from startup, so anyone whose connection needed longer than that for the
+  // ~120 MB installer got the old version opened instead, with the update left for
+  // "the next quit" — which, with close-to-tray, practically never comes. That's
+  // how players ended up several versions behind.
+  const UPDATE_STALL_MS = 45_000;
+  const armWatchdog = () => {
+    if (launched) return;
+    if (updateWatchdog) clearTimeout(updateWatchdog);
+    updateWatchdog = setTimeout(() => {
+      console.warn(`[AutoUpdate] Sin respuesta tras ${UPDATE_STALL_MS / 1000}s — continuando sin esperar.`);
+      proceedToMain();
+    }, UPDATE_STALL_MS);
+  };
+  armWatchdog();
 
+  // A background-downloaded update is installed silently (and the launcher
+  // reopens on its own) only when nobody is looking: window hidden in the tray
+  // and no game or install running.
+  const installUpdateIfIdle = () => {
+    if (!updateDownloaded) return;
+    const windowHidden = !mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible();
+    const busy = runningInstances.size > 0 || activeModpackOps.size > 0;
+    if (!windowHidden || busy) return;
+    console.info("[AutoUpdate] Launcher inactivo en la bandeja — instalando la actualización.");
+    autoUpdater.quitAndInstall(true, true);
+  };
+
+  autoUpdater.logger = console;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
   // Without this, checkForUpdates() on an unpacked `electron .` run silently
@@ -736,17 +824,27 @@ app.whenReady().then(async () => {
   // app-update.yml. Only ever true for an unpacked run — the real installed
   // app is always app.isPackaged === true, so this is a no-op there.
   if (!app.isPackaged) autoUpdater.forceDevUpdateConfig = true;
-  autoUpdater.on("update-available", () => sendSplashState({ state: "updating" }));
-  autoUpdater.on("download-progress", (progress) => sendSplashState({ state: "updating", percent: progress.percent }));
-  autoUpdater.on("update-downloaded", () => {
+  autoUpdater.on("update-available", (info) => {
+    console.info(`[AutoUpdate] Nueva versión disponible: ${info?.version}`);
+    armWatchdog();
+    sendSplashState({ state: "updating" });
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    armWatchdog();
+    sendSplashState({ state: "updating", percent: progress.percent });
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    console.info(`[AutoUpdate] Descargada ${info?.version}.`);
+    updateDownloaded = true;
     try { fsSync.writeFileSync(UPDATE_READY_FLAG, String(Date.now())); } catch {}
     if (!launched) {
       autoUpdater.quitAndInstall(true, true);
     } else {
-      // The watchdog above already gave up and opened the main window — the player
-      // may be mid-session by now, so don't yank it out from under them. Fall back to
-      // installing next time they actually quit instead of forcing it right now.
+      // Downloaded in the background while the launcher is already open — the
+      // player may be mid-session, so don't yank it out from under them. Install
+      // on the next real quit, or sooner if the launcher is idle in the tray.
       autoUpdater.autoInstallOnAppQuit = true;
+      installUpdateIfIdle();
     }
   });
   autoUpdater.on("update-not-available", proceedToMain);
@@ -759,6 +857,17 @@ app.whenReady().then(async () => {
     console.error("Auto-update check failed:", err);
     proceedToMain();
   });
+
+  // The update check above only runs on a cold start, but closing the window
+  // just sends the launcher to the tray — many players never fully quit it, so
+  // they'd never see a new version. Check again every few hours while it runs.
+  const BACKGROUND_CHECK_MS = 3 * 60 * 60 * 1000;
+  setInterval(() => {
+    if (!launched || updateDownloaded) return;
+    autoUpdater.checkForUpdates().catch((err) => console.warn("[AutoUpdate] Comprobación en segundo plano falló:", err?.message));
+  }, BACKGROUND_CHECK_MS);
+
+  setInterval(installUpdateIfIdle, 10 * 60 * 1000);
 });
 
 app.on("window-all-closed", () => {
