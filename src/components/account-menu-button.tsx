@@ -59,6 +59,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
   const [pendingRequests, setPendingRequests] = useState(0);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const [buttonSize, setButtonSize] = useState({ w: 160, h: 38 });
+  const [previewSlot, setPreviewSlot] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!uuid) return;
@@ -246,28 +247,34 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                     uuid={uuid}
                     username={username}
                     viewerFooter={<BackButton onClick={() => setProfileView("menu")} />}
+                    previewActionsSlot={previewSlot}
                   />
                 </motion.div>
               )}
             </AnimatePresence>
 
             {/* The button itself, grown — clicking it again collapses the panel. */}
-            <button
-              type="button"
-              onClick={() => setProfileOpen(false)}
-              className="flex items-center gap-3 px-4 py-2.5 border-t border-white/5 bg-white/[0.03] hover:bg-white/[0.06] transition-colors rounded-b-[14px] text-left"
-            >
-              <HeadAvatar headUrl={myHeadUrl} username={username} size={40}>
-                <Avatar className="h-10 w-10 rounded-lg border border-white/10">
-                  {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-lg" />}
-                  <AvatarFallback className="rounded-lg bg-accent/20 text-accent text-base font-bold">
-                    {username?.charAt(0)?.toUpperCase() ?? "?"}
-                  </AvatarFallback>
-                </Avatar>
-              </HeadAvatar>
-              <span className="flex-1 text-base font-semibold text-white truncate">{username}</span>
-              <ChevronDown className="h-4 w-4 text-gray-400" />
-            </button>
+            <div className="relative flex items-center border-t border-white/5 bg-white/[0.03] hover:bg-white/[0.06] transition-colors rounded-b-[14px]">
+              <button
+                type="button"
+                onClick={() => setProfileOpen(false)}
+                className="flex-1 min-w-0 flex items-center gap-3 px-4 py-2.5 text-left rounded-b-[14px]"
+              >
+                <HeadAvatar headUrl={myHeadUrl} username={username} size={40}>
+                  <Avatar className="h-10 w-10 rounded-lg border border-white/10">
+                    {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-lg" />}
+                    <AvatarFallback className="rounded-lg bg-accent/20 text-accent text-base font-bold">
+                      {username?.charAt(0)?.toUpperCase() ?? "?"}
+                    </AvatarFallback>
+                  </Avatar>
+                </HeadAvatar>
+                <span className="flex-1 text-base font-semibold text-white truncate">{username}</span>
+              </button>
+              {/* Personalizar portals its Aplicar/descartar buttons in here while
+                  previewing; the arrow only shows while this slot is empty. */}
+              <div ref={setPreviewSlot} className="peer absolute right-4 top-1/2 -translate-y-1/2 empty:pointer-events-none" />
+              <ChevronDown className="h-4 w-4 mr-4 text-gray-400 pointer-events-none peer-[:not(:empty)]:invisible" />
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
