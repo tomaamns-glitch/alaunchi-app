@@ -11,6 +11,9 @@ export function setLastView(location: string): void {
   else if (location === "/hub") localStorage.setItem(KEY, "hub");
 }
 
+/** Nothing saved yet (first time opening the launcher) = the Hub, where your
+ *  private instances are — the carousel only has something to show once you've
+ *  joined an online instance. */
 export function getLastViewPath(): "/" | "/hub" {
-  return localStorage.getItem(KEY) === "hub" ? "/hub" : "/";
+  return localStorage.getItem(KEY) === "home" ? "/" : "/hub";
 }

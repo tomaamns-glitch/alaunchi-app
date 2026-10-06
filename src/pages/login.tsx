@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { loginWithMicrosoft, isElectron, AuthStep } from "@/services/auth";
 import { Loader2, CheckCircle2, Copy, ExternalLink, AlertCircle } from "lucide-react";
+import { getLastViewPath } from "@/lib/last-view";
 
 function MicrosoftIcon({ className }: { className?: string }) {
   return (
@@ -57,7 +58,7 @@ export default function Login() {
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
-    if (isAuthenticated) setLocation("/");
+    if (isAuthenticated) setLocation(getLastViewPath());
   }, [isAuthenticated, setLocation]);
 
   useEffect(() => {

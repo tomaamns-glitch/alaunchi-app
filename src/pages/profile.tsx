@@ -219,6 +219,7 @@ export default function Profile() {
         username,
         totalPlaytimeMs,
         onlineInstanceIds: onlineInstances.map((mp) => mp.id),
+        onlineInstanceRefs: onlineInstances.filter((mp) => mp.repoUrl).map((mp) => ({ id: mp.id, repoUrl: mp.repoUrl! })),
         privateInstances,
       }).catch(() => {});
     })();

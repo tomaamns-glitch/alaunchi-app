@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, Plus, Ghost, X, Trash2 } from "lucide-react"
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
 import { useChatHeads, useVisibleChatBubbles } from "@/hooks/use-chat-heads";
-import { deleteConversationForMe } from "@/services/chat";
+import { deleteConversationForMe, type ChatIndexEntry } from "@/services/chat";
 import { subscribePresence, sortAllPresence, type PresenceEntry } from "@/services/presence";
 import { subscribeFriends, type FriendEntry } from "@/services/friends";
 import { subscribeAllActivity, type UserActivity } from "@/services/user-activity";
@@ -78,17 +78,24 @@ export function ChatContactRail({
   // conversation just opened (from a friend's profile, say) with nothing sent
   // yet would otherwise be entirely absent from this list — fall back to the
   // global user directory for its username so it still shows up, highlighted.
-  const contactsSource =
-    selectedUuid && !chatIndex[selectedUuid]
-      ? {
-          ...chatIndex,
-          [selectedUuid]: {
-            otherUsername: directory[selectedUuid]?.username ?? presence[selectedUuid]?.username ?? "",
-            lastMessage: "",
-            lastTimestamp: Date.now(),
-          },
-        }
-      : chatIndex;
+  //
+  // An entry can also exist WITHOUT a username: opening a chat marks it read,
+  // which writes `unreadCount: 0` and so creates the entry before any message
+  // carries `otherUsername` — that's why someone who isn't your friend (no
+  // history, not in the friends list) showed up nameless here. Always fill the
+  // name in from the other sources.
+  const nameFor = (uuid: string) =>
+    chatIndex[uuid]?.otherUsername ||
+    directory[uuid]?.username ||
+    friends[uuid]?.username ||
+    presence[uuid]?.username ||
+    "";
+  const contactsSource: Record<string, ChatIndexEntry> = Object.fromEntries(
+    Object.entries(chatIndex).map(([uuid, entry]) => [uuid, { ...entry, otherUsername: nameFor(uuid) }])
+  );
+  if (selectedUuid && !contactsSource[selectedUuid]) {
+    contactsSource[selectedUuid] = { otherUsername: nameFor(selectedUuid), lastMessage: "", lastTimestamp: Date.now() };
+  }
   // Only pinned-or-unread conversations show here (same rule as the bubble
   // tray) — "Cerrar conversación" unpins, which is what actually makes it
   // disappear from both places instead of just the bubbles. The one showing

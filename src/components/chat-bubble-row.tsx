@@ -9,6 +9,7 @@ import { useChatHeads, useVisibleChatBubbles } from "@/hooks/use-chat-heads";
 export function ChatBubbleRow() {
   const uuids = useVisibleChatBubbles();
   const chatIndex = useChatHeads((s) => s.chatIndex);
+  const directory = useChatHeads((s) => s.directory);
   const openUuid = useChatHeads((s) => s.openUuid);
   const openChat = useChatHeads((s) => s.openChat);
   const minimizeChat = useChatHeads((s) => s.minimizeChat);
@@ -16,7 +17,8 @@ export function ChatBubbleRow() {
   if (uuids.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-1.5">
+    // Its bubbles toggle the chat themselves — not an "outside" click for it.
+    <div data-keep-popups-open className="flex items-center gap-1.5">
       <AnimatePresence>
         {uuids.map((uuid) => {
           const entry = chatIndex[uuid];
@@ -26,7 +28,7 @@ export function ChatBubbleRow() {
             <ChatBubble
               key={uuid}
               uuid={uuid}
-              username={entry?.otherUsername ?? ""}
+              username={entry?.otherUsername || directory[uuid]?.username || ""}
               unread={unread}
               active={active}
               onClick={() => (active ? minimizeChat() : openChat(uuid))}

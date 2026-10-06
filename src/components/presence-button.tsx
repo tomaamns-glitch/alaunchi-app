@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { User } from "lucide-react";
+import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
 import { subscribePresence, sortAndFilterPresence, sortAllPresence, type PresenceEntry } from "@/services/presence";
 import { subscribeFriends, type FriendEntry } from "@/services/friends";
 import { subscribeAllActivity, type UserActivity } from "@/services/user-activity";
@@ -141,8 +142,11 @@ export function PresenceButton({ context, open, onOpenChange }: PresenceButtonPr
 
   const hasAnyoneOnline = friendsOnlineCount > 0 || onlineOthers.length > 0;
 
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useDismissOnOutsideClick([rootRef], () => onOpenChange(false), open);
+
   return (
-    <div className="relative">
+    <div ref={rootRef} className="relative">
       {open && (
         <button
           type="button"

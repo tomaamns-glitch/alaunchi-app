@@ -35,6 +35,7 @@ import { getNicknames } from "@/lib/nicknames";
 import { getInstanceAccentColor } from "@/lib/instance-color";
 import { findCompatibleInstances, type CompatibleInstance } from "@/lib/content-compat";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
+import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { ChatContactRail } from "@/components/chat-contact-rail";
@@ -161,7 +162,9 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
   // chatIndex only gets an entry once a message has actually been sent —
   // fall back to the global "everyone who's ever opened the app" directory
   // for a conversation just opened from a friend's profile/the friends list.
-  const otherUsername = displayUuid ? chatIndex[displayUuid]?.otherUsername ?? directory[displayUuid]?.username ?? "" : "";
+  // `||`, not `??`: opening a chat marks it read, which can create the chatIndex
+  // entry before any message has given it an `otherUsername`.
+  const otherUsername = displayUuid ? chatIndex[displayUuid]?.otherUsername || directory[displayUuid]?.username || "" : "";
   const alias = displayUuid ? nicknames[displayUuid] : undefined;
 
   useEffect(() => {
@@ -331,6 +334,9 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
     setDraft("");
   };
 
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  useDismissOnOutsideClick([panelRef], minimizeChat, !!openUuid);
+
   return (
     <AnimatePresence>
       {openUuid && (
@@ -348,6 +354,7 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
       )}
       {openUuid && (
         <motion.div
+          ref={panelRef}
           key="chat-panel"
           initial={{ opacity: 0, y: 8, scale: 0.96 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -486,7 +493,7 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                                 : "bg-white/10 text-gray-100 rounded-bl-sm"
                             )}
                           >
-                            <p className="whitespace-pre-wrap break-words">{m.text}</p>
+                            <p className="whitespace-pre-wrap break-words select-text">{m.text}</p>
                             {m.timestamp && (
                               <div className="text-[10px] mt-1 opacity-60 text-right">
                                 {format(m.timestamp, "HH:mm")}

@@ -667,6 +667,7 @@ export default function Home() {
   const goNext = () => goToIndex((currentIndex + 1) % modpacks.length);
 
   useDynamicAccent(currentPack?.bannerUrl || currentPack?.imageUrl);
+  const [brokenImages, setBrokenImages] = useState<Set<string>>(() => new Set());
 
   if (!isAuthenticated) return null;
 
@@ -807,11 +808,18 @@ export default function Home() {
                   }}
                   className={`absolute inset-0 ${modpacks.length > 1 ? "cursor-grab active:cursor-grabbing" : ""}`}
                 >
-                  {currentPack.bannerUrl || currentPack.imageUrl ? (
+                  {(currentPack.bannerUrl || currentPack.imageUrl) && !brokenImages.has(currentPack.bannerUrl || currentPack.imageUrl) ? (
                     <img
                       src={currentPack.bannerUrl || currentPack.imageUrl}
                       alt={currentPack.name}
                       className="w-full h-full object-cover"
+                      // A dead link (e.g. an expired Discord attachment) falls back
+                      // to the same placeholder as a pack without image, instead of
+                      // the browser's broken-image icon.
+                      onError={() => {
+                        const url = currentPack.bannerUrl || currentPack.imageUrl;
+                        setBrokenImages((prev) => new Set(prev).add(url));
+                      }}
                     />
                   ) : (
                     <div className="w-full h-full bg-gradient-to-br from-accent/20 to-black flex items-center justify-center">

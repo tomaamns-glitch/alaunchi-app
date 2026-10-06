@@ -1,6 +1,8 @@
 import { ref, set, update, get, onValue, off, type Unsubscribe } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 import type { FavoriteEntry } from "./favorites";
+import type { Modpack } from "./github";
+import { sameRepo } from "@/lib/sources";
 
 /**
  * The public half of a player's Perfil — republished by the owner's own
@@ -61,6 +63,11 @@ export interface PublicProfileSnapshot {
   /** Ids into the shared GitHub catalog — the viewer's own useModpacks store
    *  already has the full objects, same catalog for everyone. */
   onlineInstanceIds: string[];
+  /** Same instances with the repo they come from. Ids alone aren't unique
+   *  across creators (older ones have no random suffix), so matching by id only
+   *  could show the viewer an unrelated pack of theirs. Absent on profiles
+   *  published by older versions. */
+  onlineInstanceRefs?: { id: string; repoUrl: string }[];
   /** Only instances the owner starred in the Hub — private instances are
    *  otherwise never published anywhere. */
   privateInstances: PublicInstanceSummary[];
@@ -177,6 +184,7 @@ export function subscribeProfile(
       val && {
         ...val,
         onlineInstanceIds: val.onlineInstanceIds ?? [],
+        onlineInstanceRefs: val.onlineInstanceRefs ?? undefined,
         privateInstances: val.privateInstances ?? [],
         favorites: val.favorites ?? [],
         avatarDecoration: val.avatarDecoration ?? "none",
@@ -191,4 +199,20 @@ export function subscribeProfile(
  *  conceptually part of the public profile, not of the local favorites store. */
 export async function publishFavorites(uuid: string, favorites: FavoriteEntry[]): Promise<void> {
   await set(ref(rtdb, `profiles/${uuid}/favorites`), favorites);
+}
+
+/** The profile owner's online instances that the VIEWER can also see — i.e.
+ *  present in their own catalog (useModpacks only holds instances they have
+ *  access to). The rest are left out entirely: someone without access to an
+ *  instance must not learn its name or image from someone else's profile. */
+export function visibleOnlineInstances(profile: PublicProfileSnapshot, viewerModpacks: Modpack[]): Modpack[] {
+  const refs = profile.onlineInstanceRefs?.length
+    ? profile.onlineInstanceRefs
+    : profile.onlineInstanceIds.map((id) => ({ id, repoUrl: "" }));
+  const out: Modpack[] = [];
+  for (const r of refs) {
+    const pack = viewerModpacks.find((mp) => mp.id === r.id && (!r.repoUrl || sameRepo(mp.repoUrl, r.repoUrl)));
+    if (pack && !out.includes(pack)) out.push(pack);
+  }
+  return out;
 }

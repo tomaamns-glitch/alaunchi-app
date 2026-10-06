@@ -14,6 +14,7 @@ import { UserProfileMenuView } from "@/components/user-profile-menu-panel";
 import { useAvatarDecoration } from "@/hooks/use-avatar-decoration";
 import { subscribeIncomingRequests } from "@/services/friends";
 import { useDevDecoOverride } from "@/lib/dev-deco-override";
+import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
 
 // DEV ONLY: decoration picked in Personalizar → Pruebas, drawn around your head
 // here. Lazy + gated on import.meta.env.DEV so the lab isn't in the prod bundle.
@@ -60,6 +61,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const [buttonSize, setButtonSize] = useState({ w: 160, h: 38 });
   const [previewSlot, setPreviewSlot] = useState<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!uuid) return;
@@ -91,6 +93,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
   };
 
   const collapsedClip = clipFromButton(buttonSize.w, buttonSize.h);
+  useDismissOnOutsideClick([panelRef, buttonRef], () => setProfileOpen(false), profileOpen);
 
   return (
     <div className="relative">
@@ -105,6 +108,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
       <AnimatePresence>
         {profileOpen && uuid && (
           <motion.div
+            ref={panelRef}
             initial={{ clipPath: collapsedClip, opacity: 0.4 }}
             animate={{ clipPath: CLIP_OPEN, opacity: 1 }}
             exit={{ clipPath: collapsedClip, opacity: 0 }}

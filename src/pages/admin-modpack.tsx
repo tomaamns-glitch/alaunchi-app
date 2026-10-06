@@ -3,6 +3,7 @@ import { useLocation, useParams } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { Button } from "@/components/ui/button";
+import { ImageUrlField } from "@/components/image-url-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
@@ -1028,19 +1029,17 @@ export default function AdminModpack() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label className="text-gray-200">URL de logo</Label>
-                    <Input
+                    <ImageUrlField
                       value={settingsForm.imageUrl}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, imageUrl: e.target.value })}
-                      className="bg-background/50 border-white/10 text-white"
+                      onChange={(url) => setSettingsForm((f) => ({ ...f, imageUrl: url }))}
                       disabled={settingsSaving}
                     />
                   </div>
                   <div className="space-y-1.5">
                     <Label className="text-gray-200">URL de banner</Label>
-                    <Input
+                    <ImageUrlField
                       value={settingsForm.bannerUrl}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, bannerUrl: e.target.value })}
-                      className="bg-background/50 border-white/10 text-white"
+                      onChange={(url) => setSettingsForm((f) => ({ ...f, bannerUrl: url }))}
                       disabled={settingsSaving}
                     />
                   </div>
