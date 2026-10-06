@@ -9,7 +9,7 @@ import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
 import { ProfileFrame } from "@/components/profile-frame";
 import { toSkinEffect } from "@/lib/decoration-catalog";
 import { useShowcaseSkin } from "@/hooks/use-showcase-skin";
-import { subscribeProfile, type PublicProfileSnapshot, type PublicInstanceSummary } from "@/services/public-profile";
+import { subscribeProfile, visibleOnlineInstances, type PublicProfileSnapshot, type PublicInstanceSummary } from "@/services/public-profile";
 import { DEFAULT_PROFILE_BANNER } from "@/services/banner";
 import { removeFriend, sendFriendRequest, subscribeFriends, subscribeSentRequests } from "@/services/friends";
 import { useChatHeads } from "@/hooks/use-chat-heads";
@@ -262,7 +262,7 @@ export default function PublicProfile() {
   // The content tabs (instancias, favoritos) only when the owner shares them
   // with everyone, or with you as a friend.
   const contentVisible = profile.visibility !== "friends" || isFriend;
-  const totalInstances = profile.onlineInstanceIds.length + profile.privateInstances.length;
+  const totalInstances = visibleOnlineInstances(profile, modpacks).length + profile.privateInstances.length;
 
   const handleAddFriend = async () => {
     setSending(true);
@@ -329,7 +329,7 @@ function ProfileContent({
   onOpenOnline: (id: string) => void;
 }) {
   const skin = useShowcaseSkin(profile.username);
-  const modpackById = new Map(modpacks.map((mp) => [mp.id, mp]));
+  const onlinePacks = visibleOnlineInstances(profile, modpacks);
   const [installFavorite, setInstallFavorite] = useState<FavoriteEntry | null>(null);
 
   return (
@@ -429,29 +429,17 @@ function ProfileContent({
             </TabsList>
 
             <TabsContent value="online">
-              {profile.onlineInstanceIds.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-14 text-center">No tiene ninguna instancia online instalada.</p>
+              {onlinePacks.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-14 text-center">No tiene ninguna instancia online que puedas ver.</p>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 pt-5">
-                  {profile.onlineInstanceIds.map((id) => {
-                    const pack = modpackById.get(id);
-                    if (!pack) {
-                      return (
-                        <div
-                          key={id}
-                          className="rounded-xl border border-white/10 bg-card/20 overflow-hidden p-4 flex flex-col items-center justify-center gap-1.5 text-center h-[9.5rem]"
-                        >
-                          <HomeIcon className="h-5 w-5 text-muted-foreground" />
-                          <p className="text-[10px] text-muted-foreground">No disponible en tu catálogo</p>
-                        </div>
-                      );
-                    }
-                    return pack.installed ? (
-                      <OwnedOnlineCard key={id} pack={pack} onOpen={() => onOpenOnline(id)} />
+                  {onlinePacks.map((pack) =>
+                    pack.installed ? (
+                      <OwnedOnlineCard key={pack.id} pack={pack} onOpen={() => onOpenOnline(pack.id)} />
                     ) : (
-                      <UninstalledOnlineCard key={id} pack={pack} />
-                    );
-                  })}
+                      <UninstalledOnlineCard key={pack.id} pack={pack} />
+                    )
+                  )}
                 </div>
               )}
             </TabsContent>

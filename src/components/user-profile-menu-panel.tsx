@@ -23,7 +23,7 @@ import { useChatHeads } from "@/hooks/use-chat-heads";
 import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
 import { ProfileFrame } from "@/components/profile-frame";
 import { InstallFavoriteDialog } from "@/components/install-favorite-dialog";
-import { subscribeProfile, type PublicProfileSnapshot, type PublicInstanceSummary } from "@/services/public-profile";
+import { subscribeProfile, visibleOnlineInstances, type PublicProfileSnapshot, type PublicInstanceSummary } from "@/services/public-profile";
 import { removeFriend, sendFriendRequest, subscribeFriends, subscribeSentRequests } from "@/services/friends";
 import { DEFAULT_PROFILE_BANNER } from "@/services/banner";
 import { toSkinEffect } from "@/lib/decoration-catalog";
@@ -191,9 +191,9 @@ function UserProfileBody({
 }) {
   const [tab, setTab] = useState<Tab>("online");
   const [installFavorite, setInstallFavorite] = useState<FavoriteEntry | null>(null);
-  const modpackById = new Map(modpacks.map((mp) => [mp.id, mp]));
+  const onlinePacks = visibleOnlineInstances(profile, modpacks);
   const contentVisible = profile.visibility !== "friends" || friendState === "friends";
-  const totalInstances = profile.onlineInstanceIds.length + profile.privateInstances.length;
+  const totalInstances = onlinePacks.length + profile.privateInstances.length;
 
   return (
     <div className="h-full flex flex-col gap-2.5 min-h-0">
@@ -285,25 +285,16 @@ function UserProfileBody({
 
           <div className="flex-1 min-h-0 overflow-y-auto space-y-1 pr-1">
             {tab === "online" ? (
-              profile.onlineInstanceIds.length === 0 ? (
-                <Empty text="No tiene ninguna instancia online instalada." />
+              onlinePacks.length === 0 ? (
+                <Empty text="No tiene ninguna instancia online que puedas ver." />
               ) : (
-                profile.onlineInstanceIds.map((id) => {
-                  const pack = modpackById.get(id);
-                  if (!pack) {
-                    return (
-                      <RowShell key={id}>
-                        <Thumb fallback="?" />
-                        <span className="flex-1 min-w-0 truncate text-xs text-muted-foreground">No disponible en tu catálogo</span>
-                      </RowShell>
-                    );
-                  }
-                  return pack.installed ? (
-                    <OwnedOnlineRow key={id} pack={pack} onOpen={() => onOpenOnline(id)} />
+                onlinePacks.map((pack) =>
+                  pack.installed ? (
+                    <OwnedOnlineRow key={pack.id} pack={pack} onOpen={() => onOpenOnline(pack.id)} />
                   ) : (
-                    <UninstalledOnlineRow key={id} pack={pack} />
-                  );
-                })
+                    <UninstalledOnlineRow key={pack.id} pack={pack} />
+                  )
+                )
               )
             ) : tab === "private" ? (
               profile.privateInstances.length === 0 ? (

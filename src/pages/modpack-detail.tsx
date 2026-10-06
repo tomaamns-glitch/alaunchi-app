@@ -1270,7 +1270,7 @@ export default function ModpackDetail() {
                       </button>
                     </div>
                     {!!projectDetail?.description && (
-                      <p className="text-sm text-gray-300">{projectDetail.description}</p>
+                      <p className="text-sm text-gray-300 select-text">{projectDetail.description}</p>
                     )}
                     <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                       <span>{(projectDetail?.downloads ?? 0).toLocaleString()} descargas</span>
@@ -1569,7 +1569,7 @@ export default function ModpackDetail() {
                       <Loader2 className="h-5 w-5 animate-spin mr-2" /> Cargando...
                     </div>
                   ) : projectDetail?.body ? (
-                    <div className="prose prose-sm prose-invert max-w-none prose-img:rounded-md prose-a:text-accent">
+                    <div className="prose prose-sm prose-invert max-w-none prose-img:rounded-md prose-a:text-accent select-text">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         rehypePlugins={[rehypeRaw, [rehypeSanitize, HTML_SANITIZE_SCHEMA]]}
@@ -2281,7 +2281,7 @@ export default function ModpackDetail() {
                                         <Badge variant="outline" className="text-[10px] shrink-0">Dependencia</Badge>
                                       )}
                                     </div>
-                                    <p className="text-muted-foreground text-[11px] font-mono truncate">{fileName(row.path)}</p>
+                                    <p className="text-muted-foreground text-[11px] font-mono truncate select-text">{fileName(row.path)}</p>
                                   </div>
                                 </div>
                                 {!row.mandatory && update && (
@@ -2425,7 +2425,7 @@ export default function ModpackDetail() {
                     )}
                   </p>
                   {onlinePostDetail.descriptionMd && (
-                    <div className="prose prose-sm prose-invert max-w-none prose-img:rounded-md prose-a:text-accent">
+                    <div className="prose prose-sm prose-invert max-w-none prose-img:rounded-md prose-a:text-accent select-text">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         rehypePlugins={[rehypeRaw, [rehypeSanitize, HTML_SANITIZE_SCHEMA]]}
@@ -2448,7 +2448,7 @@ export default function ModpackDetail() {
                     >
                       <Box className="h-4 w-4 text-muted-foreground shrink-0" />
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm text-gray-100 truncate">{file.fileName}</p>
+                        <p className="text-sm text-gray-100 truncate select-text">{file.fileName}</p>
                         <p className="text-[10px] text-muted-foreground">{formatBytes(file.fileSize)}</p>
                       </div>
                       <Button

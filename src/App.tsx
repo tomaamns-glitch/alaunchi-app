@@ -54,16 +54,19 @@ function StartupView() {
   const previousLocation = useRef(location);
 
   useEffect(() => {
-    setLastView(location);
-  }, [location]);
-
-  useEffect(() => {
     if (restored.current || !authChecked) return;
     restored.current = true;
     if (location === "/" && getLastViewPath() === "/hub") {
       setLocation("/hub", { replace: true });
     }
   }, [authChecked, location, setLocation]);
+
+  // Only once the startup view has been restored — otherwise the initial "/"
+  // gets saved first and the restore above would always read back "home"
+  // (and a first-ever launch would never land on the Hub).
+  useEffect(() => {
+    if (restored.current) setLastView(location);
+  }, [location, authChecked]);
 
   // A chat panel/presence popup lives in global state (useChatHeads/
   // useHeaderOverlay), not tied to whichever page mounted it — without this,

@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { Button } from "@/components/ui/button";
+import { ImageUrlField } from "@/components/image-url-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
@@ -254,20 +255,18 @@ export default function Admin() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label>URL de logo</Label>
-                <Input
+                <ImageUrlField
                   value={newForm.imageUrl}
-                  onChange={(e) => setNewForm({ ...newForm, imageUrl: e.target.value })}
-                  className="bg-background/50 border-white/10 text-white"
+                  onChange={(url) => setNewForm((f) => ({ ...f, imageUrl: url }))}
                   placeholder="https://... o /logo.png"
                 />
                 <p className="text-[11px] text-muted-foreground">Icono cuadrado — catálogo y detalle.</p>
               </div>
               <div className="space-y-1.5">
                 <Label>URL de banner</Label>
-                <Input
+                <ImageUrlField
                   value={newForm.bannerUrl}
-                  onChange={(e) => setNewForm({ ...newForm, bannerUrl: e.target.value })}
-                  className="bg-background/50 border-white/10 text-white"
+                  onChange={(url) => setNewForm((f) => ({ ...f, bannerUrl: url }))}
                   placeholder="https://... o /banner.png"
                 />
                 <p className="text-[11px] text-muted-foreground">Imagen ancha — pantalla principal.</p>

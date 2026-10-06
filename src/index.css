@@ -264,6 +264,20 @@
     @apply font-sans antialiased bg-background text-foreground;
     margin: 0;
     overflow: hidden;
+    /* Nothing in the app is selectable by default (images, dates, labels…);
+       only what's opted in with `select-text` — chat messages, mod
+       descriptions and content file names — plus anything you can type in. */
+    user-select: none;
+  }
+
+  input,
+  textarea,
+  [contenteditable="true"] {
+    user-select: text;
+  }
+
+  .select-text img {
+    user-select: none;
   }
 
   /* Scrolling stays functional, the scrollbar itself is just hidden. */

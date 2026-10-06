@@ -1,20 +1,23 @@
 import { create } from "zustand";
 import { subscribeChatIndex, subscribeUserDirectory, markConversationRead, type ChatIndexEntry, type KnownUser } from "@/services/chat";
-import { focusWindow, getAppIconDataUrl } from "@/services/electron";
-import { getPlayerHeadDataUrl } from "@/hooks/use-player-head";
-import { playNotificationSound } from "@/lib/notification-sound";
+import { toast } from "sonner";
+import { subscribeFriends, subscribeIncomingRequests, subscribeSentRequests, type FriendRequestEntry } from "@/services/friends";
+import { notifyUser, isAppVisible } from "@/lib/notify";
 
-/** Native OS notification for an incoming chat message — same pattern as
- *  notifyConnected in presence-button.tsx. Skipped while the app window is
- *  focused (you're already looking at it — the unread bubble covers it) and
- *  always requested silent so the user's chosen sound (see notification-sound.ts)
- *  is the only audio, instead of whatever the OS default is. */
-async function notifyNewMessage(uuid: string, name: string, text: string) {
-  if (typeof Notification === "undefined" || document.hasFocus()) return;
-  const icon = (await getPlayerHeadDataUrl(uuid).catch(() => null)) || (await getAppIconDataUrl().catch(() => null));
-  const n = new Notification(name, { body: text, icon: icon ?? undefined, silent: true });
-  n.onclick = () => focusWindow();
-  playNotificationSound();
+/** Incoming chat message: sound, plus a Windows notification if the launcher
+ *  is minimized/in the tray (see notifyUser). Nothing at all if that very
+ *  conversation is open on screen — you're already reading it. */
+function notifyNewMessage(uuid: string, name: string, text: string) {
+  if (isAppVisible() && useChatHeads.getState().openUuid === uuid) return;
+  notifyUser({ title: name, body: text, iconUuid: uuid }).catch(() => {});
+}
+
+/** Friend request received / accepted. With the launcher on screen there's no
+ *  Windows notification (see notifyUser), so an in-app toast says what the
+ *  sound was about. */
+function notifyFriendEvent(uuid: string, body: string) {
+  if (isAppVisible()) toast(body);
+  notifyUser({ title: "ALaunchi", body, iconUuid: uuid }).catch(() => {});
 }
 
 interface ChatHeadsState {
@@ -36,6 +39,50 @@ interface ChatHeadsState {
 
 let unsubscribeIndex: (() => void) | null = null;
 let unsubscribeDirectory: (() => void) | null = null;
+let unsubscribeFriendEvents: (() => void) | null = null;
+
+/** Watches friend requests for notifications. The first snapshot of each node
+ *  is just the current state (nothing new happened), so only later changes count.
+ *  "Accepted" = someone you had sent a request to shows up as a friend; accepting
+ *  one yourself also adds a friend, but that one was in your incoming list. */
+function watchFriendEvents(myUuid: string): () => void {
+  let incoming: Record<string, FriendRequestEntry> | null = null;
+  let sent: Record<string, FriendRequestEntry> = {};
+  // Sent requests that just disappeared — accepting one removes it and adds the
+  // friend as separate writes, in no guaranteed order, so remember them briefly.
+  const recentlyAnswered = new Map<string, number>();
+  const wasSentByMe = (uuid: string) =>
+    !!sent[uuid] || Date.now() - (recentlyAnswered.get(uuid) ?? 0) < 60_000;
+  let friendUuids: Set<string> | null = null;
+
+  const unsubs = [
+    subscribeIncomingRequests(myUuid, (next) => {
+      if (incoming) {
+        for (const [uuid, req] of Object.entries(next)) {
+          if (!incoming[uuid]) notifyFriendEvent(uuid, `${req.username} te ha enviado una solicitud de amistad`);
+        }
+      }
+      incoming = next;
+    }),
+    subscribeSentRequests(myUuid, (next) => {
+      for (const uuid of Object.keys(sent)) {
+        if (!next[uuid]) recentlyAnswered.set(uuid, Date.now());
+      }
+      sent = next;
+    }),
+    subscribeFriends(myUuid, (next) => {
+      if (friendUuids) {
+        for (const [uuid, friend] of Object.entries(next)) {
+          if (!friendUuids.has(uuid) && wasSentByMe(uuid)) {
+            notifyFriendEvent(uuid, `${friend.username} ha aceptado tu solicitud de amistad`);
+          }
+        }
+      }
+      friendUuids = new Set(Object.keys(next));
+    }),
+  ];
+  return () => unsubs.forEach((u) => u());
+}
 
 // Chats you had minimized (visible as a bubble, not necessarily unread) stay
 // that way across an app restart instead of quietly closing — scoped per
@@ -66,6 +113,7 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
     if (get().myUuid === myUuid) return;
     unsubscribeIndex?.();
     unsubscribeDirectory?.();
+    unsubscribeFriendEvents?.();
     set({ myUuid, chatIndex: {}, directory: {}, openUuid: null, pinnedUuids: loadPinnedUuids(myUuid) });
 
     let previous: Record<string, ChatIndexEntry> = {};
@@ -74,7 +122,7 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
         const before = previous[uuid]?.unreadCount || 0;
         const after = entry.unreadCount || 0;
         if (after > before) {
-          notifyNewMessage(uuid, entry.otherUsername, entry.lastMessage).catch(() => {});
+          notifyNewMessage(uuid, entry.otherUsername, entry.lastMessage);
         }
       }
       previous = index;
@@ -82,6 +130,7 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
     });
 
     unsubscribeDirectory = subscribeUserDirectory((users) => set({ directory: users }));
+    unsubscribeFriendEvents = watchFriendEvents(myUuid);
   },
 
   openChat: (uuid) => {
