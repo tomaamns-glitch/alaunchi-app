@@ -79,23 +79,45 @@ const MAIN_LOG_FILE = path.join(app.getPath("userData"), "logs", "main.log");
 // "second-instance" when the running copy has no window to bring forward.
 let launchMainWindow = null;
 let splashWindow = null;
+// Set when the window must come to the front as soon as it exists: the user
+// opened the launcher again while this copy was still starting, or it's the
+// first launch right after an update.
+let revealWhenReady = false;
+
+/**
+ * Shows a window AND puts it in front. A plain show() from a process the user
+ * didn't just start (e.g. relaunched by the updater, or woken up by a second
+ * launch) is shown behind whatever has focus — Windows' foreground lock — which
+ * looks exactly like "the launcher didn't open". Briefly making it always-on-top
+ * is the standard way around that.
+ */
+function bringToFront(win) {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.setAlwaysOnTop(true);
+  win.focus();
+  win.moveTop();
+  setTimeout(() => {
+    if (!win.isDestroyed()) win.setAlwaysOnTop(false);
+  }, 400);
+}
 
 app.on("second-instance", () => {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
+    bringToFront(mainWindow);
     return;
   }
+  revealWhenReady = true;
   if (splashWindow && !splashWindow.isDestroyed()) {
-    splashWindow.focus();
+    bringToFront(splashWindow);
     return;
   }
-  // The running copy is alive but has no window (something failed before it
-  // got to create one): opening the launcher again must still show something,
-  // otherwise this process holds the single-instance lock forever and every
-  // later launch silently quits.
-  console.warn("[second-instance] Sin ventana principal — creándola.");
+  // Still starting (the window gets revealed when ready), or something failed
+  // before a window could be created: opening the launcher again must still
+  // show something, otherwise this process holds the single-instance lock
+  // forever and every later launch silently quits.
+  console.warn("[second-instance] Sin ventana principal todavía.");
   if (launchMainWindow) launchMainWindow();
 });
 
@@ -741,7 +763,9 @@ function createSplashWindow() {
       sandbox: false,
     },
   });
-  win.once("ready-to-show", () => win.show());
+  // In front too after an update (revealWhenReady) — it isn't consumed here,
+  // the main window still needs it.
+  win.once("ready-to-show", () => (revealWhenReady ? bringToFront(win) : win.show()));
   win.loadFile(path.join(__dirname, "splash.html"));
   return win;
 }
@@ -790,7 +814,12 @@ function createWindow() {
   });
 
   win.once("ready-to-show", () => {
-    win.show();
+    if (revealWhenReady) {
+      revealWhenReady = false;
+      bringToFront(win);
+    } else {
+      win.show();
+    }
   });
 
   // Links inside rendered mod descriptions (Discord/GitHub/etc.) must open in the
@@ -864,14 +893,17 @@ function createTray(win) {
   tray.setToolTip("ALaunchi");
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Abrir ALaunchi", click: () => { win.show(); win.focus(); } },
+      { label: "Abrir ALaunchi", click: () => bringToFront(win) },
       { type: "separator" },
       { label: "Cerrar", click: () => app.quit() },
     ])
   );
+  // Only hide when the window is really in front — a window that's "visible"
+  // but behind other apps used to be hidden by this click, which is the
+  // opposite of what anyone clicking the tray icon wants.
   tray.on("click", () => {
-    if (win.isVisible()) win.hide();
-    else { win.show(); win.focus(); }
+    if (win.isVisible() && win.isFocused() && !win.isMinimized()) win.hide();
+    else bringToFront(win);
   });
 }
 
@@ -899,7 +931,12 @@ app.whenReady().then(async () => {
       fsSync.unlinkSync(UPDATE_READY_FLAG);
     }
   } catch {}
-  if (justUpdated) console.info("[startup] Primera apertura tras actualizar.");
+  if (justUpdated) {
+    console.info("[startup] Primera apertura tras actualizar.");
+    // Relaunched by the installer, not by the user: without this the window
+    // opens behind whatever is focused.
+    revealWhenReady = true;
+  }
 
   const launchMain = () => {
     if (mainWindow && !mainWindow.isDestroyed()) return;
