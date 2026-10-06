@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ImageUrlField } from "@/components/image-url-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card } from "@/components/ui/card";
+import { LoaderIcon } from "@/components/loader-icon";
 import {
   Dialog,
   DialogContent,
@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, Trash, Loader2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, Package, Plus, Trash, Loader2 } from "lucide-react";
 import { createModpack, deleteModpack, type NewModpackData } from "@/services/github";
 import { getMySource, uniqueModpackId } from "@/lib/sources";
 import { useIsAdmin } from "@/hooks/use-is-admin";
@@ -109,74 +109,111 @@ export default function Admin() {
   if (!isAdmin) return null;
 
   return (
-    <div className="min-h-full bg-background text-foreground flex flex-col">
-      <header className="h-16 border-b border-white/5 bg-card/50 flex items-center px-6 sticky top-0 z-50 gap-4">
-        <Button variant="ghost" size="icon" onClick={() => setLocation("/")} className="text-gray-400 hover:text-white">
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
-        <h1 className="text-xl font-bold text-white">Panel de Administración</h1>
-      </header>
-
-      <main className="flex-1 p-8 max-w-5xl mx-auto w-full">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-2xl font-bold text-white">Modpacks</h2>
-          <Button
-            className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold"
-            onClick={() => setShowNewDialog(true)}
-          >
-            <Plus className="mr-2 h-4 w-4" /> Nuevo Modpack
-          </Button>
-        </div>
-
-        {modpacks.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 text-muted-foreground gap-3">
-            <p className="text-base">No hay modpacks en el repositorio.</p>
-            <p className="text-sm">Configura tu repositorio en Ajustes y crea el primero.</p>
-          </div>
-        ) : (
-          <div className="grid gap-3">
-            {modpacks.map((pack) => (
-              <Card
-                key={pack.id}
-                className="bg-card/50 border-white/5 hover:bg-card/80 hover:border-white/10 transition-colors cursor-pointer"
-                onClick={() => setLocation(`/admin/${pack.id}`)}
+    <div className="relative h-full overflow-hidden bg-background text-foreground flex flex-col">
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="flex flex-col gap-5 px-6 pt-6 pb-6 max-w-5xl mx-auto w-full">
+          {/* Same glass header card as the Hub / Perfil */}
+          <div className="relative shrink-0 rounded-xl border border-white/10 bg-card/40 p-5 overflow-hidden">
+            <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
+            <div className="relative flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setLocation("/")}
+                className="h-9 w-9 shrink-0 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+                aria-label="Volver"
               >
-                <div className="flex items-center justify-between p-4">
-                  <div className="flex items-center gap-4 min-w-0">
-                    <img
-                      src={pack.imageUrl || "./logo.png"}
-                      alt={pack.name}
-                      className="h-14 w-14 object-cover rounded bg-black/50 shrink-0"
-                      onError={(e) => { (e.target as HTMLImageElement).src = "./logo.png"; }}
-                    />
-                    <div className="min-w-0">
-                      <h3 className="font-bold text-white truncate">{pack.name}</h3>
-                      <p className="text-sm text-muted-foreground">
-                        {pack.minecraftVersion} · {pack.loaderType} · v{pack.version}
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-0.5 font-mono opacity-60">id: {pack.id}</p>
+                <ArrowLeft className="h-5 w-5" />
+              </button>
+              <div className="min-w-0 flex-1">
+                <h1 className="text-xl font-bold leading-tight">Panel de administración</h1>
+                <p className="text-xs text-muted-foreground">
+                  {modpacks.length} instancia{modpacks.length === 1 ? "" : "s"} online en tu repositorio
+                </p>
+              </div>
+              <Button
+                className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold shrink-0"
+                onClick={() => setShowNewDialog(true)}
+              >
+                <Plus className="mr-2 h-4 w-4" /> Nuevo modpack
+              </Button>
+            </div>
+          </div>
+
+          {modpacks.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-white/10 flex flex-col items-center justify-center h-48 text-muted-foreground gap-2">
+              <Package className="h-7 w-7 opacity-60" />
+              <p className="text-sm">No hay modpacks en tu repositorio.</p>
+              <p className="text-xs">Crea el primero con "Nuevo modpack".</p>
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {modpacks.map((pack) => (
+                <div
+                  key={pack.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setLocation(`/admin/${pack.id}`)}
+                  onKeyDown={(e) => e.key === "Enter" && setLocation(`/admin/${pack.id}`)}
+                  className="group relative rounded-xl border border-white/10 bg-card/40 hover:bg-card/60 hover:border-white/20 transition-colors cursor-pointer overflow-hidden"
+                >
+                  {(pack.bannerUrl || pack.imageUrl) && (
+                    <div className="pointer-events-none absolute inset-0 opacity-15 group-hover:opacity-25 transition-opacity">
+                      <img
+                        src={pack.bannerUrl || pack.imageUrl}
+                        alt=""
+                        className="w-full h-full object-cover"
+                        onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-r from-card via-card/85 to-card/40" />
+                    </div>
+                  )}
+                  <div className="relative flex items-center justify-between gap-4 p-4">
+                    <div className="flex items-center gap-4 min-w-0">
+                      <img
+                        src={pack.imageUrl || "./logo.png"}
+                        alt={pack.name}
+                        className="h-14 w-14 object-cover rounded-lg bg-black/50 shrink-0 shadow-lg"
+                        onError={(e) => { (e.target as HTMLImageElement).src = "./logo.png"; }}
+                      />
+                      <div className="min-w-0">
+                        <h3 className="font-bold text-white truncate">{pack.name}</h3>
+                        <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+                          <span className="font-semibold text-gray-200">v{pack.version}</span>
+                          <span className="opacity-40">·</span>
+                          <span>{pack.minecraftVersion}</span>
+                          <span className="opacity-40">·</span>
+                          <span className="flex items-center gap-1 capitalize">
+                            <LoaderIcon loader={pack.loaderType} className="h-3.5 w-3.5" />
+                            {pack.loaderType}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground/70 mt-0.5 font-mono truncate">{pack.id}</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 items-center shrink-0">
+                      <span className="text-xs text-muted-foreground mr-1 text-right">
+                        {pack.fileCount} archivos
+                        <br />
+                        {pack.totalSizeMb} MB
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-gray-500 hover:text-destructive hover:bg-destructive/10"
+                        onClick={(e) => { e.stopPropagation(); setPackToDelete({ id: pack.id, name: pack.name }); }}
+                        title="Eliminar modpack"
+                      >
+                        <Trash className="h-4 w-4" />
+                      </Button>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground opacity-50 group-hover:opacity-100 transition-opacity" />
                     </div>
                   </div>
-                  <div className="flex gap-2 items-center shrink-0">
-                    <span className="text-xs text-muted-foreground mr-2">
-                      {pack.fileCount} archivos · {pack.totalSizeMb} MB
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-gray-500 hover:text-destructive hover:bg-destructive/10"
-                      onClick={(e) => { e.stopPropagation(); setPackToDelete({ id: pack.id, name: pack.name }); }}
-                      title="Eliminar modpack"
-                    >
-                      <Trash className="h-4 w-4" />
-                    </Button>
-                  </div>
                 </div>
-              </Card>
-            ))}
-          </div>
-        )}
-      </main>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
       <Dialog open={showNewDialog} onOpenChange={setShowNewDialog}>
         <DialogContent className="bg-card border-white/10 text-white max-w-lg">
