@@ -146,6 +146,17 @@ export default function Hub() {
 
   return (
     <div className="relative h-full overflow-hidden bg-background text-foreground flex flex-col">
+      {/* Background glow: a soft blue light drifting around the whole window,
+          under every card (z-0) — the footer's backdrop-blur softens it further
+          when it passes behind. Pure CSS (index.css), stops with reduced motion. */}
+      <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden" aria-hidden>
+        <div className="hub-glow hub-glow-main">
+          <div className="hub-glow-shape" />
+        </div>
+        <div className="hub-glow hub-glow-trail">
+          <div className="hub-glow-shape" />
+        </div>
+      </div>
       <div className="relative z-10 flex-1 flex flex-col min-h-0 px-6 pt-6 pb-4 gap-6">
         {/* Same floating glass-card treatment as the Perfil header — rounded-xl,
             bg-card/40, one scoped accent glow — instead of the old flush,

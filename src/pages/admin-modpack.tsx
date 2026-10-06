@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation, useParams } from "wouter";
+import { AnimatePresence, motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { Button } from "@/components/ui/button";
@@ -10,12 +11,17 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
+import { LoaderIcon } from "@/components/loader-icon";
+import { AdminModrinthBrowser, ModrinthGlyph, ProjectIcon, type PresentProject } from "@/components/admin-modrinth-browser";
 import { toast } from "sonner";
 import {
+  AlertTriangle,
   ArrowLeft,
   UploadCloud,
   FileText,
   Folder,
+  FolderUp,
+  FilePlus,
   ChevronRight,
   Home as HomeIcon,
   Trash,
@@ -29,6 +35,13 @@ import {
   Copy,
   KeyRound,
   UserX,
+  Files,
+  Layers,
+  ScrollText,
+  Settings2,
+  Users,
+  Link2,
+  Ban,
 } from "lucide-react";
 import {
   fetchSnapshot,
@@ -40,9 +53,12 @@ import {
   type WalkedFile,
   type PublishProgress,
 } from "@/services/github";
+import { identifyModrinthFiles, getVersionsByIds, getProjectInfo, categoryOf, type ModrinthMatch, type ModrinthVersionDependency } from "@/services/modrinth";
+import { downloadDependencies, planProjects, sha1Hex, versionLabel, type ModrinthDownload, type PackTarget } from "@/lib/admin-modrinth";
 import { getMySource } from "@/lib/sources";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { formatBytes } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { ChangelogEditor } from "@/components/changelog-editor";
 import {
   createAccessCode,
@@ -98,6 +114,8 @@ interface Row {
   addId?: string;
   editable?: boolean;
   required: boolean;
+  /** sha1 when known: from the manifest, or computed from the staged file. */
+  sha1?: string;
 }
 
 interface FolderEntry {
@@ -168,9 +186,15 @@ async function walkDroppedEntry(entry: any, basePath: string): Promise<WalkedFil
   return nested.flat();
 }
 
+/** Only content Modrinth can know about is worth hashing/looking up. */
+const isIdentifiable = (path: string) => categoryOf(path) !== null;
+
+const GLASS = "rounded-xl border border-white/10 bg-card/40";
+const TAB_TRIGGER = "gap-1.5 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground";
+
 export default function AdminModpack() {
   const { id } = useParams<{ id: string }>();
-  const { isAuthenticated, uuid, username } = useAuth();
+  const { isAuthenticated, uuid } = useAuth();
   const isAdmin = useIsAdmin();
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks } = useModpacks();
@@ -211,8 +235,21 @@ export default function AdminModpack() {
   const [accessCodeLoading, setAccessCodeLoading] = useState(false);
   const [accessGrants, setAccessGrants] = useState<Record<string, AccessGrant>>({});
 
+  // Modrinth: sha1 of staged files (computed lazily), matches learned from
+  // files downloaded through the browser, the resulting per-row identification
+  // and each identified version's dependency list.
+  const [fileSha1, setFileSha1] = useState<Map<File, string>>(new Map());
+  const [knownMatches, setKnownMatches] = useState<Map<string, ModrinthMatch>>(new Map());
+  const [matches, setMatches] = useState<Map<string, ModrinthMatch>>(new Map());
+  const [versionDeps, setVersionDeps] = useState<Map<string, ModrinthVersionDependency[]>>(new Map());
+  const [missingInfo, setMissingInfo] = useState<Map<string, { title: string; iconUrl: string | null }>>(new Map());
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [addingDeps, setAddingDeps] = useState<string | null>(null);
+
   const replaceTargetPath = useRef<string | null>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
+  const filesInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!isAuthenticated) setLocation("/login");
@@ -291,20 +328,155 @@ export default function AdminModpack() {
     for (const e of existing) {
       const required = requiredOverrides.get(e.path) ?? (e.required !== false);
       if (removedPaths.has(e.path)) {
-        out.push({ key: e.path, path: e.path, size: e.size, status: "removed", required });
+        out.push({ key: e.path, path: e.path, size: e.size, status: "removed", required, sha1: e.sha1 });
       } else if (stagedReplacements.has(e.path)) {
-        out.push({ key: e.path, path: e.path, size: stagedReplacements.get(e.path)!.size, status: "replaced", required });
+        const file = stagedReplacements.get(e.path)!;
+        out.push({ key: e.path, path: e.path, size: file.size, status: "replaced", required, sha1: fileSha1.get(file) });
       } else {
-        out.push({ key: e.path, path: e.path, size: e.size, status: "unchanged", required });
+        out.push({ key: e.path, path: e.path, size: e.size, status: "unchanged", required, sha1: e.sha1 });
       }
     }
     for (const a of stagedAdds) {
-      out.push({ key: a.id, path: a.path, size: a.file.size, status: "added", addId: a.id, editable: a.editable, required: a.required });
+      out.push({
+        key: a.id,
+        path: a.path,
+        size: a.file.size,
+        status: "added",
+        addId: a.id,
+        editable: a.editable,
+        required: a.required,
+        sha1: fileSha1.get(a.file),
+      });
     }
     return out.sort((x, y) => x.path.localeCompare(y.path));
-  }, [existing, removedPaths, stagedReplacements, stagedAdds, requiredOverrides]);
+  }, [existing, removedPaths, stagedReplacements, stagedAdds, requiredOverrides, fileSha1]);
 
   const currentLevel = useMemo(() => buildLevel(rows, currentFolder), [rows, currentFolder]);
+
+  // ── Modrinth identification ──────────────────────────────────────────────
+  // 1. Hash staged mods/shaders/resourcepacks (the manifest already carries
+  //    the sha1 of published files).
+  useEffect(() => {
+    const pending = [
+      ...stagedAdds.filter((a) => isIdentifiable(a.path)).map((a) => a.file),
+      ...Array.from(stagedReplacements.entries()).filter(([p]) => isIdentifiable(p)).map(([, f]) => f),
+    ].filter((f) => !fileSha1.has(f));
+    if (pending.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const computed = new Map<File, string>();
+      for (const f of pending) computed.set(f, await sha1Hex(await f.arrayBuffer()));
+      if (!cancelled) setFileSha1((prev) => new Map([...prev, ...computed]));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [stagedAdds, stagedReplacements, fileSha1]);
+
+  // 2. sha1 → Modrinth project/version (cached in services/modrinth.ts).
+  const identifyKey = rows.filter((r) => r.sha1 && isIdentifiable(r.path)).map((r) => `${r.key}:${r.sha1}`).join("|");
+  useEffect(() => {
+    let cancelled = false;
+    const entries = rows.filter((r) => r.sha1 && isIdentifiable(r.path)).map((r) => ({ path: r.key, sha1: r.sha1! }));
+    const known = new Map<string, ModrinthMatch>();
+    const unknown = entries.filter((e) => {
+      const m = knownMatches.get(e.sha1);
+      if (m) known.set(e.path, m);
+      return !m;
+    });
+    identifyModrinthFiles(unknown).then((found) => {
+      if (!cancelled) setMatches(new Map([...found, ...known]));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identifyKey, knownMatches]);
+
+  const activeRows = rows.filter((r) => r.status !== "removed");
+
+  // What each Modrinth project in the update is, and where.
+  const presentProjects = useMemo(() => {
+    const out = new Map<string, PresentProject & { row: Row }>();
+    for (const r of activeRows) {
+      const m = matches.get(r.key);
+      if (m) out.set(m.projectId, { versionId: m.versionId, versionNumber: m.versionNumber, path: r.path, row: r });
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matches, rows]);
+
+  // 3. Dependencies of every identified version, in one request.
+  const versionIdsKey = Array.from(presentProjects.values()).map((p) => p.versionId).sort().join(",");
+  useEffect(() => {
+    const ids = versionIdsKey ? versionIdsKey.split(",") : [];
+    const missing = ids.filter((v) => !versionDeps.has(v));
+    if (missing.length === 0) return;
+    let cancelled = false;
+    getVersionsByIds(missing).then((versions) => {
+      if (cancelled) return;
+      setVersionDeps((prev) => {
+        const next = new Map(prev);
+        for (const v of versions) next.set(v.versionId, v.dependencies);
+        for (const v of missing) if (!next.has(v)) next.set(v, []);
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [versionIdsKey]);
+
+  // Who needs whom: projectId → titles of the mods in the update requiring it,
+  // plus declared incompatibilities between two things that are both in it.
+  const { requiredBy, missingDeps, conflicts } = useMemo(() => {
+    const requiredBy = new Map<string, string[]>();
+    const conflicts: { a: string; b: string }[] = [];
+    for (const [projectId, p] of presentProjects) {
+      const title = matches.get(p.row.key)?.title ?? projectId;
+      for (const d of versionDeps.get(p.versionId) ?? []) {
+        if (!d.projectId || d.projectId === projectId) continue;
+        if (d.dependencyType === "required") {
+          requiredBy.set(d.projectId, [...(requiredBy.get(d.projectId) ?? []), title]);
+        } else if (d.dependencyType === "incompatible" && presentProjects.has(d.projectId)) {
+          const other = presentProjects.get(d.projectId)!;
+          conflicts.push({ a: title, b: matches.get(other.row.key)?.title ?? d.projectId });
+        }
+      }
+    }
+    const missingDeps = Array.from(requiredBy.entries())
+      .filter(([projectId]) => !presentProjects.has(projectId))
+      .map(([projectId, by]) => ({ projectId, requiredBy: by }));
+    return { requiredBy, missingDeps, conflicts };
+  }, [presentProjects, versionDeps, matches]);
+
+  useEffect(() => {
+    const unknown = missingDeps.map((d) => d.projectId).filter((p) => !missingInfo.has(p));
+    if (unknown.length === 0) return;
+    let cancelled = false;
+    Promise.all(unknown.map(async (p) => [p, await getProjectInfo(p)] as const)).then((pairs) => {
+      if (cancelled) return;
+      setMissingInfo((prev) => {
+        const next = new Map(prev);
+        for (const [p, info] of pairs) next.set(p, info ?? { title: p, iconUrl: null });
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missingDeps.map((d) => d.projectId).join(",")]);
+
+  const packTarget: PackTarget = useMemo(
+    () => ({ loader: pack?.loaderType ?? "fabric", minecraftVersion: pack?.minecraftVersion ?? "" }),
+    [pack?.loaderType, pack?.minecraftVersion]
+  );
+  const presentForBrowser = useMemo(
+    () => new Map(Array.from(presentProjects.entries()).map(([k, v]) => [k, { versionId: v.versionId, versionNumber: v.versionNumber, path: v.path }])),
+    [presentProjects]
+  );
 
   const groupsDirty = JSON.stringify(optionalGroups) !== JSON.stringify(initialOptionalGroups);
   const hasChanges =
@@ -424,6 +596,85 @@ export default function AdminModpack() {
       const dt = new DataTransfer();
       looseFiles.forEach((f) => dt.items.add(f));
       onLooseFilesSelected(dt.files);
+    }
+  };
+
+  /**
+   * Stages files downloaded from Modrinth. A project already in the update is
+   * swapped for the new version (same filename → replacement, different
+   * filename → old one removed + new one added); a path that already exists
+   * but wasn't identified becomes a replacement; anything else is a new file.
+   */
+  const stageModrinthDownloads = (downloads: ModrinthDownload[]) => {
+    const removeExisting = new Set<string>();
+    const dropAddIds = new Set<string>();
+    const replacements = new Map<string, File>();
+    const swapAdd = new Map<string, File>();
+    const additions: StagedAdd[] = [];
+
+    for (const d of downloads) {
+      const current = presentProjects.get(d.match.projectId);
+      if (current) {
+        const r = current.row;
+        if (r.path === d.path) {
+          if (r.status === "added") swapAdd.set(r.addId!, d.file);
+          else replacements.set(r.path, d.file);
+          continue;
+        }
+        if (r.status === "added") dropAddIds.add(r.addId!);
+        else removeExisting.add(r.path);
+      }
+      if (existingPaths.has(d.path)) {
+        replacements.set(d.path, d.file);
+        continue;
+      }
+      additions.push({ id: crypto.randomUUID(), path: d.path, file: d.file, editable: false, required: true });
+    }
+
+    setFileSha1((prev) => new Map([...prev, ...downloads.map((d) => [d.file, d.sha1] as const)]));
+    setKnownMatches((prev) => new Map([...prev, ...downloads.map((d) => [d.sha1, d.match] as const)]));
+    if (removeExisting.size > 0) {
+      setRemovedPaths((prev) => new Set([...prev, ...removeExisting]));
+    }
+    setStagedReplacements((prev) => {
+      const next = new Map(prev);
+      for (const p of removeExisting) next.delete(p);
+      for (const [p, f] of replacements) next.set(p, f);
+      return next;
+    });
+    if (replacements.size > 0) {
+      setRemovedPaths((prev) => {
+        const next = new Set(prev);
+        for (const p of replacements.keys()) next.delete(p);
+        return next;
+      });
+    }
+    setStagedAdds((prev) => [
+      ...prev
+        .filter((a) => !dropAddIds.has(a.id))
+        .map((a) => (swapAdd.has(a.id) ? { ...a, file: swapAdd.get(a.id)! } : a)),
+      ...additions,
+    ]);
+  };
+
+  const handleAddMissingDeps = async (projectIds: string[]) => {
+    setAddingDeps(projectIds.length === 1 ? projectIds[0] : "all");
+    try {
+      const needs = missingDeps.filter((d) => projectIds.includes(d.projectId));
+      const planned = await planProjects(needs, new Set(presentProjects.keys()), packTarget);
+      const unavailable = planned.filter((p) => !p.version);
+      const downloads = await downloadDependencies(planned);
+      if (downloads.length > 0) {
+        stageModrinthDownloads(downloads);
+        toast.success(`${downloads.map((d) => d.match.title).join(", ")} añadid${downloads.length === 1 ? "a" : "as"}.`);
+      }
+      if (unavailable.length > 0) {
+        toast.warning(`${unavailable.map((u) => u.title).join(", ")}: sin versión para Minecraft ${packTarget.minecraftVersion} con ${packTarget.loader}.`);
+      }
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudieron añadir las dependencias.");
+    } finally {
+      setAddingDeps(null);
     }
   };
 
@@ -663,7 +914,7 @@ export default function AdminModpack() {
 
   if (!pack) {
     return (
-      <div className="min-h-full bg-background text-foreground flex flex-col items-center justify-center gap-4">
+      <div className="h-full bg-background text-foreground flex flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Modpack no encontrado.</p>
         <Button variant="outline" onClick={() => setLocation("/admin")}>
           <ArrowLeft className="mr-2 h-4 w-4" /> Volver
@@ -672,15 +923,18 @@ export default function AdminModpack() {
     );
   }
 
-  const statusMeta: Record<RowStatus, { label: string; rowClass: string; textClass: string }> = {
-    unchanged: { label: "", rowClass: "bg-card/50", textClass: "text-gray-100" },
-    added: { label: "Nuevo", rowClass: "bg-green-500/10 border border-green-500/20", textClass: "text-green-300" },
-    replaced: { label: "Reemplazado", rowClass: "bg-amber-500/10 border border-amber-500/20", textClass: "text-amber-300" },
-    removed: { label: "Eliminado", rowClass: "bg-red-500/10 border border-red-500/20", textClass: "text-red-300 line-through" },
+  const statusMeta: Record<RowStatus, { label: string; rowClass: string; textClass: string; badgeClass: string }> = {
+    unchanged: { label: "", rowClass: "bg-white/[0.03] border-transparent hover:bg-white/[0.06]", textClass: "text-gray-100", badgeClass: "" },
+    added: { label: "Nuevo", rowClass: "bg-green-500/[0.07] border-green-500/20", textClass: "text-green-300", badgeClass: "bg-green-500/15 text-green-300" },
+    replaced: { label: "Reemplazado", rowClass: "bg-amber-500/[0.07] border-amber-500/20", textClass: "text-amber-300", badgeClass: "bg-amber-500/15 text-amber-300" },
+    removed: { label: "Eliminado", rowClass: "bg-red-500/[0.07] border-red-500/20 opacity-70", textClass: "text-red-300 line-through", badgeClass: "bg-red-500/15 text-red-300" },
   };
 
+  const totalFiles = activeRows.length;
+  const identifiedCount = activeRows.filter((r) => matches.has(r.key)).length;
+
   return (
-    <div className="min-h-full bg-background text-foreground flex flex-col">
+    <div className="relative h-full overflow-hidden bg-background text-foreground flex flex-col">
       <input
         ref={replaceInputRef}
         type="file"
@@ -691,535 +945,767 @@ export default function AdminModpack() {
           e.target.value = "";
         }}
       />
+      <input
+        ref={filesInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files?.length) onLooseFilesSelected(e.target.files);
+          e.target.value = "";
+        }}
+      />
+      <input
+        ref={folderInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        {...({ webkitdirectory: "" } as any)}
+        onChange={(e) => {
+          if (e.target.files?.length) onFolderSelected(e.target.files);
+          e.target.value = "";
+        }}
+      />
 
-      <header className="h-16 border-b border-white/5 bg-card/50 flex items-center px-6 sticky top-0 z-50 gap-4">
-        <Button variant="ghost" size="icon" onClick={() => setLocation("/admin")} className="text-gray-400 hover:text-white">
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
-        <img
-          src={pack.imageUrl || "./logo.png"}
-          alt={pack.name}
-          className="h-9 w-9 object-cover rounded bg-black/50"
-          onError={(e) => { (e.target as HTMLImageElement).src = "./logo.png"; }}
-        />
-        <div className="min-w-0">
-          <h1 className="text-lg font-bold text-white truncate">{pack.name}</h1>
-          <p className="text-xs text-muted-foreground">v{pack.version} publicada · {pack.minecraftVersion} · {pack.loaderType}</p>
-        </div>
-      </header>
-
-      <main className="flex-1 flex gap-6 p-6 max-w-7xl mx-auto w-full min-h-0">
-        <div className="flex-1 min-w-0 flex flex-col gap-3">
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)} className="flex-1 min-h-0 flex flex-col gap-3">
-            <TabsList className="self-start">
-              <TabsTrigger value="files">Archivos</TabsTrigger>
-              <TabsTrigger value="content" disabled={optionalCount === 0} title={optionalCount === 0 ? "Marca algún archivo como opcional primero" : undefined}>
-                Contenido adicional
-              </TabsTrigger>
-              <TabsTrigger value="changelog">ChangeLog</TabsTrigger>
-              <TabsTrigger value="settings">Ajustes</TabsTrigger>
-              <TabsTrigger value="access">Acceso</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="files" className="flex-1 min-h-0 flex flex-col gap-3 mt-0">
-          <div className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap">
+      <div className="flex-1 min-h-0 flex flex-col gap-5 px-6 pt-6 pb-5 max-w-7xl mx-auto w-full">
+        {/* Header — same glass card as the Hub / Perfil */}
+        <div className={cn(GLASS, "relative shrink-0 p-5 overflow-hidden")}>
+          {(pack.bannerUrl || pack.imageUrl) && (
+            <div className="pointer-events-none absolute inset-0 opacity-20">
+              <img src={pack.bannerUrl || pack.imageUrl} alt="" className="w-full h-full object-cover" onError={(e) => ((e.target as HTMLImageElement).style.display = "none")} />
+              <div className="absolute inset-0 bg-gradient-to-r from-card via-card/80 to-card/30" />
+            </div>
+          )}
+          <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
+          <div className="relative flex items-center gap-4">
             <button
               type="button"
-              onClick={() => setCurrentFolder([])}
-              className={`flex items-center gap-1 hover:text-white transition-colors ${currentFolder.length === 0 ? "text-white font-semibold" : ""}`}
+              onClick={() => setLocation("/admin")}
+              className="h-9 w-9 shrink-0 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+              aria-label="Volver al panel"
             >
-              <HomeIcon className="h-3.5 w-3.5" />
+              <ArrowLeft className="h-5 w-5" />
             </button>
-            {currentFolder.map((seg, i) => (
-              <span key={i} className="flex items-center gap-1">
-                <ChevronRight className="h-3 w-3 opacity-50" />
-                <button
-                  type="button"
-                  onClick={() => setCurrentFolder(currentFolder.slice(0, i + 1))}
-                  className={`hover:text-white transition-colors ${i === currentFolder.length - 1 ? "text-white font-semibold" : ""}`}
-                >
-                  {seg}
-                </button>
-              </span>
-            ))}
+            <img
+              src={pack.imageUrl || "./logo.png"}
+              alt={pack.name}
+              className="h-14 w-14 object-cover rounded-lg bg-black/50 shrink-0 shadow-lg"
+              onError={(e) => { (e.target as HTMLImageElement).src = "./logo.png"; }}
+            />
+            <div className="min-w-0 flex-1">
+              <h1 className="text-xl font-bold leading-tight truncate">{pack.name}</h1>
+              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
+                <span className="font-semibold text-gray-200">v{pack.version}</span>
+                <span className="opacity-40">·</span>
+                <span>Minecraft {pack.minecraftVersion}</span>
+                <span className="opacity-40">·</span>
+                <span className="flex items-center gap-1 capitalize">
+                  <LoaderIcon loader={pack.loaderType} className="h-3.5 w-3.5" />
+                  {pack.loaderType}
+                </span>
+                <span className="opacity-40">·</span>
+                <span>{totalFiles} archivo{totalFiles !== 1 ? "s" : ""}</span>
+              </div>
+            </div>
+            {hasChanges && (
+              <div className="hidden md:flex items-center gap-1.5 shrink-0">
+                {stagedAdds.length > 0 && <ChangeChip className="bg-green-500/15 text-green-300">+{stagedAdds.length} nuevo{stagedAdds.length !== 1 ? "s" : ""}</ChangeChip>}
+                {stagedReplacements.size > 0 && <ChangeChip className="bg-amber-500/15 text-amber-300">{stagedReplacements.size} reemplazo{stagedReplacements.size !== 1 ? "s" : ""}</ChangeChip>}
+                {removedPaths.size > 0 && <ChangeChip className="bg-red-500/15 text-red-300">−{removedPaths.size} eliminado{removedPaths.size !== 1 ? "s" : ""}</ChangeChip>}
+              </div>
+            )}
           </div>
+        </div>
 
-          <div
-            onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
-            onDragLeave={() => setDragActive(false)}
-            onDrop={handleDrop}
-            className={`flex-1 min-h-0 overflow-y-auto backdrop-blur-md border rounded-md p-3 transition-colors ${
-              dragActive ? "bg-accent/10 border-accent/50" : "bg-gray-500/10 border-white/10"
-            }`}
-          >
-            {loadingManifest ? (
-              <div className="flex items-center justify-center py-16 text-muted-foreground">
-                <Loader2 className="h-5 w-5 animate-spin mr-2" /> Cargando archivos publicados...
-              </div>
-            ) : rows.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
-                <UploadCloud className="h-6 w-6" />
-                <p className="text-sm">Este modpack no tiene archivos todavía. Añade una carpeta o arrástrala aquí para publicar la primera versión.</p>
-              </div>
-            ) : currentLevel.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
-                <Folder className="h-6 w-6" />
-                <p className="text-sm">Carpeta vacía.</p>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-1.5">
-                {currentLevel.map((entry) =>
-                  entry.kind === "folder" ? (
-                    <div
-                      key={`dir:${entry.name}`}
-                      className="flex items-center gap-3 px-3 py-2 text-xs rounded-md w-full bg-card/50 hover:bg-card/80 transition-colors"
+        <div className="flex-1 min-h-0 flex gap-5">
+          <div className="flex-1 min-w-0 flex flex-col min-h-0">
+            <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)} className="flex-1 min-h-0 flex flex-col gap-3">
+              <TabsList className="self-start bg-card/50 border border-white/5">
+                <TabsTrigger value="files" className={TAB_TRIGGER}>
+                  <Files className="h-3.5 w-3.5" /> Archivos
+                </TabsTrigger>
+                <TabsTrigger
+                  value="content"
+                  className={TAB_TRIGGER}
+                  disabled={optionalCount === 0}
+                  title={optionalCount === 0 ? "Marca algún archivo como opcional primero" : undefined}
+                >
+                  <Layers className="h-3.5 w-3.5" /> Contenido adicional
+                </TabsTrigger>
+                <TabsTrigger value="changelog" className={TAB_TRIGGER}>
+                  <ScrollText className="h-3.5 w-3.5" /> ChangeLog
+                </TabsTrigger>
+                <TabsTrigger value="settings" className={TAB_TRIGGER}>
+                  <Settings2 className="h-3.5 w-3.5" /> Ajustes
+                </TabsTrigger>
+                <TabsTrigger value="access" className={TAB_TRIGGER}>
+                  <Users className="h-3.5 w-3.5" /> Acceso
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="files" className="flex-1 min-h-0 flex flex-col gap-3 mt-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/5 min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => setCurrentFolder([])}
+                      className={`flex items-center gap-1 hover:text-white transition-colors ${currentFolder.length === 0 ? "text-white font-semibold" : ""}`}
                     >
-                      <button
-                        type="button"
-                        onClick={() => setCurrentFolder([...currentFolder, entry.name])}
-                        className="flex items-center gap-3 flex-1 min-w-0 text-left"
-                      >
-                        <Folder className="h-3.5 w-3.5 shrink-0 text-accent" />
-                        <span className="truncate flex-1 min-w-0 font-mono text-gray-100">{entry.name}/</span>
-                        {entry.changeCount > 0 && (
-                          <span className="text-[10px] font-semibold text-accent shrink-0">{entry.changeCount} cambio{entry.changeCount !== 1 ? "s" : ""}</span>
-                        )}
-                        <span className="opacity-50 shrink-0 font-mono">{entry.fileCount} archivo{entry.fileCount !== 1 ? "s" : ""}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveFolder([...currentFolder, entry.name].join("/"))}
-                        disabled={publishing}
-                        title="Eliminar carpeta completa"
-                        className="h-6 w-6 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50 shrink-0"
-                      >
-                        <Trash className="h-3.5 w-3.5" />
-                      </button>
-                      <ChevronRight
-                        className="h-3.5 w-3.5 shrink-0 opacity-50 cursor-pointer"
-                        onClick={() => setCurrentFolder([...currentFolder, entry.name])}
-                      />
+                      <HomeIcon className="h-3.5 w-3.5" />
+                    </button>
+                    {currentFolder.map((seg, i) => (
+                      <span key={i} className="flex items-center gap-1">
+                        <ChevronRight className="h-3 w-3 opacity-50" />
+                        <button
+                          type="button"
+                          onClick={() => setCurrentFolder(currentFolder.slice(0, i + 1))}
+                          className={`hover:text-white transition-colors font-mono ${i === currentFolder.length - 1 ? "text-white font-semibold" : ""}`}
+                        >
+                          {seg}
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  {identifiedCount > 0 && (
+                    <span className="text-[11px] text-muted-foreground flex items-center gap-1" title="Archivos reconocidos por su hash en Modrinth">
+                      <ModrinthGlyph className="h-3 w-3 text-[#1bd96a]" />
+                      {identifiedCount} identificado{identifiedCount !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                  <div className="ml-auto flex items-center gap-1.5">
+                    <Button
+                      size="sm"
+                      onClick={() => setBrowserOpen(true)}
+                      disabled={publishing}
+                      className="h-8 bg-accent hover:bg-accent/90 text-accent-foreground font-bold"
+                    >
+                      <ModrinthGlyph className="mr-1.5 h-4 w-4" /> Añadir desde Modrinth
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-8 border-white/10" disabled={publishing} onClick={() => filesInputRef.current?.click()}>
+                      <FilePlus className="mr-1.5 h-3.5 w-3.5" /> Archivos
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-8 border-white/10" disabled={publishing} onClick={() => folderInputRef.current?.click()}>
+                      <FolderUp className="mr-1.5 h-3.5 w-3.5" /> Carpeta
+                    </Button>
+                  </div>
+                </div>
+
+                <AnimatePresence initial={false}>
+                  {missingDeps.length > 0 && (
+                    <motion.div
+                      key="missing-deps"
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="shrink-0 overflow-hidden"
+                    >
+                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.07] p-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+                          <p className="text-sm font-semibold text-amber-200 flex-1">
+                            Faltan {missingDeps.length} dependencia{missingDeps.length !== 1 ? "s" : ""} necesaria{missingDeps.length !== 1 ? "s" : ""}
+                          </p>
+                          {missingDeps.length > 1 && (
+                            <Button
+                              size="sm"
+                              className="h-7 text-xs bg-amber-500 hover:bg-amber-500/90 text-black font-bold"
+                              disabled={!!addingDeps || publishing}
+                              onClick={() => handleAddMissingDeps(missingDeps.map((d) => d.projectId))}
+                            >
+                              {addingDeps === "all" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Añadir todas"}
+                            </Button>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {missingDeps.map((d) => {
+                            const info = missingInfo.get(d.projectId);
+                            return (
+                              <div key={d.projectId} className="flex items-center gap-2 pl-1.5 pr-1 py-1 rounded-lg bg-black/20 border border-white/5">
+                                <ProjectIcon url={info?.iconUrl} title={info?.title ?? "?"} className="h-6 w-6" />
+                                <div className="min-w-0">
+                                  <p className="text-xs font-medium text-gray-100 truncate max-w-[12rem]">{info?.title ?? "Cargando..."}</p>
+                                  <p className="text-[10px] text-muted-foreground truncate max-w-[12rem]">Para {d.requiredBy.join(", ")}</p>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 px-2 text-[11px] text-amber-300 hover:text-amber-200 hover:bg-amber-500/10"
+                                  disabled={!!addingDeps || publishing}
+                                  onClick={() => handleAddMissingDeps([d.projectId])}
+                                >
+                                  {addingDeps === d.projectId ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Plus className="h-3 w-3 mr-0.5" />Añadir</>}
+                                </Button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                  {conflicts.length > 0 && (
+                    <motion.div
+                      key="conflicts"
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="shrink-0 overflow-hidden"
+                    >
+                      <div className="rounded-xl border border-red-500/30 bg-red-500/[0.07] p-3 flex items-start gap-2">
+                        <Ban className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />
+                        <div className="text-xs text-red-200 space-y-0.5">
+                          {conflicts.map((c, i) => (
+                            <p key={i}>
+                              <span className="font-semibold">{c.a}</span> es incompatible con <span className="font-semibold">{c.b}</span>.
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+                  onDragLeave={() => setDragActive(false)}
+                  onDrop={handleDrop}
+                  className={cn(
+                    "flex-1 min-h-0 overflow-y-auto rounded-xl border p-2 transition-colors",
+                    dragActive ? "bg-accent/10 border-accent/50" : "bg-card/40 border-white/10"
+                  )}
+                >
+                  {loadingManifest ? (
+                    <div className="flex items-center justify-center py-16 text-muted-foreground">
+                      <Loader2 className="h-5 w-5 animate-spin mr-2" /> Cargando archivos publicados...
+                    </div>
+                  ) : rows.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2 text-center px-6">
+                      <UploadCloud className="h-7 w-7" />
+                      <p className="text-sm">Este modpack no tiene archivos todavía.</p>
+                      <p className="text-xs">Arrastra aquí la carpeta de la instancia, súbela con "Carpeta" o añade mods desde Modrinth.</p>
+                    </div>
+                  ) : currentLevel.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+                      <Folder className="h-6 w-6" />
+                      <p className="text-sm">Carpeta vacía.</p>
                     </div>
                   ) : (
-                    (() => {
-                      const row = entry.row;
-                      const meta = statusMeta[row.status];
-                      return (
-                        <div key={row.key} className={`flex items-center gap-3 px-3 py-2 text-xs rounded-md w-full ${meta.rowClass}`}>
-                          <FileText className="h-3.5 w-3.5 shrink-0 opacity-50" />
-                          {row.editable ? (
-                            <Input
-                              value={row.path}
-                              onChange={(e) => handleEditAddPath(row.addId!, e.target.value)}
-                              className="h-6 flex-1 min-w-0 bg-background/50 border-white/10 text-white font-mono text-xs px-2 py-0"
+                    <div className="flex flex-col gap-1">
+                      {currentLevel.map((entry) =>
+                        entry.kind === "folder" ? (
+                          <div
+                            key={`dir:${entry.name}`}
+                            className="group flex items-center gap-3 px-3 py-2.5 text-xs rounded-lg w-full bg-white/[0.03] hover:bg-white/[0.07] border border-transparent transition-colors"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setCurrentFolder([...currentFolder, entry.name])}
+                              className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                            >
+                              <span className="h-8 w-8 shrink-0 flex items-center justify-center rounded-md bg-accent/15 text-accent">
+                                <Folder className="h-4 w-4" />
+                              </span>
+                              <span className="truncate flex-1 min-w-0 font-mono text-sm text-gray-100">{entry.name}</span>
+                              {entry.changeCount > 0 && (
+                                <span className="text-[10px] font-semibold text-accent shrink-0 px-1.5 py-0.5 rounded-full bg-accent/10">
+                                  {entry.changeCount} cambio{entry.changeCount !== 1 ? "s" : ""}
+                                </span>
+                              )}
+                              <span className="opacity-50 shrink-0">{entry.fileCount} archivo{entry.fileCount !== 1 ? "s" : ""}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveFolder([...currentFolder, entry.name].join("/"))}
                               disabled={publishing}
+                              title="Eliminar carpeta completa"
+                              className="h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive hover:bg-destructive/10 transition-all disabled:opacity-50 shrink-0"
+                            >
+                              <Trash className="h-3.5 w-3.5" />
+                            </button>
+                            <ChevronRight
+                              className="h-4 w-4 shrink-0 opacity-50 cursor-pointer"
+                              onClick={() => setCurrentFolder([...currentFolder, entry.name])}
                             />
-                          ) : (
-                            <span className={`truncate flex-1 min-w-0 font-mono ${meta.textClass}`}>{entry.name}</span>
-                          )}
-                          {meta.label && (
-                            <span className={`text-[10px] font-semibold uppercase shrink-0 ${meta.textClass}`}>{meta.label}</span>
-                          )}
-                          <span className="opacity-50 shrink-0 font-mono">{formatBytes(row.size)}</span>
-                          <div className="flex items-center gap-1 shrink-0">
-                            {row.status !== "removed" && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  row.status === "added"
-                                    ? handleToggleAddRequired(row.addId!)
-                                    : handleToggleRequired(row.path, row.required)
-                                }
-                                disabled={publishing}
-                                title={row.required ? "Obligatorio — clic para marcar como opcional" : "Opcional — clic para marcar como obligatorio"}
-                                className={`h-6 w-6 flex items-center justify-center rounded-full transition-colors disabled:opacity-50 ${
-                                  row.required
-                                    ? "text-muted-foreground hover:text-accent hover:bg-accent/10"
-                                    : "text-amber-300 hover:bg-amber-500/10"
-                                }`}
-                              >
-                                {row.required ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
-                              </button>
-                            )}
-                            {row.status === "unchanged" && (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => handleReplaceClick(row.path)}
-                                  disabled={publishing}
-                                  title="Reemplazar contenido"
-                                  className="h-6 w-6 flex items-center justify-center rounded-full text-muted-foreground hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-50"
-                                >
-                                  <RefreshCw className="h-3.5 w-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleRemoveExisting(row.path)}
-                                  disabled={publishing}
-                                  title="Eliminar"
-                                  className="h-6 w-6 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
-                                >
-                                  <Trash className="h-3.5 w-3.5" />
-                                </button>
-                              </>
-                            )}
-                            {row.status === "replaced" && (
-                              <button
-                                type="button"
-                                onClick={() => handleUndoReplace(row.path)}
-                                disabled={publishing}
-                                title="Deshacer reemplazo"
-                                className="h-6 w-6 flex items-center justify-center rounded-full text-amber-300 hover:bg-amber-500/10 transition-colors disabled:opacity-50"
-                              >
-                                <RotateCcw className="h-3.5 w-3.5" />
-                              </button>
-                            )}
-                            {row.status === "removed" && (
-                              <button
-                                type="button"
-                                onClick={() => handleUndoRemove(row.path)}
-                                disabled={publishing}
-                                title="Deshacer eliminación"
-                                className="h-6 w-6 flex items-center justify-center rounded-full text-red-300 hover:bg-red-500/10 transition-colors disabled:opacity-50"
-                              >
-                                <RotateCcw className="h-3.5 w-3.5" />
-                              </button>
-                            )}
-                            {row.status === "added" && (
-                              <button
-                                type="button"
-                                onClick={() => handleUndoAdd(row.addId!)}
-                                disabled={publishing}
-                                title="Quitar"
-                                className="h-6 w-6 flex items-center justify-center rounded-full text-green-300 hover:bg-green-500/10 transition-colors disabled:opacity-50"
-                              >
-                                <Trash className="h-3.5 w-3.5" />
-                              </button>
+                          </div>
+                        ) : (
+                          (() => {
+                            const row = entry.row;
+                            const meta = statusMeta[row.status];
+                            const match = matches.get(row.key);
+                            const neededBy = match ? requiredBy.get(match.projectId) : undefined;
+                            const hashing = isIdentifiable(row.path) && !row.sha1 && row.status !== "unchanged" && row.status !== "removed";
+                            return (
+                              <div key={row.key} className={cn("flex items-center gap-3 px-3 py-2 text-xs rounded-lg w-full border transition-colors", meta.rowClass)}>
+                                {match ? (
+                                  <a
+                                    href={`https://modrinth.com/project/${match.projectId}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title="Ver en Modrinth"
+                                    className="shrink-0"
+                                  >
+                                    <ProjectIcon url={match.iconUrl} title={match.title} className="h-9 w-9" />
+                                  </a>
+                                ) : (
+                                  <span className="h-9 w-9 shrink-0 flex items-center justify-center rounded-md bg-black/25">
+                                    {hashing ? <Loader2 className="h-3.5 w-3.5 animate-spin opacity-60" /> : <FileText className="h-4 w-4 opacity-50" />}
+                                  </span>
+                                )}
+                                <div className="min-w-0 flex-1">
+                                  {row.editable ? (
+                                    <Input
+                                      value={row.path}
+                                      onChange={(e) => handleEditAddPath(row.addId!, e.target.value)}
+                                      className="h-7 bg-background/50 border-white/10 text-white font-mono text-xs px-2 py-0"
+                                      disabled={publishing}
+                                    />
+                                  ) : match ? (
+                                    <>
+                                      <div className="flex items-center gap-1.5 min-w-0">
+                                        <span className={cn("text-sm font-medium truncate", row.status === "removed" ? meta.textClass : "text-gray-100")}>
+                                          {match.title}
+                                        </span>
+                                        <span className="text-[10px] text-muted-foreground shrink-0 truncate max-w-[10rem]">{versionLabel(match.versionNumber)}</span>
+                                      </div>
+                                      <p className="font-mono text-[10.5px] text-muted-foreground truncate select-text">{entry.name}</p>
+                                    </>
+                                  ) : (
+                                    <span className={cn("block truncate font-mono select-text", meta.textClass)}>{entry.name}</span>
+                                  )}
+                                </div>
+                                {neededBy && row.status !== "removed" && (
+                                  <span
+                                    className="shrink-0 flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-300"
+                                    title={`Necesaria para: ${neededBy.join(", ")}`}
+                                  >
+                                    <Link2 className="h-2.5 w-2.5" /> Dependencia
+                                  </span>
+                                )}
+                                {!row.required && row.status !== "removed" && (
+                                  <span className="shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-300">Opcional</span>
+                                )}
+                                {meta.label && (
+                                  <span className={cn("text-[10px] font-semibold uppercase shrink-0 px-1.5 py-0.5 rounded-full", meta.badgeClass)}>{meta.label}</span>
+                                )}
+                                <span className="opacity-50 shrink-0 font-mono w-16 text-right">{formatBytes(row.size)}</span>
+                                <div className="flex items-center gap-0.5 shrink-0">
+                                  {row.status !== "removed" && (
+                                    <IconAction
+                                      onClick={() =>
+                                        row.status === "added"
+                                          ? handleToggleAddRequired(row.addId!)
+                                          : handleToggleRequired(row.path, row.required)
+                                      }
+                                      disabled={publishing}
+                                      title={row.required ? "Obligatorio — clic para marcar como opcional" : "Opcional — clic para marcar como obligatorio"}
+                                      className={row.required ? "text-muted-foreground hover:text-accent hover:bg-accent/10" : "text-amber-300 hover:bg-amber-500/10"}
+                                    >
+                                      {row.required ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+                                    </IconAction>
+                                  )}
+                                  {row.status === "unchanged" && (
+                                    <>
+                                      <IconAction onClick={() => handleReplaceClick(row.path)} disabled={publishing} title="Reemplazar contenido" className="text-muted-foreground hover:text-accent hover:bg-accent/10">
+                                        <RefreshCw className="h-3.5 w-3.5" />
+                                      </IconAction>
+                                      <IconAction onClick={() => handleRemoveExisting(row.path)} disabled={publishing} title="Eliminar" className="text-muted-foreground hover:text-destructive hover:bg-destructive/10">
+                                        <Trash className="h-3.5 w-3.5" />
+                                      </IconAction>
+                                    </>
+                                  )}
+                                  {row.status === "replaced" && (
+                                    <IconAction onClick={() => handleUndoReplace(row.path)} disabled={publishing} title="Deshacer reemplazo" className="text-amber-300 hover:bg-amber-500/10">
+                                      <RotateCcw className="h-3.5 w-3.5" />
+                                    </IconAction>
+                                  )}
+                                  {row.status === "removed" && (
+                                    <IconAction onClick={() => handleUndoRemove(row.path)} disabled={publishing} title="Deshacer eliminación" className="text-red-300 hover:bg-red-500/10">
+                                      <RotateCcw className="h-3.5 w-3.5" />
+                                    </IconAction>
+                                  )}
+                                  {row.status === "added" && (
+                                    <IconAction onClick={() => handleUndoAdd(row.addId!)} disabled={publishing} title="Quitar" className="text-green-300 hover:bg-green-500/10">
+                                      <Trash className="h-3.5 w-3.5" />
+                                    </IconAction>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })()
+                        )
+                      )}
+                    </div>
+                  )}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="content" className="flex-1 min-h-0 overflow-y-auto mt-0">
+                <div className={cn(GLASS, "p-4 space-y-4")}>
+                  <div className="flex items-end gap-2 flex-wrap">
+                    <div className="flex-1 min-w-[10rem] space-y-1.5">
+                      <Label className="text-gray-200">Nombre del grupo</Label>
+                      <Input
+                        value={newGroupName}
+                        onChange={(e) => setNewGroupName(e.target.value)}
+                        className="bg-background/50 border-white/10 text-white"
+                        placeholder="ej: Shaders ligeros"
+                      />
+                    </div>
+                    <div className="flex-1 min-w-[10rem] space-y-1.5">
+                      <Label className="text-gray-200">Descripción</Label>
+                      <Input
+                        value={newGroupDescription}
+                        onChange={(e) => setNewGroupDescription(e.target.value)}
+                        className="bg-background/50 border-white/10 text-white"
+                        placeholder="Opcional"
+                      />
+                    </div>
+                    <Button
+                      onClick={handleCreateGroup}
+                      disabled={!newGroupName.trim()}
+                      className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold shrink-0"
+                    >
+                      <Plus className="mr-2 h-4 w-4" /> Crear grupo
+                    </Button>
+                  </div>
+
+                  {optionalGroups.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Todavía no hay grupos. Crea uno arriba y asígnale archivos opcionales.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {optionalGroups.map((group) => (
+                        <div key={group.id} className="rounded-lg border border-white/10 p-3 space-y-2 bg-white/[0.03]">
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={group.name}
+                              onChange={(e) => handleRenameGroup(group.id, { name: e.target.value })}
+                              className="h-8 bg-background/50 border-white/10 text-white font-semibold"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteGroup(group.id)}
+                              title="Eliminar grupo"
+                              className="h-8 w-8 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
+                            >
+                              <Trash className="h-4 w-4" />
+                            </button>
+                          </div>
+                          <Input
+                            value={group.description}
+                            onChange={(e) => handleRenameGroup(group.id, { description: e.target.value })}
+                            className="h-8 bg-background/50 border-white/10 text-gray-300 text-xs"
+                            placeholder="Descripción"
+                          />
+                          <div className="flex flex-wrap gap-2 pt-1">
+                            {optionalRows.length === 0 ? (
+                              <p className="text-xs text-muted-foreground">No hay archivos opcionales.</p>
+                            ) : (
+                              optionalRows.map((row) => {
+                                const inGroup = group.paths.includes(row.path);
+                                const match = matches.get(row.key);
+                                return (
+                                  <button
+                                    type="button"
+                                    key={row.path}
+                                    onClick={() => handleToggleGroupPath(group.id, row.path)}
+                                    title={row.path}
+                                    className={cn(
+                                      "flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border transition-colors",
+                                      match ? "" : "font-mono",
+                                      inGroup
+                                        ? "bg-accent/20 border-accent/40 text-accent"
+                                        : "bg-white/5 border-white/10 text-muted-foreground hover:text-white"
+                                    )}
+                                  >
+                                    {match && <ProjectIcon url={match.iconUrl} title={match.title} className="h-4 w-4 rounded-sm" />}
+                                    {match?.title ?? row.path}
+                                  </button>
+                                );
+                              })
                             )}
                           </div>
                         </div>
-                      );
-                    })()
-                  )
-                )}
-              </div>
-            )}
-          </div>
-            </TabsContent>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </TabsContent>
 
-            <TabsContent value="content" className="flex-1 min-h-0 overflow-y-auto mt-0">
-              <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 space-y-4">
-                <div className="flex items-end gap-2 flex-wrap">
-                  <div className="flex-1 min-w-[10rem] space-y-1.5">
-                    <Label className="text-gray-200">Nombre del grupo</Label>
-                    <Input
-                      value={newGroupName}
-                      onChange={(e) => setNewGroupName(e.target.value)}
-                      className="bg-background/50 border-white/10 text-white"
-                      placeholder="ej: Shaders ligeros"
-                    />
+              <TabsContent value="changelog" className="flex-1 min-h-0 overflow-y-auto mt-0">
+                <ChangelogEditor value={changelog} onChange={setChangelog} disabled={publishing} />
+              </TabsContent>
+
+              <TabsContent value="settings" className="flex-1 min-h-0 overflow-y-auto mt-0">
+                <div className={cn(GLASS, "p-5 space-y-4 max-w-2xl")}>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label className="text-gray-200">Nombre</Label>
+                      <Input
+                        value={settingsForm.name}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, name: e.target.value })}
+                        className="bg-background/50 border-white/10 text-white"
+                        disabled={settingsSaving}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-gray-200">ID</Label>
+                      <Input value={pack.id} disabled className="bg-background/30 border-white/10 text-muted-foreground font-mono" />
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-[10rem] space-y-1.5">
+                  <div className="space-y-1.5">
                     <Label className="text-gray-200">Descripción</Label>
                     <Input
-                      value={newGroupDescription}
-                      onChange={(e) => setNewGroupDescription(e.target.value)}
+                      value={settingsForm.description}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, description: e.target.value })}
                       className="bg-background/50 border-white/10 text-white"
-                      placeholder="Opcional"
+                      disabled={settingsSaving}
                     />
                   </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label className="text-gray-200">URL de logo</Label>
+                      <ImageUrlField
+                        value={settingsForm.imageUrl}
+                        onChange={(url) => setSettingsForm((f) => ({ ...f, imageUrl: url }))}
+                        disabled={settingsSaving}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-gray-200">URL de banner</Label>
+                      <ImageUrlField
+                        value={settingsForm.bannerUrl}
+                        onChange={(url) => setSettingsForm((f) => ({ ...f, bannerUrl: url }))}
+                        disabled={settingsSaving}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 border-t border-white/5 pt-4">
+                    <div>
+                      <Label className="text-gray-200">Seguridad antiXray</Label>
+                      <p className="text-xs text-muted-foreground max-w-sm mt-0.5">
+                        Elimina automáticamente, en el cliente de cada jugador, cualquier archivo de mods/shaders/resourcepacks
+                        con "xray" en el nombre, y lo filtra también al buscar contenido para añadir.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={settingsForm.antiXray}
+                      onCheckedChange={(v) => setSettingsForm({ ...settingsForm, antiXray: v })}
+                      disabled={settingsSaving}
+                    />
+                  </div>
+
                   <Button
-                    onClick={handleCreateGroup}
-                    disabled={!newGroupName.trim()}
-                    className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold shrink-0"
+                    onClick={handleSaveSettings}
+                    disabled={settingsSaving}
+                    className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold"
                   >
-                    <Plus className="mr-2 h-4 w-4" /> Crear grupo
+                    {settingsSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                    {settingsSaving ? "Guardando..." : "Guardar ajustes"}
                   </Button>
                 </div>
+              </TabsContent>
 
-                {optionalGroups.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    Todavía no hay grupos. Crea uno arriba y asígnale archivos opcionales.
-                  </p>
-                ) : (
-                  <div className="space-y-3">
-                    {optionalGroups.map((group) => (
-                      <div key={group.id} className="border border-white/10 rounded-md p-3 space-y-2 bg-card/30">
-                        <div className="flex items-center gap-2">
-                          <Input
-                            value={group.name}
-                            onChange={(e) => handleRenameGroup(group.id, { name: e.target.value })}
-                            className="h-8 bg-background/50 border-white/10 text-white font-semibold"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteGroup(group.id)}
-                            title="Eliminar grupo"
-                            className="h-8 w-8 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
-                          >
-                            <Trash className="h-4 w-4" />
-                          </button>
-                        </div>
-                        <Input
-                          value={group.description}
-                          onChange={(e) => handleRenameGroup(group.id, { description: e.target.value })}
-                          className="h-8 bg-background/50 border-white/10 text-gray-300 text-xs"
-                          placeholder="Descripción"
-                        />
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          {optionalRows.length === 0 ? (
-                            <p className="text-xs text-muted-foreground">No hay archivos opcionales.</p>
-                          ) : (
-                            optionalRows.map((row) => {
-                              const inGroup = group.paths.includes(row.path);
-                              return (
-                                <button
-                                  type="button"
-                                  key={row.path}
-                                  onClick={() => handleToggleGroupPath(group.id, row.path)}
-                                  className={`text-[11px] font-mono px-2 py-1 rounded-full border transition-colors ${
-                                    inGroup
-                                      ? "bg-accent/20 border-accent/40 text-accent"
-                                      : "bg-white/5 border-white/10 text-muted-foreground hover:text-white"
-                                  }`}
-                                >
-                                  {row.path}
-                                </button>
-                              );
-                            })
-                          )}
-                        </div>
+              <TabsContent value="access" className="flex-1 min-h-0 overflow-y-auto mt-0">
+                <div className="space-y-4 max-w-2xl">
+                  <div className={cn(GLASS, "p-5 space-y-3")}>
+                    <Label className="text-gray-200">Código de acceso</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Quien lo introduzca en "Añadir" verá esta instancia online. Sin código nadie más
+                      puede verla. Al regenerarlo, el anterior deja de funcionar.
+                    </p>
+                    {accessCode ? (
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-lg tracking-[0.3em] bg-background/50 border border-white/10 rounded-lg px-3 py-1.5 text-white select-text">
+                          {formatCode(accessCode)}
+                        </span>
+                        <Button variant="outline" size="icon" className="border-white/10" onClick={handleCopyCode} aria-label="Copiar código">
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-white/10"
+                          onClick={handleGenerateOrRegenerateCode}
+                          disabled={accessCodeLoading}
+                        >
+                          {accessCodeLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                          Regenerar
+                        </Button>
                       </div>
-                    ))}
+                    ) : (
+                      <Button onClick={handleGenerateOrRegenerateCode} disabled={accessCodeLoading}>
+                        {accessCodeLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
+                        Crear código
+                      </Button>
+                    )}
                   </div>
-                )}
-              </div>
-            </TabsContent>
 
-            <TabsContent value="changelog" className="flex-1 min-h-0 overflow-y-auto mt-0">
-              <ChangelogEditor value={changelog} onChange={setChangelog} disabled={publishing} />
-            </TabsContent>
+                  <div className={cn(GLASS, "p-5")}>
+                    <Label className="text-gray-200 mb-3 block">Personas con acceso</Label>
+                    {Object.keys(accessGrants).length === 0 ? (
+                      <p className="text-sm text-muted-foreground">Nadie ha usado este código todavía.</p>
+                    ) : (
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="border-white/5">
+                            <TableHead>Usuario</TableHead>
+                            <TableHead>Desde</TableHead>
+                            <TableHead className="w-10" />
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {Object.entries(accessGrants).map(([grantUuid, grant]) => (
+                            <TableRow key={grantUuid} className="border-white/5">
+                              <TableCell>{grant.username}</TableCell>
+                              <TableCell className="text-muted-foreground">
+                                {grant.grantedAt ? new Date(grant.grantedAt).toLocaleDateString() : "—"}
+                              </TableCell>
+                              <TableCell>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleRevokeAccess(grantUuid, grant.username)}
+                                  aria-label={`Quitar acceso a ${grant.username}`}
+                                >
+                                  <UserX className="h-4 w-4 text-destructive" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </div>
+                </div>
+              </TabsContent>
+            </Tabs>
+          </div>
 
-            <TabsContent value="settings" className="flex-1 min-h-0 overflow-y-auto mt-0">
-              <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 space-y-4 max-w-xl">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <Label className="text-gray-200">Nombre</Label>
-                    <Input
-                      value={settingsForm.name}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, name: e.target.value })}
-                      className="bg-background/50 border-white/10 text-white"
-                      disabled={settingsSaving}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-gray-200">ID</Label>
-                    <Input value={pack.id} disabled className="bg-background/30 border-white/10 text-muted-foreground font-mono" />
-                  </div>
+          <aside className="w-80 shrink-0 flex flex-col gap-4 overflow-y-auto">
+            <div className={cn(GLASS, "relative p-4 space-y-4 overflow-hidden")}>
+              <div className="pointer-events-none absolute -bottom-16 -left-16 h-48 w-48 rounded-full bg-accent/10 blur-3xl" />
+              <div className="relative space-y-4">
+                <p className="text-sm font-bold text-white">Nueva actualización</p>
+                <div className="space-y-1.5">
+                  <Label className="text-gray-200 text-xs">Versión</Label>
+                  <Input
+                    value={version}
+                    onChange={(e) => setVersion(e.target.value)}
+                    className="bg-background/50 border-white/10 text-white"
+                    placeholder="ej: 1.2.0"
+                    disabled={publishing}
+                  />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-gray-200">Descripción</Label>
+                  <Label className="text-gray-200 text-xs">Título</Label>
                   <Input
-                    value={settingsForm.description}
-                    onChange={(e) => setSettingsForm({ ...settingsForm, description: e.target.value })}
+                    value={changelogTitle}
+                    onChange={(e) => setChangelogTitle(e.target.value)}
                     className="bg-background/50 border-white/10 text-white"
-                    disabled={settingsSaving}
+                    placeholder="ej: Optimización de rendimiento"
+                    disabled={publishing}
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <Label className="text-gray-200">URL de logo</Label>
-                    <ImageUrlField
-                      value={settingsForm.imageUrl}
-                      onChange={(url) => setSettingsForm((f) => ({ ...f, imageUrl: url }))}
-                      disabled={settingsSaving}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-gray-200">URL de banner</Label>
-                    <ImageUrlField
-                      value={settingsForm.bannerUrl}
-                      onChange={(url) => setSettingsForm((f) => ({ ...f, bannerUrl: url }))}
-                      disabled={settingsSaving}
-                    />
-                  </div>
+                <p className="text-[11px] text-muted-foreground -mt-1">
+                  El texto de la pestaña "ChangeLog" se publica como notas de esta versión.
+                </p>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  <Stat value={stagedAdds.length} label="añadidos" className="text-green-300" />
+                  <Stat value={stagedReplacements.size} label="reemplazados" className="text-amber-300" />
+                  <Stat value={removedPaths.size} label="eliminados" className="text-red-300" />
+                  <Stat value={optionalCount} label="opcionales" className="text-gray-200" />
                 </div>
 
-                <div className="flex items-center justify-between gap-4 border-t border-white/5 pt-4">
-                  <div>
-                    <Label className="text-gray-200">Seguridad antiXray</Label>
-                    <p className="text-xs text-muted-foreground max-w-sm mt-0.5">
-                      Elimina automáticamente, en el cliente de cada jugador, cualquier archivo de mods/shaders/resourcepacks
-                      con "xray" en el nombre, y lo filtra también al buscar contenido para añadir.
-                    </p>
+                {missingDeps.length > 0 && !publishing && (
+                  <p className="flex items-start gap-1.5 text-[11px] text-amber-300 leading-snug">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" />
+                    Faltan dependencias: algunos mods podrían no arrancar.
+                  </p>
+                )}
+
+                {publishProgress && (
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs text-gray-200">
+                      <span className="font-medium">{stageLabel[publishProgress.stage]}</span>
+                      <span className="font-mono tabular-nums">
+                        {publishProgress.total > 0 ? `${publishProgress.done} / ${publishProgress.total}` : ""}
+                      </span>
+                    </div>
+                    <Progress value={progressPct} className="h-2" />
+                    {publishProgress.currentFile && (
+                      <p className="text-[11px] font-mono text-muted-foreground truncate">{publishProgress.currentFile}</p>
+                    )}
                   </div>
-                  <Switch
-                    checked={settingsForm.antiXray}
-                    onCheckedChange={(v) => setSettingsForm({ ...settingsForm, antiXray: v })}
-                    disabled={settingsSaving}
-                  />
-                </div>
+                )}
 
                 <Button
-                  onClick={handleSaveSettings}
-                  disabled={settingsSaving}
-                  className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold"
+                  onClick={handlePublish}
+                  disabled={publishing || !hasChanges || !version.trim()}
+                  className="w-full bg-accent hover:bg-accent/90 text-accent-foreground font-bold"
                 >
-                  {settingsSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                  {settingsSaving ? "Guardando..." : "Guardar ajustes"}
+                  {publishing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {publishing ? stageLabel[publishProgress?.stage ?? "hashing"] + "..." : "Lanzar actualización"}
                 </Button>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="access" className="flex-1 min-h-0 overflow-y-auto mt-0">
-              <div className="space-y-4 max-w-xl">
-                <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 space-y-3">
-                  <Label className="text-gray-200">Código de acceso</Label>
-                  <p className="text-xs text-muted-foreground">
-                    Quien lo introduzca en "Añadir" verá esta instancia online. Sin código nadie más
-                    puede verla. Al regenerarlo, el anterior deja de funcionar.
-                  </p>
-                  {accessCode ? (
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-lg tracking-[0.3em] bg-background/50 border border-white/10 rounded px-3 py-1.5 text-white">
-                        {formatCode(accessCode)}
-                      </span>
-                      <Button variant="outline" size="icon" onClick={handleCopyCode} aria-label="Copiar código">
-                        <Copy className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleGenerateOrRegenerateCode}
-                        disabled={accessCodeLoading}
-                      >
-                        {accessCodeLoading ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <RefreshCw className="mr-2 h-4 w-4" />
-                        )}
-                        Regenerar
-                      </Button>
-                    </div>
-                  ) : (
-                    <Button onClick={handleGenerateOrRegenerateCode} disabled={accessCodeLoading}>
-                      {accessCodeLoading ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <KeyRound className="mr-2 h-4 w-4" />
-                      )}
-                      Crear código
-                    </Button>
-                  )}
-                </div>
-
-                <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4">
-                  <Label className="text-gray-200 mb-3 block">Personas con acceso</Label>
-                  {Object.keys(accessGrants).length === 0 ? (
-                    <p className="text-sm text-muted-foreground">Nadie ha usado este código todavía.</p>
-                  ) : (
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Usuario</TableHead>
-                          <TableHead>Desde</TableHead>
-                          <TableHead className="w-10" />
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {Object.entries(accessGrants).map(([grantUuid, grant]) => (
-                          <TableRow key={grantUuid}>
-                            <TableCell>{grant.username}</TableCell>
-                            <TableCell className="text-muted-foreground">
-                              {grant.grantedAt ? new Date(grant.grantedAt).toLocaleDateString() : "—"}
-                            </TableCell>
-                            <TableCell>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => handleRevokeAccess(grantUuid, grant.username)}
-                                aria-label={`Quitar acceso a ${grant.username}`}
-                              >
-                                <UserX className="h-4 w-4 text-destructive" />
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  )}
-                </div>
-              </div>
-            </TabsContent>
-          </Tabs>
-        </div>
-
-        <aside className="w-80 shrink-0 flex flex-col gap-4">
-          <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 space-y-4">
-            <div className="space-y-1.5">
-              <Label className="text-gray-200">Nueva versión</Label>
-              <Input
-                value={version}
-                onChange={(e) => setVersion(e.target.value)}
-                className="bg-background/50 border-white/10 text-white"
-                placeholder="ej: 1.2.0"
-                disabled={publishing}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-gray-200">Título de la actualización</Label>
-              <Input
-                value={changelogTitle}
-                onChange={(e) => setChangelogTitle(e.target.value)}
-                className="bg-background/50 border-white/10 text-white"
-                placeholder="ej: Optimización de rendimiento"
-                disabled={publishing}
-              />
-            </div>
-            <p className="text-[11px] text-muted-foreground -mt-1">
-              El texto de la pestaña "ChangeLog" se publica como notas de esta versión.
-            </p>
-
-            <div className="text-xs text-muted-foreground space-y-0.5 pt-1 border-t border-white/5">
-              <p>{stagedAdds.length} añadido{stagedAdds.length !== 1 ? "s" : ""}</p>
-              <p>{stagedReplacements.size} reemplazado{stagedReplacements.size !== 1 ? "s" : ""}</p>
-              <p>{removedPaths.size} eliminado{removedPaths.size !== 1 ? "s" : ""}</p>
-              <p>{optionalCount} marcado{optionalCount !== 1 ? "s" : ""} como opcional</p>
-            </div>
-
-            {publishProgress && (
-              <div className="space-y-2 pt-2">
-                <div className="flex justify-between text-xs text-gray-200">
-                  <span className="font-medium">{stageLabel[publishProgress.stage]}</span>
-                  <span className="font-mono tabular-nums">
-                    {publishProgress.total > 0 ? `${publishProgress.done} / ${publishProgress.total}` : ""}
-                  </span>
-                </div>
-                <Progress value={progressPct} className="h-2" />
-                {publishProgress.currentFile && (
-                  <p className="text-[11px] font-mono text-muted-foreground truncate">
-                    {publishProgress.currentFile}
+                {!hasChanges && !publishing && (
+                  <p className="text-[11px] text-muted-foreground text-center">
+                    Añade, reemplaza o elimina algún archivo, o edita los grupos de contenido adicional, para poder publicar.
                   </p>
                 )}
               </div>
-            )}
+            </div>
+          </aside>
+        </div>
+      </div>
 
-            <Button
-              onClick={handlePublish}
-              disabled={publishing || !hasChanges || !version.trim()}
-              className="w-full bg-accent hover:bg-accent/90 text-accent-foreground font-bold"
-            >
-              {publishing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {publishing ? stageLabel[publishProgress?.stage ?? "hashing"] + "..." : "Lanzar actualización"}
-            </Button>
-            {!hasChanges && !publishing && (
-              <p className="text-[11px] text-muted-foreground text-center">
-                Añade, reemplaza o elimina algún archivo, o edita los grupos de contenido adicional, para poder publicar.
-              </p>
-            )}
-          </div>
-        </aside>
-      </main>
+      <AdminModrinthBrowser
+        open={browserOpen}
+        onOpenChange={setBrowserOpen}
+        target={packTarget}
+        present={presentForBrowser}
+        onAdd={stageModrinthDownloads}
+      />
     </div>
+  );
+}
+
+function ChangeChip({ className, children }: { className?: string; children: React.ReactNode }) {
+  return <span className={cn("text-[11px] font-semibold px-2 py-1 rounded-full", className)}>{children}</span>;
+}
+
+function Stat({ value, label, className }: { value: number; label: string; className?: string }) {
+  return (
+    <div className="rounded-lg bg-white/[0.04] border border-white/5 px-2.5 py-1.5">
+      <p className={cn("text-base font-bold tabular-nums leading-tight", value === 0 ? "text-muted-foreground" : className)}>{value}</p>
+      <p className="text-[10px] text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+function IconAction({
+  onClick,
+  disabled,
+  title,
+  className,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  title: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={cn("h-7 w-7 flex items-center justify-center rounded-full transition-colors disabled:opacity-50", className)}
+    >
+      {children}
+    </button>
   );
 }

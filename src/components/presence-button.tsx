@@ -113,6 +113,8 @@ export function PresenceButton({ context, open, onOpenChange }: PresenceButtonPr
     ? sortAndFilterPresence(instanceEntries).filter(([uuid]) => uuid !== myUuid)
     : [];
   const onlineOthers = instancePlayers.filter(([, e]) => e.online);
+  const instancePlayerUuids = new Set(instancePlayers.map(([uuid]) => uuid));
+  const shownFriends = instancePack ? recentFriends.filter(([uuid]) => !instancePlayerUuids.has(uuid)) : recentFriends;
 
   useEffect(() => {
     if (!instancePack) return;
@@ -180,20 +182,6 @@ export function PresenceButton({ context, open, onOpenChange }: PresenceButtonPr
             transition={{ duration: 0.15, ease: "easeOut" }}
             className="absolute bottom-full left-0 mb-2 z-40 w-72 p-4 rounded-lg bg-card/95 backdrop-blur border border-white/10 shadow-2xl max-h-[70vh] overflow-y-auto space-y-4"
           >
-            <div>
-              <button
-                type="button"
-                // Opens the account menu's friends screen (replaces this
-                // panel — useHeaderOverlay only ever has one open).
-                onClick={() => openProfile("friends")}
-                title="Ver todos los amigos"
-                className="block mb-2 text-xs font-semibold text-muted-foreground hover:text-accent uppercase tracking-wide text-left transition-colors"
-              >
-                Amigos
-              </button>
-              <PresenceList players={recentFriends} emptyMessage="Ningún amigo conectado recientemente." />
-            </div>
-
             {instancePack && (
               <div>
                 <button
@@ -208,6 +196,25 @@ export function PresenceButton({ context, open, onOpenChange }: PresenceButtonPr
                   {instancePack.name}
                 </button>
                 <PresenceList players={instancePlayers} />
+              </div>
+            )}
+
+            {/* In a carousel, friends already listed in that instance above
+                aren't repeated, and the section only shows up when some other
+                friend is (or recently was) connected. */}
+            {(!instancePack || shownFriends.length > 0) && (
+              <div>
+                <button
+                  type="button"
+                  // Opens the account menu's friends screen (replaces this
+                  // panel — useHeaderOverlay only ever has one open).
+                  onClick={() => openProfile("friends")}
+                  title="Ver todos los amigos"
+                  className="block mb-2 text-xs font-semibold text-muted-foreground hover:text-accent uppercase tracking-wide text-left transition-colors"
+                >
+                  {instancePack ? "Otros amigos" : "Amigos"}
+                </button>
+                <PresenceList players={shownFriends} emptyMessage="Ningún amigo conectado recientemente." />
               </div>
             )}
           </motion.div>
