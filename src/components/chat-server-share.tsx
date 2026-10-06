@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bookmark, Check, PackagePlus, Server } from "lucide-react";
+import { Bookmark, Check, PackagePlus } from "lucide-react";
+import { ServerIcon } from "@/components/server-icon";
 import { toast } from "sonner";
 import { sendSharedServer, type SharedServer } from "@/services/chat";
 import { useSavedServers } from "@/lib/saved-servers";
@@ -57,7 +58,7 @@ export function ChatServerPicker({
             onClick={() => share(s)}
             className="w-full flex items-center gap-2 text-left px-2.5 py-1.5 hover:bg-white/5 transition-colors"
           >
-            <Server className="h-3.5 w-3.5 text-accent shrink-0" />
+            <ServerIcon ip={s.ip} className="h-6 w-6" iconClassName="h-3.5 w-3.5" />
             <span className="min-w-0 flex-1">
               <span className="block text-xs text-gray-100 truncate">{s.name}</span>
               <span className="block text-[10px] text-muted-foreground font-mono truncate">{s.ip}</span>
@@ -78,9 +79,7 @@ export function SharedServerCard({ server }: { server: SharedServer }) {
 
   return (
     <div className="max-w-[85%] flex items-center gap-2.5 rounded-2xl px-3 py-2.5 bg-white/10 shadow-sm">
-      <div className="h-9 w-9 rounded shrink-0 bg-accent/15 flex items-center justify-center">
-        <Server className="h-4 w-4 text-accent" />
-      </div>
+      <ServerIcon ip={server.ip} className="h-9 w-9" />
       <div className="min-w-0 flex-1">
         <p className="text-sm text-gray-100 truncate font-medium">{server.name}</p>
         <p className="text-[10px] text-muted-foreground font-mono truncate select-text">{server.ip}</p>

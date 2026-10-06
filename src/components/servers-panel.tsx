@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronLeft, Plus, Server, Trash, PackagePlus } from "lucide-react";
+import { ChevronLeft, Plus, Trash, PackagePlus } from "lucide-react";
+import { ServerIcon } from "@/components/server-icon";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -26,9 +27,12 @@ export function ServersPanel() {
           <ChevronLeft className="h-3.5 w-3.5" />
           Servers
         </button>
-        <div className="shrink-0">
-          <p className="text-sm font-semibold text-white truncate">¿En qué instancia añades {target.name}?</p>
-          <p className="text-[11px] text-muted-foreground font-mono truncate">{target.ip}</p>
+        <div className="shrink-0 flex items-center gap-2.5">
+          <ServerIcon ip={target.ip} className="h-9 w-9" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-white truncate">¿En qué instancia añades {target.name}?</p>
+            <p className="text-[11px] text-muted-foreground font-mono truncate">{target.ip}</p>
+          </div>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto pr-1">
           <ServerInstancePicker server={target} onDone={() => setTarget(null)} />
@@ -63,9 +67,7 @@ export function ServersPanel() {
         ) : (
           servers.map((s) => (
             <div key={s.id} className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-white/[0.04] border border-white/5">
-              <span className="h-8 w-8 shrink-0 flex items-center justify-center rounded-md bg-accent/15 text-accent">
-                <Server className="h-4 w-4" />
-              </span>
+              <ServerIcon ip={s.ip} className="h-8 w-8" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-gray-100 truncate">{s.name}</p>
                 <p className="text-[11px] text-muted-foreground font-mono truncate select-text">{s.ip}</p>

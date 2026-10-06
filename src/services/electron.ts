@@ -108,6 +108,20 @@ export async function addServerToInstance(modpackId: string, name: string, ip: s
   return eAPI.addServerToInstance({ modpackId, name, ip });
 }
 
+export interface ServerStatus {
+  online: boolean;
+  /** PNG data URL, null if the server has no icon (or didn't answer). */
+  favicon: string | null;
+  players: { online: number; max: number } | null;
+  version: string | null;
+}
+
+/** Server List Ping (same as Minecraft's Multijugador list), from main. */
+export async function pingServer(address: string): Promise<ServerStatus> {
+  if (!isElectron || !eAPI.pingServer) return { online: false, favicon: null, players: null, version: null };
+  return eAPI.pingServer({ address });
+}
+
 /** Reads a file already inside an instance as base64 — used to upload the
  *  sender's own copy when sharing content in chat. */
 export async function readInstanceFile(modpackId: string, path: string): Promise<string> {
