@@ -751,6 +751,7 @@ function createSplashWindow() {
   const win = new BrowserWindow({
     width: 420,
     height: 460,
+    icon: appIcoPath(),
     frame: false,
     resizable: false,
     movable: true,
@@ -775,6 +776,62 @@ function createSplashWindow() {
 // time, so the packaged icon has to come from there instead.
 function appIconPath() {
   return path.join(__dirname, isDev ? "../public/logo.png" : "../dist/logo.png");
+}
+
+// Window/taskbar and tray icon: the multi-size .ico (16…256 px, each resized
+// on its own) so Windows picks a crisp frame instead of shrinking the big PNG.
+function appIcoPath() {
+  return path.join(__dirname, isDev ? "../public/icon.ico" : "../dist/icon.ico");
+}
+
+/**
+ * Makes the desktop / Start menu / pinned-taskbar shortcuts show the CURRENT
+ * logo. Windows caches shortcut icons by the path they come from, so after the
+ * logo changes, a shortcut still taking its icon from ALaunchi.exe can keep
+ * showing the old one indefinitely. Instead the shortcuts point at a copy of
+ * the icon whose file name carries its content hash: a new logo means a new
+ * path Windows has never cached, so it really reloads it. Runs on every start
+ * and only touches anything when the icon changed. Packaged Windows builds only
+ * (the .ico ships as a plain file via electron-builder's extraResources).
+ */
+async function refreshShortcutIcons() {
+  if (process.platform !== "win32" || !app.isPackaged) return;
+  const source = path.join(process.resourcesPath, "app-icon.ico");
+  if (!fsSync.existsSync(source)) return;
+  const bytes = await fs.readFile(source);
+  const hash = crypto.createHash("sha1").update(bytes).digest("hex").slice(0, 10);
+  const iconDir = path.join(app.getPath("userData"), "icons");
+  const iconPath = path.join(iconDir, `alaunchi-${hash}.ico`);
+  await fs.mkdir(iconDir, { recursive: true });
+  if (!fsSync.existsSync(iconPath)) await fs.writeFile(iconPath, bytes);
+
+  const appData = app.getPath("appData");
+  const shortcuts = [
+    path.join(app.getPath("desktop"), "ALaunchi.lnk"),
+    path.join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "ALaunchi.lnk"),
+    path.join(appData, "Microsoft", "Internet Explorer", "Quick Launch", "User Pinned", "TaskBar", "ALaunchi.lnk"),
+  ];
+  for (const lnk of shortcuts) {
+    if (!fsSync.existsSync(lnk)) continue;
+    try {
+      const current = shell.readShortcutLink(lnk);
+      // Only ALaunchi's own shortcuts, and only when they don't already use this icon.
+      if (!/alaunchi\.exe$/i.test(current.target || "")) continue;
+      if (path.resolve(current.icon || "").toLowerCase() === iconPath.toLowerCase()) continue;
+      if (shell.writeShortcutLink(lnk, "update", { icon: iconPath, iconIndex: 0 })) {
+        console.info(`[shortcut-icon] Icono actualizado: ${lnk}`);
+      }
+    } catch (e) {
+      console.warn(`[shortcut-icon] No se pudo actualizar ${lnk}:`, e?.message || e);
+    }
+  }
+
+  // Older copies (previous logos) aren't referenced by anything anymore.
+  for (const name of await fs.readdir(iconDir).catch(() => [])) {
+    if (/^alaunchi-[0-9a-f]+\.ico$/i.test(name) && name !== path.basename(iconPath)) {
+      await fs.rm(path.join(iconDir, name), { force: true }).catch(() => {});
+    }
+  }
 }
 
 let cachedAppIconDataUrl = null;
@@ -809,7 +866,7 @@ function createWindow() {
       webSecurity: !isDev,
       sandbox: false,
     },
-    icon: appIconPath(),
+    icon: appIcoPath(),
     show: false,
   });
 
@@ -888,7 +945,7 @@ app.on("before-quit", () => {
 });
 
 function createTray(win) {
-  const icon = nativeImage.createFromPath(appIconPath()).resize({ width: 32, height: 32 });
+  const icon = nativeImage.createFromPath(appIcoPath());
   tray = new Tray(icon);
   tray.setToolTip("ALaunchi");
   tray.setContextMenu(
@@ -921,6 +978,8 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.error("[startup] reconcileDanglingPlaytimeSessions falló:", e);
   }
+  // Not awaited — nothing about opening the launcher depends on it.
+  refreshShortcutIcons().catch((e) => console.warn("[shortcut-icon]", e?.message || e));
 
   // Consume the flag immediately (not just check it) so a crash-loop or a
   // second manual relaunch right after doesn't replay the sound.

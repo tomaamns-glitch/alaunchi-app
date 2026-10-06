@@ -4,7 +4,9 @@ import "./index.css";
 import { initErrorReporter } from "./services/error-reporter";
 import { initPresenceSync } from "./services/presence-sync";
 import { initSecureStore } from "./lib/secure-store";
+import { initTheme } from "./lib/theme";
 
+initTheme();
 initErrorReporter();
 initPresenceSync();
 

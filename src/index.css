@@ -66,7 +66,7 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* LIGHT MODE */
+/* Base palette — the app is dark by default (light theme: see "LIGHT THEME" below). */
 :root {
   --button-outline: rgba(0,0,0, .10);
   --badge-outline: rgba(0,0,0, .05);
@@ -164,89 +164,6 @@
   --destructive-border: hsl(from hsl(var(--destructive)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
 }
 
-.dark {
-  --button-outline: rgba(255,255,255, .10);
-  --badge-outline: rgba(255,255,255, .05);
-
-  --opaque-button-border-intensity: 9;  /* In terms of percentages */
-
-  /* Backgrounds applied on top of other backgrounds when hovered/active */
-  --elevate-1: rgba(255,255,255, .04);
-  --elevate-2: rgba(255,255,255, .09);
-
-  --background: red; /*replace with H S L */
-
-  --foreground: red; /*replace with H S L */
-
-  --border: red; /*replace with H S L */
-
-  --card: red; /*replace with H S L */
-
-  --card-foreground: red; /*replace with H S L */
-
-  --card-border: red; /*replace with H S L */
-
-  --sidebar: red; /*replace with H S L */
-
-  --sidebar-foreground: red; /*replace with H S L */
-
-  --sidebar-border: red; /*replace with H S L */
-
-  --sidebar-primary: red; /*replace with H S L */
-
-  --sidebar-primary-foreground: red; /*replace with H S L */
-
-  --sidebar-accent: red; /*replace with H S L */
-
-  --sidebar-accent-foreground: red; /*replace with H S L */
-
-  --sidebar-ring: red; /*replace with H S L */
-
-  --popover: red; /*replace with H S L */
-
-  --popover-foreground: red; /*replace with H S L */
-
-  --popover-border: red; /*replace with H S L */
-
-  --primary: red; /*replace with H S L */
-
-  --primary-foreground: red; /*replace with H S L */
-
-  --secondary: red; /*replace with H S L */
-
-  --secondary-foreground: red; /*replace with H S L */
-
-  --muted: red; /*replace with H S L */
-
-  --muted-foreground: red; /*replace with H S L */
-
-  --accent: red; /*replace with H S L */
-
-  --accent-foreground: red; /*replace with H S L */
-
-  --destructive: red; /*replace with H S L */
-
-  --destructive-foreground: red; /*replace with H S L */
-
-  /* Used as the border around inputs. Dark mode: Should be a border that is light enough to have high contrast when rendered on a --card background. More contrast than standard --border */
-  --input: red; /*replace with H S L */
-  --ring: red; /*replace with H S L */
-  --chart-1: red; /*replace with H S L */
-  --chart-2: red; /*replace with H S L */
-  --chart-3: red; /*replace with H S L */
-  --chart-4: red; /*replace with H S L */
-  --chart-5: red; /*replace with H S L */
-
-  --shadow-2xs: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow-xs: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow-sm: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 1px 2px -1px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 1px 2px -1px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow-md: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 2px 4px -1px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow-lg: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 4px 6px -1px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow-xl: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00), 0px 8px 10px -1px hsl(202.8169 89.1213% 53.1373% / 0.00);
-  --shadow-2xl: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00);
-
-}
 
 @layer base {
   * {
@@ -488,4 +405,97 @@
   .hub-glow {
     transform: translate(70vw, 20vh);
   }
+}
+
+/* ─── LIGHT THEME ─────────────────────────────────────────────────────────────
+   Ajustes → Personalización (src/lib/theme.ts sets data-theme="light" on <html>).
+   Two parts:
+   1. The base palette (background, cards, text…) every shadcn/semantic class uses.
+   2. The app was built dark-first with literal white/gray/black utilities
+      (text-white, bg-white/5, border-white/10, text-gray-300, bg-black/30…).
+      Tailwind compiles those as var(--color-white) etc., so instead of touching
+      hundreds of classes the light theme INVERTS those variables: "white" text
+      becomes near-black, the translucent "white" fills/borders become subtle
+      dark ones, and the gray scale is mirrored (gray-100 ↔ gray-900…). */
+:root[data-theme="light"] {
+  /* Darker, more saturated default accent: the stock one is too light for
+     text on a light background. */
+  --accent: 208 92% 44%;
+  --accent-foreground: 0 0% 100%;
+  /* Not pure white: a soft blue-gray base with slightly off-white cards. */
+  --background: 216 30% 89%;
+  --foreground: 222 32% 12%;
+  --border: 216 24% 79%;
+  --card: 214 35% 95%;
+  --card-foreground: 222 32% 12%;
+  --card-border: 216 24% 81%;
+  --popover: 214 35% 96%;
+  --popover-foreground: 222 32% 12%;
+  --popover-border: 216 24% 81%;
+  --secondary: 216 28% 85%;
+  --secondary-foreground: 222 32% 12%;
+  --muted: 216 28% 85%;
+  --muted-foreground: 220 14% 36%;
+  --input: 216 22% 73%;
+  --sidebar: 216 30% 87%;
+  --sidebar-foreground: 222 32% 12%;
+  --sidebar-border: 216 24% 79%;
+  --sidebar-accent: 216 28% 83%;
+  --sidebar-accent-foreground: 222 32% 12%;
+  --button-outline: rgba(0, 0, 0, 0.1);
+  --badge-outline: rgba(0, 0, 0, 0.05);
+  --elevate-1: rgba(0, 0, 0, 0.03);
+  --elevate-2: rgba(0, 0, 0, 0.08);
+
+  --color-white: oklch(21% 0.035 262);
+  /* "black" fills (bg-black/30 behind icons…) become a light blue-gray, not white. */
+  --color-black: oklch(96% 0.014 250);
+  --color-gray-50: oklch(13% 0.028 261.692);
+  --color-gray-100: oklch(21% 0.034 264.665);
+  --color-gray-200: oklch(27.8% 0.033 256.848);
+  --color-gray-300: oklch(37.3% 0.034 259.733);
+  --color-gray-400: oklch(46% 0.03 256.802);
+  --color-gray-500: oklch(55.1% 0.027 264.364);
+  --color-gray-600: oklch(70.7% 0.022 261.325);
+  --color-gray-700: oklch(87.2% 0.01 258.338);
+  --color-gray-800: oklch(92.8% 0.006 264.531);
+  --color-gray-900: oklch(96.7% 0.003 264.542);
+  --color-gray-950: oklch(98.5% 0.002 247.839);
+}
+
+/* Real white/black where the color is ON a solid colored surface (badges,
+   destructive/accent buttons) — inverting those would put dark text on red. */
+:root[data-theme="light"]
+  :is(.bg-red-500, .bg-red-600, .bg-destructive, .bg-green-500, .bg-green-600, .bg-emerald-500, .bg-blue-500, .bg-sky-500).text-white {
+  color: #fff;
+}
+:root[data-theme="light"] .text-black {
+  color: #000;
+}
+
+/* Mod descriptions use prose-invert, whose colors the typography plugin
+   compiles as literal values — give them the regular (light background) ones. */
+:root[data-theme="light"] .prose-invert {
+  --tw-prose-body: #374151;
+  --tw-prose-headings: #111827;
+  --tw-prose-lead: #4b5563;
+  --tw-prose-links: #111827;
+  --tw-prose-bold: #111827;
+  --tw-prose-counters: #6b7280;
+  --tw-prose-bullets: #d1d5db;
+  --tw-prose-hr: #e5e7eb;
+  --tw-prose-quotes: #111827;
+  --tw-prose-quote-borders: #e5e7eb;
+  --tw-prose-captions: #6b7280;
+  --tw-prose-kbd: #111827;
+  --tw-prose-code: #111827;
+  --tw-prose-pre-code: #e5e7eb;
+  --tw-prose-pre-bg: #1f2937;
+  --tw-prose-th-borders: #d1d5db;
+  --tw-prose-td-borders: #e5e7eb;
+}
+
+/* The Hub's drifting light reads stronger on a light background. */
+:root[data-theme="light"] .hub-glow-shape {
+  opacity: 0.8;
 }
