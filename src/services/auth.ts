@@ -4,6 +4,11 @@ export interface AuthData {
   uuid: string;
   /** Microsoft account email, decoded from the OIDC id_token (openid+email scope). */
   email?: string;
+  /** Xbox gamertag of the Microsoft account — its display name in Ajustes → Mi cuenta. */
+  gamertag?: string;
+  /** When the player last signed in with Microsoft (the device-code login,
+   *  not silent token refreshes). Absent on sessions from before 1.9.11. */
+  signedInAt?: number;
   /** XUID from XSTS DisplayClaims (xui[0].xid). Required by MC 1.20+ for
    *  session validation on online servers (--xuid arg). */
   xuid: string;
@@ -48,6 +53,7 @@ async function msTokenToMinecraft(msAccessToken: string): Promise<{
   username: string;
   uuid: string;
   xuid: string;
+  gamertag?: string;
 }> {
   const xblRes = await eAPI.xboxAuth({ msToken: msAccessToken });
   const xstsRes = await eAPI.xstsAuth({ xblToken: xblRes.xblToken });
@@ -56,23 +62,26 @@ async function msTokenToMinecraft(msAccessToken: string): Promise<{
   // DisplayClaims — Microsoft only guarantees it for the xboxlive.com relying
   // party. Fetch it there instead (best-effort) so online joins don't get stuck
   // with an empty --xuid; failure here shouldn't block login.
+  // The same xboxlive.com response also carries the gamertag (Mi cuenta).
   let xuid = xstsRes.xuid || "";
-  if (!xuid) {
-    try {
-      const xuidRes = await eAPI.xstsAuth({ xblToken: xblRes.xblToken, relyingParty: "http://xboxlive.com" });
-      xuid = xuidRes.xuid || "";
-    } catch (e) {
-      console.warn("[msTokenToMinecraft] No se pudo obtener el XUID vía xboxlive.com:", e);
-    }
+  let gamertag: string | undefined;
+  try {
+    const xboxRes = await eAPI.xstsAuth({ xblToken: xblRes.xblToken, relyingParty: "http://xboxlive.com" });
+    if (!xuid) xuid = xboxRes.xuid || "";
+    gamertag = xboxRes.gamertag || undefined;
+  } catch (e) {
+    console.warn("[msTokenToMinecraft] No se pudo consultar xboxlive.com (XUID/gamertag):", e);
   }
 
   const mcRes = await eAPI.minecraftAuth({ xstsToken: xstsRes.xstsToken, userHash: xstsRes.userHash });
   const profile = await eAPI.getMinecraftProfile({ mcToken: mcRes.mcToken });
-  return { mcToken: mcRes.mcToken, username: profile.username, uuid: profile.uuid, xuid };
+  return { mcToken: mcRes.mcToken, username: profile.username, uuid: profile.uuid, xuid, gamertag };
 }
 
+/** Empty = the client id embedded in main.js (LAUNCHER_CONFIG) — the only one
+ *  used now; there used to be an owner-only override in Ajustes. */
 export function getAzureClientId(): string {
-  return localStorage.getItem("azureClientId") || "";
+  return "";
 }
 
 export async function loginWithMicrosoft(onProgress: ProgressCallback): Promise<AuthData> {
@@ -114,6 +123,7 @@ export async function loginWithMicrosoft(onProgress: ProgressCallback): Promise<
   const authData: AuthData = {
     ...mc,
     email: decodeIdTokenEmail(tokenRes.id_token),
+    signedInAt: Date.now(),
     mcTokenExpiresAt: Date.now() + 86_400_000,
     mcTokenObtainedAt: Date.now(),
     msRefreshToken: tokenRes.refresh_token,
@@ -139,6 +149,8 @@ export async function silentRefresh(current: AuthData): Promise<AuthData | null>
     return {
       ...mc,
       email: decodeIdTokenEmail(tokenRes.id_token) ?? current.email,
+      gamertag: mc.gamertag ?? current.gamertag,
+      signedInAt: current.signedInAt,
       mcTokenExpiresAt: Date.now() + 86_400_000,
       mcTokenObtainedAt: Date.now(),
       msRefreshToken: tokenRes.refresh_token ?? current.msRefreshToken,

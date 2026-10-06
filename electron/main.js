@@ -3820,7 +3820,13 @@ ipcMain.handle("ms:xsts-auth", async (_, { xblToken, relyingParty }) => {
             console.error(`[ms:xsts-auth] Respuesta inválida:`, p);
             return reject(new Error("XSTS devolvió una respuesta sin Token o userHash."));
           }
-          resolve({ xstsToken: p.Token, userHash: p.DisplayClaims.xui[0].uhs, xuid: p.DisplayClaims.xui[0].xid || "" });
+          resolve({
+            xstsToken: p.Token,
+            userHash: p.DisplayClaims.xui[0].uhs,
+            xuid: p.DisplayClaims.xui[0].xid || "",
+            // Gamertag — only in the xboxlive.com relying party's response.
+            gamertag: p.DisplayClaims.xui[0].gtg || "",
+          });
         }
         catch (e) { reject(e); }
       });

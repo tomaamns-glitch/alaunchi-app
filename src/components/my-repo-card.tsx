@@ -97,10 +97,10 @@ export function MyRepoCard() {
     (isPrivate && readToken !== stored.readToken);
 
   return (
-    <Card className="bg-card/50 border-white/5">
+    <Card className="rounded-xl border-white/10 bg-card/40 shadow-none">
       <CardHeader>
         <CardTitle className="text-white flex items-center gap-2">
-          <Github className="h-5 w-5 text-amber-400" /> Mi repositorio
+          <Github className="h-5 w-5 text-accent" /> Mi repositorio
         </CardTitle>
         <CardDescription>
           Solo si quieres crear tus propias instancias online. Conecta un repositorio de GitHub tuyo y te
