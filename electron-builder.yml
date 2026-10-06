@@ -22,7 +22,13 @@ win:
   target:
     - target: nsis
       arch: [x64]
-  icon: public/logo.png
+  # Multi-size .ico built from public/logo.png (exe, installer, shortcuts, taskbar).
+  icon: public/icon.ico
+  # Same icon as a plain file next to app.asar — main.js' refreshShortcutIcons()
+  # points the shortcuts at a copy of it so a logo change always shows up.
+  extraResources:
+    - from: public/icon.ico
+      to: app-icon.ico
   artifactName: ALaunchi-Setup-${version}.exe
 
 nsis:

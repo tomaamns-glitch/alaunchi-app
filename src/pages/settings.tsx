@@ -22,6 +22,9 @@ import {
   Palette,
   Code2,
   UserCircle2,
+  Moon,
+  Sun,
+  Check,
   type LucideIcon,
 } from "lucide-react";
 import { readSettings, writeSettings, isElectron, getDataDir, chooseDataDir, openDataDir } from "@/services/electron";
@@ -33,13 +36,14 @@ import {
   type NotificationSoundId,
 } from "@/lib/notification-sound";
 import { getLastViewPath } from "@/lib/last-view";
+import { useTheme, type Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 type SectionId = "storage" | "personalization" | "developer" | "account";
 
 const SECTIONS: { id: SectionId; label: string; description: string; icon: LucideIcon }[] = [
   { id: "storage", label: "Archivos y RAM", description: "Dónde se guarda todo y cuánta memoria usa Minecraft", icon: HardDrive },
-  { id: "personalization", label: "Personalización", description: "Sonidos y avisos", icon: Palette },
+  { id: "personalization", label: "Personalización", description: "Apariencia, sonidos y avisos", icon: Palette },
   { id: "developer", label: "Modo desarrollador", description: "Tu repositorio para publicar instancias online", icon: Code2 },
   { id: "account", label: "Mi cuenta", description: "Tu cuenta de Minecraft y de Microsoft", icon: UserCircle2 },
 ];
@@ -266,6 +270,8 @@ function PersonalizationSection() {
   };
 
   return (
+    <>
+    <ThemePanel />
     <Panel
       icon={Bell}
       title="Notificaciones"
@@ -297,6 +303,72 @@ function PersonalizationSection() {
         </Button>
       </div>
     </Panel>
+    </>
+  );
+}
+
+const THEMES: { id: Theme; label: string; icon: LucideIcon }[] = [
+  { id: "dark", label: "Oscuro", icon: Moon },
+  { id: "light", label: "Claro", icon: Sun },
+];
+
+function ThemePanel() {
+  const theme = useTheme((s) => s.theme);
+  const setTheme = useTheme((s) => s.setTheme);
+  return (
+    <Panel icon={Palette} title="Apariencia" description="El tema de toda la app. Se guarda en este equipo.">
+      <div className="grid grid-cols-2 gap-3">
+        {THEMES.map((t) => {
+          const active = theme === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTheme(t.id)}
+              className={cn(
+                "relative rounded-xl border p-2 text-left transition-colors",
+                active ? "border-accent ring-2 ring-accent/30" : "border-white/10 hover:border-white/25"
+              )}
+            >
+              <ThemePreview theme={t.id} />
+              <div className="mt-2 flex items-center gap-1.5 px-1 text-sm font-medium text-gray-100">
+                <t.icon className="h-4 w-4 text-accent" />
+                {t.label}
+                {active && <Check className="ml-auto h-4 w-4 text-accent" />}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
+
+/** A tiny drawing of the app in that theme — fixed colors on purpose, so both
+ *  previews look right whichever theme is active. */
+function ThemePreview({ theme }: { theme: Theme }) {
+  const c =
+    theme === "dark"
+      ? { bg: "#0d0d0d", card: "#1a1a1a", line: "#2a2a2a", text: "#e5e7eb", soft: "#3a3a3a" }
+      : { bg: "#eef0f4", card: "#ffffff", line: "#dde1e8", text: "#1f2937", soft: "#cfd5de" };
+  return (
+    <div className="h-24 rounded-lg overflow-hidden flex flex-col gap-1.5 p-2" style={{ background: c.bg }}>
+      <div className="h-4 rounded flex items-center gap-1 px-1.5" style={{ background: c.card, border: `1px solid ${c.line}` }}>
+        <span className="h-1.5 w-8 rounded-full" style={{ background: c.text }} />
+      </div>
+      <div className="flex-1 flex gap-1.5">
+        <div className="w-1/3 rounded flex flex-col gap-1 p-1" style={{ background: c.card, border: `1px solid ${c.line}` }}>
+          <span className="h-1.5 rounded-full" style={{ background: "hsl(205 85% 50%)" }} />
+          <span className="h-1.5 rounded-full" style={{ background: c.soft }} />
+          <span className="h-1.5 rounded-full" style={{ background: c.soft }} />
+        </div>
+        <div className="flex-1 rounded p-1.5 flex flex-col gap-1" style={{ background: c.card, border: `1px solid ${c.line}` }}>
+          <span className="h-1.5 w-2/3 rounded-full" style={{ background: c.text }} />
+          <span className="h-1.5 w-full rounded-full" style={{ background: c.soft }} />
+          <span className="h-1.5 w-4/5 rounded-full" style={{ background: c.soft }} />
+        </div>
+      </div>
+    </div>
   );
 }
 

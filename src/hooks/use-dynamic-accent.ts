@@ -1,5 +1,12 @@
 import { useEffect, useRef } from "react";
 import { extractDominantColor, type HSL } from "@/lib/dominant-color";
+import { isLightTheme } from "@/lib/theme";
+
+/** On a light background a light accent (text-accent, icons) barely reads —
+ *  darken it there. Same hue, so the instance still "owns" the color. */
+function forCurrentTheme(c: HSL): HSL {
+  return isLightTheme() ? { ...c, l: Math.min(c.l, 45) } : c;
+}
 
 // Must match --accent in index.css.
 const DEFAULT_ACCENT: HSL = { h: 205, s: 90, l: 55 };
@@ -70,7 +77,7 @@ export function useDynamicAccent(imageUrl: string | undefined | null) {
     };
 
     extractDominantColor(imageUrl).then((color) => {
-      if (!cancelled) animateTo(color ?? DEFAULT_ACCENT);
+      if (!cancelled) animateTo(forCurrentTheme(color ?? DEFAULT_ACCENT));
     });
 
     return () => {
