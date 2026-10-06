@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { AnimatePresence, motion, type Variants } from "framer-motion";
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -88,9 +89,114 @@ function StartupView() {
   return null;
 }
 
+/**
+ * Screen transitions, by "depth":
+ *   0 — carousel (/) and Hub (/hub): sliding between them horizontally, the
+ *       carousel on the left;
+ *   1 — an instance's content (/modpack/:id), Ajustes, Admin, perfiles,
+ *       amigos, servers;
+ *   2 — a modpack inside Admin (/admin/:id).
+ * Going deeper zooms in, coming back zooms out, and anything else (same depth,
+ * or the login screen) cross-fades.
+ */
+type TransitionKind = "toHub" | "toHome" | "forward" | "back" | "fade" | "none";
+
+function routeDepth(path: string): number | null {
+  if (path === "/" || path === "/hub") return 0;
+  if (path.startsWith("/admin/")) return 2;
+  if (
+    path.startsWith("/modpack/") ||
+    path === "/settings" ||
+    path === "/servers" ||
+    path === "/friends" ||
+    path === "/admin" ||
+    path === "/profile" ||
+    path.startsWith("/profile/")
+  ) {
+    return 1;
+  }
+  return null; // login, not found
+}
+
+function transitionFor(from: string, to: string): TransitionKind {
+  if (from === "/" && to === "/hub") return "toHub";
+  if (from === "/hub" && to === "/") return "toHome";
+  const a = routeDepth(from);
+  const b = routeDepth(to);
+  if (a === null || b === null || a === b) return "fade";
+  return b > a ? "forward" : "back";
+}
+
+const EASE_OUT = [0.22, 1, 0.36, 1] as const;
+
+const EXIT = { duration: 0.14, ease: "easeIn" } as const;
+
+const screenVariants: Variants = {
+  initial: (k: TransitionKind) =>
+    k === "toHub" ? { opacity: 0, x: 48 }
+    : k === "toHome" ? { opacity: 0, x: -48 }
+    : k === "forward" ? { opacity: 0, scale: 0.97, y: 10 }
+    : k === "back" ? { opacity: 0, scale: 1.02 }
+    : k === "fade" ? { opacity: 0 }
+    : { opacity: 1 },
+  animate: (k: TransitionKind) => ({
+    opacity: 1,
+    x: 0,
+    y: 0,
+    scale: 1,
+    transition: k === "none" ? { duration: 0 } : { duration: k === "fade" ? 0.2 : 0.26, ease: EASE_OUT },
+  }),
+  exit: (k: TransitionKind) =>
+    k === "toHub" ? { opacity: 0, x: -48, transition: EXIT }
+    : k === "toHome" ? { opacity: 0, x: 48, transition: EXIT }
+    : k === "forward" ? { opacity: 0, scale: 1.02, transition: EXIT }
+    : k === "back" ? { opacity: 0, scale: 0.97, y: 10, transition: EXIT }
+    : k === "fade" ? { opacity: 0, transition: { duration: 0.12, ease: "easeIn" } }
+    : { opacity: 0, transition: { duration: 0 } },
+};
+
 function Router() {
+  const [location] = useLocation();
+  // Which transition the change to `location` gets. StartupView restoring the
+  // last screen (/ → /hub right after the app opens) isn't a navigation the
+  // user made, so that one doesn't animate.
+  const previous = useRef(location);
+  const mountedAt = useRef(Date.now());
+  const kind = useMemo<TransitionKind>(() => {
+    const from = previous.current;
+    if (from === location) return "none";
+    const isStartupRestore = from === "/" && location === "/hub" && Date.now() - mountedAt.current < 1500;
+    return isStartupRestore ? "none" : transitionFor(from, location);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]);
+  useEffect(() => {
+    previous.current = location;
+  }, [location]);
+
   return (
-    <Switch>
+    // mode="wait": the old screen leaves before the new one mounts, so two
+    // full pages (WebGL viewers, Firebase listeners…) never run at once.
+    // Each screen renders its own frozen `location`, which keeps the leaving
+    // one on its route while it animates out.
+    <AnimatePresence mode="wait" initial={false} custom={kind}>
+      <motion.div
+        key={location}
+        custom={kind}
+        variants={screenVariants}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+        className="h-full"
+      >
+        <RouteSwitch location={location} />
+      </motion.div>
+    </AnimatePresence>
+  );
+}
+
+function RouteSwitch({ location }: { location: string }) {
+  return (
+    <Switch location={location}>
       <Route path="/" component={Home} />
       <Route path="/login" component={Login} />
       <Route path="/admin" component={Admin} />
