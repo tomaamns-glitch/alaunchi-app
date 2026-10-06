@@ -79,6 +79,11 @@
       if (data.state === "updating") {
         statusText.textContent = "Actualizando...";
         statusPercent.textContent = data.percent ? Math.round(data.percent) + "%" : "";
+      } else if (data.state === "installing") {
+        // The window closes right after this while the installer runs, and the
+        // launcher reopens on its own — say so, so the gap isn't a surprise.
+        statusText.textContent = "Instalando actualización...";
+        statusPercent.textContent = "ALaunchi se abrirá solo en unos segundos";
       } else {
         statusText.textContent = "Cargando...";
         statusPercent.textContent = "";
