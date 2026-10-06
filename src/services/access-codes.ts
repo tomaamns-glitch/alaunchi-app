@@ -24,6 +24,8 @@ import { canonicalRepoUrl, repoKey } from "@/lib/sources";
 //   modpackCodes/{grantKey}        → current code of that instance
 //   modpackGrants/{grantKey}/{uuid}→ { username, grantedAt }
 //   userAccess/{uuid}/{grantKey}   → true
+//   modpackBans/{grantKey}/{uuid}  → { username, bannedAt }  — blocked: no code
+//                                    or invitation gets them back in
 
 // Excludes 0/O/1/I/L so a spoken/typed code is never ambiguous.
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -48,6 +50,18 @@ interface CodeEntry {
 export interface AccessGrant {
   username: string;
   grantedAt: number;
+}
+
+export interface AccessBan {
+  username: string;
+  bannedAt: number;
+}
+
+/** Thrown when a blocked player tries to join (by code or invitation). */
+export class BannedFromInstanceError extends Error {
+  constructor() {
+    super("El creador de esta instancia te ha bloqueado: no puedes unirte a ella.");
+  }
 }
 
 /** What redeeming (or refreshing) a code resolves to. */
@@ -228,6 +242,7 @@ export async function redeemAccessCode(code: string, uuid: string, username: str
   const access = await resolveEntry(normalized, raw);
   if (!access) return null;
   const key = grantKey(access.repoUrl, access.modpackId);
+  if ((await get(ref(rtdb, `modpackBans/${key}/${uuid}`))).exists()) throw new BannedFromInstanceError();
   await update(ref(rtdb), {
     [`modpackGrants/${key}/${uuid}`]: { username, grantedAt: serverTimestamp() },
     [`userAccess/${uuid}/${key}`]: true,
@@ -247,4 +262,43 @@ export async function refreshAccess(code: string): Promise<RedeemedAccess | null
 export async function getUserAccessSet(uuid: string): Promise<Set<string>> {
   const snap = await get(ref(rtdb, `userAccess/${uuid}`));
   return new Set(Object.keys(snap.val() || {}));
+}
+
+// --- blocked players -------------------------------------------------------------
+
+/** Blocks a player from one instance: removes the access they have (if any),
+ *  any invitation pending for them, and stops any code or invitation from
+ *  getting them back in until unblocked. */
+export async function banFromInstance(repoUrl: string, modpackId: string, uuid: string, username: string): Promise<void> {
+  const key = grantKey(repoUrl, modpackId);
+  await set(ref(rtdb, `modpackBans/${key}/${uuid}`), { username, bannedAt: serverTimestamp() });
+  // Child by child — the rules don't allow removing parent nodes in one go.
+  await Promise.all([
+    remove(ref(rtdb, `modpackGrants/${key}/${uuid}`)),
+    remove(ref(rtdb, `userAccess/${uuid}/${key}`)),
+    remove(ref(rtdb, `modpackInvites/${key}/${uuid}`)),
+    remove(ref(rtdb, `invites/${uuid}/${key}`)),
+  ]);
+}
+
+export async function unbanFromInstance(repoUrl: string, modpackId: string, uuid: string): Promise<void> {
+  await remove(ref(rtdb, `modpackBans/${grantKey(repoUrl, modpackId)}/${uuid}`));
+}
+
+export async function isBannedFromInstance(repoUrl: string, modpackId: string, uuid: string): Promise<boolean> {
+  return (await get(ref(rtdb, `modpackBans/${grantKey(repoUrl, modpackId)}/${uuid}`))).exists();
+}
+
+/** Live list of who's blocked from one instance — admin's "Acceso" tab. */
+export function subscribeBans(
+  repoUrl: string,
+  modpackId: string,
+  callback: (bans: Record<string, AccessBan>) => void
+): Unsubscribe {
+  const bansRef = ref(rtdb, `modpackBans/${grantKey(repoUrl, modpackId)}`);
+  return onValue(
+    bansRef,
+    (snap) => callback(snap.val() || {}),
+    () => callback({})
+  );
 }

@@ -42,6 +42,7 @@ import {
   Users,
   Link2,
   Ban,
+  Send,
 } from "lucide-react";
 import {
   fetchSnapshot,
@@ -67,8 +68,15 @@ import {
   subscribeAccessGrants,
   revokeAccess,
   formatCode,
+  banFromInstance,
+  unbanFromInstance,
+  subscribeBans,
   type AccessGrant,
+  type AccessBan,
 } from "@/services/access-codes";
+import { sendInvite, cancelInvite, subscribePendingInvites, updatePendingInviteCodes, type PendingInvite } from "@/services/invites";
+import { getInstanceAccentColor } from "@/lib/instance-color";
+import { PlayerPicker, Head } from "@/components/player-picker";
 
 // Minecraft instance top-level folders. When the picked/dropped folder's own name
 // matches one of these, it IS the destination folder (e.g. dragging in "shaderpacks"
@@ -194,7 +202,7 @@ const TAB_TRIGGER = "gap-1.5 data-[state=active]:bg-accent data-[state=active]:t
 
 export default function AdminModpack() {
   const { id } = useParams<{ id: string }>();
-  const { isAuthenticated, uuid } = useAuth();
+  const { isAuthenticated, uuid, username } = useAuth();
   const isAdmin = useIsAdmin();
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks } = useModpacks();
@@ -234,6 +242,8 @@ export default function AdminModpack() {
   const [accessCode, setAccessCode] = useState<string | null>(null);
   const [accessCodeLoading, setAccessCodeLoading] = useState(false);
   const [accessGrants, setAccessGrants] = useState<Record<string, AccessGrant>>({});
+  const [bans, setBans] = useState<Record<string, AccessBan>>({});
+  const [pendingInvites, setPendingInvites] = useState<Record<string, PendingInvite>>({});
 
   // Modrinth: sha1 of staged files (computed lazily), matches learned from
   // files downloaded through the browser, the resulting per-row identification
@@ -267,10 +277,14 @@ export default function AdminModpack() {
     getAccessCode(repoUrl, id).then((code) => {
       if (!cancelled) setAccessCode(code);
     });
-    const unsubscribe = subscribeAccessGrants(repoUrl, id, setAccessGrants);
+    const unsubs = [
+      subscribeAccessGrants(repoUrl, id, setAccessGrants),
+      subscribeBans(repoUrl, id, setBans),
+      subscribePendingInvites(repoUrl, id, setPendingInvites),
+    ];
     return () => {
       cancelled = true;
-      unsubscribe();
+      unsubs.forEach((u) => u());
     };
   }, [id]);
 
@@ -809,6 +823,8 @@ export default function AdminModpack() {
         ? await regenerateAccessCode(mine.repoUrl, id, uuid, mine.readToken)
         : await createAccessCode(mine.repoUrl, id, uuid, mine.readToken);
       setAccessCode(code);
+      // Pending invitations carry the code — keep them working.
+      if (accessCode) await updatePendingInviteCodes(mine.repoUrl, id, code).catch(() => {});
       toast.success(accessCode ? "Código regenerado." : "Código creado.");
     } catch (e: any) {
       toast.error(e?.message ?? "No se pudo generar el código.");
@@ -834,6 +850,83 @@ export default function AdminModpack() {
     } catch (e: any) {
       toast.error(e?.message ?? "No se pudo quitar el acceso.");
     }
+  };
+
+  /** Invites a player by name. The invitation carries the instance's code, so
+   *  one is created first if the instance doesn't have it yet. */
+  const handleInvite = async (toUuid: string, toUsername: string) => {
+    const mine = getMySource();
+    if (!id || !uuid || !username || !mine || !pack) return;
+    try {
+      let code = accessCode;
+      if (!code) {
+        code = await createAccessCode(mine.repoUrl, id, uuid, mine.readToken);
+        setAccessCode(code);
+      }
+      const color = await getInstanceAccentColor({ id: pack.id, imageUrl: pack.imageUrl || pack.bannerUrl }).catch(() => undefined);
+      await sendInvite({
+        repoUrl: mine.repoUrl,
+        modpackId: id,
+        modpackName: pack.name,
+        imageUrl: pack.imageUrl || undefined,
+        color,
+        code,
+        fromUuid: uuid,
+        fromUsername: username,
+        toUuid,
+        toUsername,
+      });
+      toast.success(`Invitación enviada a ${toUsername}.`);
+    } catch (e: any) {
+      toast.error(e?.message ?? "No se pudo enviar la invitación.");
+    }
+  };
+
+  const handleCancelInvite = async (toUuid: string, toUsername: string) => {
+    const repoUrl = getMySource()?.repoUrl;
+    if (!id || !repoUrl) return;
+    try {
+      await cancelInvite(repoUrl, id, toUuid);
+      toast.success(`Invitación a ${toUsername} cancelada.`);
+    } catch (e: any) {
+      toast.error(e?.message ?? "No se pudo cancelar la invitación.");
+    }
+  };
+
+  const handleBan = async (targetUuid: string, targetUsername: string) => {
+    const repoUrl = getMySource()?.repoUrl;
+    if (!id || !repoUrl) return;
+    try {
+      await banFromInstance(repoUrl, id, targetUuid, targetUsername);
+      toast.success(`${targetUsername} bloqueado: ya no puede entrar ni con código ni por invitación.`);
+    } catch (e: any) {
+      toast.error(e?.message ?? "No se pudo bloquear.");
+    }
+  };
+
+  const handleUnban = async (targetUuid: string, targetUsername: string) => {
+    const repoUrl = getMySource()?.repoUrl;
+    if (!id || !repoUrl) return;
+    try {
+      await unbanFromInstance(repoUrl, id, targetUuid);
+      toast.success(`${targetUsername} desbloqueado.`);
+    } catch (e: any) {
+      toast.error(e?.message ?? "No se pudo desbloquear.");
+    }
+  };
+
+  /** Why a player can't be invited (shown in the picker instead of the button). */
+  const inviteBlockedReason = (target: string): string | null => {
+    if (target === uuid) return "Eres tú";
+    if (bans[target]) return "Bloqueado";
+    if (accessGrants[target]) return "Ya tiene acceso";
+    if (pendingInvites[target]) return "Ya invitado";
+    return null;
+  };
+  const banBlockedReason = (target: string): string | null => {
+    if (target === uuid) return "Eres tú";
+    if (bans[target]) return "Ya bloqueado";
+    return null;
   };
 
   const stageLabel: Record<PublishProgress["stage"], string> = {
@@ -1542,40 +1635,120 @@ export default function AdminModpack() {
                     )}
                   </div>
 
+                  <div className={cn(GLASS, "p-5 space-y-3")}>
+                    <div>
+                      <Label className="text-gray-200 flex items-center gap-1.5">
+                        <Send className="h-3.5 w-3.5" /> Invitar a alguien
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Le llega una invitación al launcher: si la acepta, entra igual que con el código.
+                      </p>
+                    </div>
+                    <PlayerPicker
+                      placeholder="Nombre de Minecraft..."
+                      actionLabel="Invitar"
+                      blockedReason={inviteBlockedReason}
+                      onPick={handleInvite}
+                    />
+                    {Object.keys(pendingInvites).length > 0 && (
+                      <div className="space-y-1 pt-1">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Pendientes</p>
+                        {Object.entries(pendingInvites).map(([inviteeUuid, inv]) => (
+                          <div key={inviteeUuid} className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/5">
+                            <Head uuid={inviteeUuid} username={inv.username} />
+                            <span className="flex-1 min-w-0 truncate text-sm text-gray-100">{inv.username}</span>
+                            <span className="text-[11px] text-muted-foreground shrink-0">
+                              {inv.sentAt ? new Date(inv.sentAt).toLocaleDateString() : ""}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs text-muted-foreground hover:text-white"
+                              onClick={() => handleCancelInvite(inviteeUuid, inv.username)}
+                            >
+                              Cancelar
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                   <div className={cn(GLASS, "p-5")}>
                     <Label className="text-gray-200 mb-3 block">Personas con acceso</Label>
                     {Object.keys(accessGrants).length === 0 ? (
-                      <p className="text-sm text-muted-foreground">Nadie ha usado este código todavía.</p>
+                      <p className="text-sm text-muted-foreground">Nadie ha entrado todavía.</p>
                     ) : (
-                      <Table>
-                        <TableHeader>
-                          <TableRow className="border-white/5">
-                            <TableHead>Usuario</TableHead>
-                            <TableHead>Desde</TableHead>
-                            <TableHead className="w-10" />
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {Object.entries(accessGrants).map(([grantUuid, grant]) => (
-                            <TableRow key={grantUuid} className="border-white/5">
-                              <TableCell>{grant.username}</TableCell>
-                              <TableCell className="text-muted-foreground">
-                                {grant.grantedAt ? new Date(grant.grantedAt).toLocaleDateString() : "—"}
-                              </TableCell>
-                              <TableCell>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  onClick={() => handleRevokeAccess(grantUuid, grant.username)}
-                                  aria-label={`Quitar acceso a ${grant.username}`}
-                                >
-                                  <UserX className="h-4 w-4 text-destructive" />
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
+                      <div className="space-y-1">
+                        {Object.entries(accessGrants).map(([grantUuid, grant]) => (
+                          <div key={grantUuid} className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/5">
+                            <Head uuid={grantUuid} username={grant.username} />
+                            <span className="flex-1 min-w-0 truncate text-sm text-gray-100">{grant.username}</span>
+                            <span className="text-[11px] text-muted-foreground shrink-0">
+                              {grant.grantedAt ? new Date(grant.grantedAt).toLocaleDateString() : "—"}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              title="Quitar acceso (podrá volver a entrar con el código)"
+                              onClick={() => handleRevokeAccess(grantUuid, grant.username)}
+                              aria-label={`Quitar acceso a ${grant.username}`}
+                            >
+                              <UserX className="h-4 w-4 text-muted-foreground" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              title="Expulsar y bloquear (no podrá volver a entrar)"
+                              onClick={() => handleBan(grantUuid, grant.username)}
+                              aria-label={`Bloquear a ${grant.username}`}
+                            >
+                              <Ban className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className={cn(GLASS, "p-5 space-y-3")}>
+                    <div>
+                      <Label className="text-gray-200 flex items-center gap-1.5">
+                        <Ban className="h-3.5 w-3.5" /> Bloqueados
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        No pueden entrar a esta instancia de ninguna forma: ni con el código ni por invitación.
+                      </p>
+                    </div>
+                    <PlayerPicker
+                      placeholder="Bloquear a alguien por nombre..."
+                      actionLabel="Bloquear"
+                      actionVariant="destructive"
+                      blockedReason={banBlockedReason}
+                      onPick={handleBan}
+                    />
+                    {Object.keys(bans).length > 0 && (
+                      <div className="space-y-1">
+                        {Object.entries(bans).map(([bannedUuid, ban]) => (
+                          <div key={bannedUuid} className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg bg-red-500/[0.06] border border-red-500/20">
+                            <Head uuid={bannedUuid} username={ban.username} />
+                            <span className="flex-1 min-w-0 truncate text-sm text-gray-100">{ban.username}</span>
+                            <span className="text-[11px] text-muted-foreground shrink-0">
+                              {ban.bannedAt ? new Date(ban.bannedAt).toLocaleDateString() : ""}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs text-muted-foreground hover:text-white"
+                              onClick={() => handleUnban(bannedUuid, ban.username)}
+                            >
+                              Desbloquear
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
                 </div>

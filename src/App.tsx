@@ -23,6 +23,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { getLastViewPath, setLastView } from "@/lib/last-view";
 import { useAuth } from "@/hooks/use-auth";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
+import { useInvites } from "@/hooks/use-invites";
 import { onUpdateInstalled } from "@/services/electron";
 
 const queryClient = new QueryClient();
@@ -51,7 +52,17 @@ function AppSplash() {
 function StartupView() {
   const [location, setLocation] = useLocation();
   const authChecked = useAuth((s) => s.authChecked);
+  const uuid = useAuth((s) => s.uuid);
   const restored = useRef(false);
+
+  // Chat (messages + friend-request notifications) and instance invitations
+  // listen from here, for the whole session — this used to start only when
+  // the carousel mounted, so starting on the Hub left them silent.
+  useEffect(() => {
+    if (!uuid) return;
+    useChatHeads.getState().init(uuid);
+    useInvites.getState().init(uuid);
+  }, [uuid]);
   const previousLocation = useRef(location);
 
   useEffect(() => {
