@@ -18,6 +18,7 @@ import {
   Box,
   Shirt,
   Camera,
+  Server as ServerIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
@@ -40,6 +41,8 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { ChatContactRail } from "@/components/chat-contact-rail";
 import { ChatContentPicker } from "@/components/chat-content-picker";
+import { ChatServerPicker, SharedServerCard } from "@/components/chat-server-share";
+import { useSavedServers } from "@/lib/saved-servers";
 import { ChatModeSelector } from "@/components/chat-mode-selector";
 import type { ContentCategory, SharedContent } from "@/services/content-share";
 import { cn } from "@/lib/utils";
@@ -145,6 +148,10 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
   // and back, is enough to pick up a change made there).
   const [nicknames] = useState(() => getNicknames());
   const [showContentPicker, setShowContentPicker] = useState(false);
+  const [showServerPicker, setShowServerPicker] = useState(false);
+  useEffect(() => {
+    useSavedServers.getState().init(myUuid);
+  }, [myUuid]);
   const [railExpanded, setRailExpanded] = useState(true);
   const [installedHashes, setInstalledHashes] = useState<Record<string, Set<string>>>({});
   const [installedSkinHashes, setInstalledSkinHashes] = useState<Set<string>>(new Set());
@@ -469,7 +476,9 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                             {tagPack.name}
                           </span>
                         )}
-                        {m.content ? (
+                        {m.server ? (
+                          <SharedServerCard server={m.server} />
+                        ) : m.content ? (
                           <SharedContentCard
                             content={m.content}
                             carouselInstanceId={m.carouselInstanceId}
@@ -532,7 +541,10 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                 <motion.button
                   {...tapHover}
                   type="button"
-                  onClick={() => setShowContentPicker((v) => !v)}
+                  onClick={() => {
+                    setShowContentPicker((v) => !v);
+                    setShowServerPicker(false);
+                  }}
                   title="Enviar contenido"
                   className={cn(
                     "h-9 w-9 flex items-center justify-center rounded-md transition-colors shrink-0",
@@ -550,6 +562,35 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                       otherUsername={otherUsername}
                       mode={mode}
                       onClose={() => setShowContentPicker(false)}
+                    />
+                  )}
+                </AnimatePresence>
+              </div>
+              <div className="relative">
+                <motion.button
+                  {...tapHover}
+                  type="button"
+                  onClick={() => {
+                    setShowServerPicker((v) => !v);
+                    setShowContentPicker(false);
+                  }}
+                  title="Compartir server"
+                  className={cn(
+                    "h-9 w-9 flex items-center justify-center rounded-md transition-colors shrink-0",
+                    showServerPicker ? "bg-accent/20 text-accent" : "bg-white/5 hover:bg-white/10 text-gray-300"
+                  )}
+                >
+                  <ServerIcon className="h-4 w-4" />
+                </motion.button>
+                <AnimatePresence>
+                  {showServerPicker && displayUuid && (
+                    <ChatServerPicker
+                      myUuid={myUuid}
+                      myUsername={myUsername}
+                      otherUuid={displayUuid}
+                      otherUsername={otherUsername}
+                      carouselInstanceId={mode.type === "carousel" ? mode.pack.id : undefined}
+                      onClose={() => setShowServerPicker(false)}
                     />
                   )}
                 </AnimatePresence>

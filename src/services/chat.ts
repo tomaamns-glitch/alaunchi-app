@@ -8,12 +8,19 @@ export interface ChatMessage {
   text: string;
   timestamp: number;
   content?: SharedContent;
+  /** A Minecraft server address shared from Cuenta → Servers. */
+  server?: SharedServer;
   /** Set when sent from the chat's "carousel instance" mode instead of
    *  "general" — the id of that catalog modpack. Absent = general mode
    *  (covers every message sent before this field existed too). The sender
    *  doesn't know whether the recipient even has this modpack; that's decided
    *  at render time by whoever's reading the message. */
   carouselInstanceId?: string;
+}
+
+export interface SharedServer {
+  name: string;
+  ip: string;
 }
 
 export interface ChatIndexEntry {
@@ -95,7 +102,7 @@ async function pushMessageAndUpdateIndex(
   myUsername: string,
   otherUuid: string,
   otherUsername: string,
-  body: { text: string; content?: SharedContent; carouselInstanceId?: string },
+  body: { text: string; content?: SharedContent; server?: SharedServer; carouselInstanceId?: string },
   indexPreview: string
 ): Promise<void> {
   const conversationId = getConversationId(myUuid, otherUuid);
@@ -106,6 +113,7 @@ async function pushMessageAndUpdateIndex(
     senderUsername: myUsername,
     text: body.text,
     ...(body.content ? { content: body.content } : {}),
+    ...(body.server ? { server: { name: body.server.name, ip: body.server.ip } } : {}),
     ...(body.carouselInstanceId ? { carouselInstanceId: body.carouselInstanceId } : {}),
     timestamp: serverTimestamp(),
   });
@@ -166,6 +174,19 @@ export async function sendSharedContent(
     { text: "", content, carouselInstanceId },
     `📎 ${content.displayName}`
   );
+}
+
+/** Shares one of your saved servers — the recipient gets a card to save it or
+ *  add it straight to one of their instances. */
+export async function sendSharedServer(
+  myUuid: string,
+  myUsername: string,
+  otherUuid: string,
+  otherUsername: string,
+  server: SharedServer,
+  carouselInstanceId?: string
+): Promise<void> {
+  await pushMessageAndUpdateIndex(myUuid, myUsername, otherUuid, otherUsername, { text: "", server, carouselInstanceId }, `🌐 ${server.name}`);
 }
 
 /** Clears unread count for one conversation — call when the user opens it. */

@@ -14,6 +14,7 @@ const { Readable, Writable } = require("stream");
 const AdmZip = require("adm-zip");
 const ftp = require("basic-ftp");
 const SftpClient = require("ssh2-sftp-client");
+const { readNbt, writeNbt, NBT } = require("./nbt");
 
 const execAsync = promisify(exec);
 
@@ -386,6 +387,63 @@ ipcMain.handle("instances:stop", async (_event, { modpackId }) => {
   // The playtime watcher notices the dead pid, clears the entry and credits the
   // session — nothing else to do here.
   return { success: true };
+});
+
+// ─── SERVIDORES DE LA LISTA MULTIJUGADOR ────────────────────────────────────
+// Adds an entry to an instance's servers.dat (its game dir = the instance
+// folder, see mc:launch) — the list Minecraft shows under Multijugador. Refused
+// while that instance is open: Minecraft keeps the list in memory and writes it
+// back on its own, which would silently drop what we add here.
+ipcMain.handle("instances:add-server", async (_event, { modpackId, name, ip }) => {
+  assertSafeInstanceId(modpackId);
+  const cleanName = String(name || "").trim().slice(0, 64);
+  const cleanIp = String(ip || "").trim().slice(0, 255);
+  if (!cleanName || !cleanIp) throw new Error("Falta el nombre o la dirección del servidor.");
+  if (runningInstances.has(modpackId) || activeModpackOps.has(modpackId)) {
+    throw new Error("Cierra Minecraft (y espera a que termine de actualizar) antes de añadir el servidor.");
+  }
+
+  const instanceDir = instanceDirFor(modpackId);
+  if (!fsSync.existsSync(instanceDir)) throw new Error("Esa instancia no está instalada.");
+  const file = path.join(instanceDir, "servers.dat");
+
+  let doc = { name: "", tag: { type: NBT.COMPOUND, value: [] } };
+  if (fsSync.existsSync(file)) {
+    try {
+      doc = readNbt(await fs.readFile(file));
+    } catch (e) {
+      throw new Error(`No se pudo leer servers.dat de esa instancia (${e.message}).`);
+    }
+  }
+
+  let serversEntry = doc.tag.value.find(([n]) => n === "servers");
+  if (!serversEntry || serversEntry[1].type !== NBT.LIST) {
+    serversEntry = ["servers", { type: NBT.LIST, value: { elemType: NBT.COMPOUND, items: [] } }];
+    doc.tag.value = doc.tag.value.filter(([n]) => n !== "servers").concat([serversEntry]);
+  }
+  const list = serversEntry[1].value;
+  if (!list.items.length) list.elemType = NBT.COMPOUND;
+
+  const sameIp = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  const existing = list.items.find((item) => {
+    const ipTag = item.value.find(([n]) => n === "ip");
+    return ipTag && sameIp(String(ipTag[1].value), cleanIp);
+  });
+  if (existing) return { added: false };
+
+  list.items.push({
+    type: NBT.COMPOUND,
+    value: [
+      ["name", { type: NBT.STRING, value: cleanName }],
+      ["ip", { type: NBT.STRING, value: cleanIp }],
+    ],
+  });
+  // Keep a copy of the previous list, then write atomically (tmp + rename).
+  if (fsSync.existsSync(file)) await fs.copyFile(file, `${file}_old`).catch(() => {});
+  const tmp = `${file}.tmp`;
+  await fs.writeFile(tmp, writeNbt(doc));
+  await fs.rename(tmp, file);
+  return { added: true };
 });
 
 async function ensureObject(hash, downloadUrl, headers) {
