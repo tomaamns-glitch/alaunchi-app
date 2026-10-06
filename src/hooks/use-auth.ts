@@ -9,6 +9,8 @@ interface AuthState {
   uuid: string | null;
   mcToken: string | null;
   email: string | null;
+  gamertag: string | null;
+  signedInAt: number | null;
   isRefreshing: boolean;
   /** True once loadPersistedAuth has resolved at least once. Pages gate their
    *  render/redirect logic on this so a returning user's session isn't lost
@@ -62,6 +64,8 @@ function applyToState(data: AuthData) {
     uuid: data.uuid,
     mcToken: data.mcToken,
     email: data.email ?? null,
+    gamertag: data.gamertag ?? null,
+    signedInAt: data.signedInAt ?? null,
     isRefreshing: false,
   };
 }
@@ -72,6 +76,8 @@ export const useAuth = create<AuthState>((set) => ({
   uuid: null,
   mcToken: null,
   email: null,
+  gamertag: null,
+  signedInAt: null,
   isRefreshing: false,
   authChecked: false,
 
@@ -91,7 +97,7 @@ export const useAuth = create<AuthState>((set) => ({
       if (!refreshTokenStillValid) {
         // Token expired and no way to refresh — force re-login.
         await writeAuthData({ ...data, mcToken: "", mcTokenExpiresAt: 0 });
-        set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, email: null, isRefreshing: false });
+        set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, email: null, gamertag: null, signedInAt: null, isRefreshing: false });
         return;
       }
 
@@ -105,7 +111,7 @@ export const useAuth = create<AuthState>((set) => ({
         // Token expired and refresh failed — invalidate the session so the user
         // is forced to log in again instead of launching with a stale token.
         await writeAuthData({ ...data, mcToken: "", mcTokenExpiresAt: 0 });
-        set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, email: null, isRefreshing: false });
+        set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, email: null, gamertag: null, signedInAt: null, isRefreshing: false });
       }
     } finally {
       set({ authChecked: true });
@@ -125,7 +131,7 @@ export const useAuth = create<AuthState>((set) => ({
     } else {
       localStorage.removeItem("alaunchi_auth");
     }
-    set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, email: null, isRefreshing: false });
+    set({ isAuthenticated: false, username: null, uuid: null, mcToken: null, email: null, gamertag: null, signedInAt: null, isRefreshing: false });
   },
 
   getValidTokenForLaunch: async () => {

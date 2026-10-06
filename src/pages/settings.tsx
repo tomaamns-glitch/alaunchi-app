@@ -1,16 +1,29 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
+import { AnimatePresence, motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
-import { useIsAppOwner } from "@/hooks/use-is-admin";
 import { MyRepoCard } from "@/components/my-repo-card";
+import { Head } from "@/components/player-picker";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ArrowLeft, Save, LogOut, Cpu, FolderOpen, FolderCog, ShieldCheck, Bell, Volume2 } from "lucide-react";
+import {
+  ArrowLeft,
+  Save,
+  LogOut,
+  Cpu,
+  FolderOpen,
+  FolderCog,
+  Bell,
+  Volume2,
+  HardDrive,
+  Palette,
+  Code2,
+  UserCircle2,
+  type LucideIcon,
+} from "lucide-react";
 import { readSettings, writeSettings, isElectron, getDataDir, chooseDataDir, openDataDir } from "@/services/electron";
 import {
   NOTIFICATION_SOUNDS,
@@ -19,29 +32,162 @@ import {
   playNotificationSound,
   type NotificationSoundId,
 } from "@/lib/notification-sound";
+import { getLastViewPath } from "@/lib/last-view";
+import { cn } from "@/lib/utils";
+
+type SectionId = "storage" | "personalization" | "developer" | "account";
+
+const SECTIONS: { id: SectionId; label: string; description: string; icon: LucideIcon }[] = [
+  { id: "storage", label: "Archivos y RAM", description: "Dónde se guarda todo y cuánta memoria usa Minecraft", icon: HardDrive },
+  { id: "personalization", label: "Personalización", description: "Sonidos y avisos", icon: Palette },
+  { id: "developer", label: "Modo desarrollador", description: "Tu repositorio para publicar instancias online", icon: Code2 },
+  { id: "account", label: "Mi cuenta", description: "Tu cuenta de Minecraft y de Microsoft", icon: UserCircle2 },
+];
+
+const GLASS = "rounded-xl border border-white/10 bg-card/40";
+const SECTION_KEY = "alaunchi_settings_section";
 
 export default function Settings() {
-  const { isAuthenticated, logout } = useAuth();
-  const isAppOwner = useIsAppOwner();
   const [, setLocation] = useLocation();
+  const [section, setSection] = useState<SectionId>(() => {
+    try {
+      const saved = sessionStorage.getItem(SECTION_KEY) as SectionId | null;
+      return saved && SECTIONS.some((s) => s.id === saved) ? saved : "storage";
+    } catch {
+      return "storage";
+    }
+  });
+  const current = SECTIONS.find((s) => s.id === section)!;
 
+  const pick = (id: SectionId) => {
+    setSection(id);
+    try {
+      sessionStorage.setItem(SECTION_KEY, id);
+    } catch {}
+  };
+
+  return (
+    <div className="relative h-full overflow-hidden bg-background text-foreground flex flex-col">
+      <div className="flex-1 min-h-0 flex flex-col gap-5 px-6 pt-6 pb-5 max-w-6xl mx-auto w-full">
+        {/* Same glass header card as the Hub / Admin */}
+        <div className={cn(GLASS, "relative shrink-0 p-5 overflow-hidden")}>
+          <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
+          <div className="relative flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setLocation(getLastViewPath())}
+              className="h-9 w-9 shrink-0 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+              aria-label="Volver"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+            <div className="min-w-0">
+              <h1 className="text-xl font-bold leading-tight">Ajustes</h1>
+              <p className="text-xs text-muted-foreground">Configura ALaunchi a tu gusto</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 min-h-0 flex gap-5">
+          {/* Section buttons */}
+          <nav className="w-60 shrink-0 flex flex-col gap-1.5">
+            {SECTIONS.map((s) => {
+              const active = s.id === section;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => pick(s.id)}
+                  className={cn(
+                    "group flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-colors",
+                    active
+                      ? "bg-accent/15 border-accent/40"
+                      : "bg-white/[0.04] border-white/5 hover:bg-white/10 hover:border-white/10"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "h-8 w-8 shrink-0 flex items-center justify-center rounded-md transition-colors",
+                      active ? "bg-accent text-accent-foreground" : "bg-accent/15 text-accent group-hover:bg-accent/25"
+                    )}
+                  >
+                    <s.icon className="h-4 w-4" />
+                  </span>
+                  <span className={cn("text-sm font-medium", active ? "text-white" : "text-gray-200")}>{s.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Section content */}
+          <div className="flex-1 min-w-0 min-h-0 overflow-y-auto pr-1">
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={section}
+                initial={{ opacity: 0, x: 16 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -8 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                className="space-y-4 max-w-2xl"
+              >
+                <div className="px-1">
+                  <h2 className="text-lg font-bold text-white">{current.label}</h2>
+                  <p className="text-xs text-muted-foreground">{current.description}</p>
+                </div>
+                {section === "storage" && <StorageSection />}
+                {section === "personalization" && <PersonalizationSection />}
+                {section === "developer" && <MyRepoCard />}
+                {section === "account" && <AccountSection />}
+              </motion.div>
+            </AnimatePresence>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Panel({
+  icon: Icon,
+  title,
+  description,
+  children,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className={cn(GLASS, "p-5 space-y-4")}>
+      <div>
+        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+          <Icon className="h-4 w-4 text-accent" /> {title}
+        </h3>
+        {description && <p className="text-xs text-muted-foreground mt-1">{description}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function StorageSection() {
   const [maxMemoryMb, setMaxMemoryMb] = useState(2048);
-  const [notificationSound, setNotificationSoundState] = useState<NotificationSoundId>("chime");
-
   const [dataDir, setDataDir] = useState("");
   const [dataDirCustom, setDataDirCustom] = useState(false);
   const [changingDataDir, setChangingDataDir] = useState(false);
 
-  const [azureClientId, setAzureClientId] = useState("");
-
   useEffect(() => {
-    readSettings().then((s) => { if (s.maxMemoryMb) setMaxMemoryMb(s.maxMemoryMb); });
-    setNotificationSoundState(getNotificationSound());
-    getDataDir().then((d) => { if (d) { setDataDir(d.dataDir); setDataDirCustom(d.isCustom); } });
-    if (isAppOwner) {
-      setAzureClientId(localStorage.getItem("azureClientId") || "");
-    }
-  }, [isAppOwner]);
+    readSettings().then((s) => {
+      if (s.maxMemoryMb) setMaxMemoryMb(s.maxMemoryMb);
+    });
+    getDataDir().then((d) => {
+      if (d) {
+        setDataDir(d.dataDir);
+        setDataDirCustom(d.isCustom);
+      }
+    });
+  }, []);
 
   const handleSavePerformance = async () => {
     const current = await readSettings();
@@ -62,191 +208,160 @@ export default function Settings() {
     }
   };
 
-  const handleChangeNotificationSound = (id: NotificationSoundId) => {
+  if (!isElectron) {
+    return <p className="text-sm text-muted-foreground px-1">Solo disponible en la app de escritorio.</p>;
+  }
+
+  return (
+    <>
+      <Panel icon={Cpu} title="Rendimiento" description="Memoria RAM asignada a Minecraft. Recomendado: 2–4 GB para modpacks grandes.">
+        <div className="space-y-3">
+          <div className="flex justify-between items-center">
+            <Label>Memoria máxima</Label>
+            <span className="text-accent font-bold text-sm tabular-nums">
+              {maxMemoryMb >= 1024 ? `${(maxMemoryMb / 1024).toFixed(1)} GB` : `${maxMemoryMb} MB`}
+            </span>
+          </div>
+          <Slider min={512} max={16384} step={512} value={[maxMemoryMb]} onValueChange={([v]) => setMaxMemoryMb(v)} />
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>512 MB</span>
+            <span>16 GB</span>
+          </div>
+        </div>
+        <Button onClick={handleSavePerformance} className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold">
+          <Save className="mr-2 h-4 w-4" /> Guardar
+        </Button>
+      </Panel>
+
+      <Panel icon={FolderCog} title="Ubicación de datos" description="Carpeta raíz donde ALaunchi guarda instancias, caché, Java y objetos descargados.">
+        <div className="bg-background/50 border border-white/10 rounded-lg px-3 py-2.5 font-mono text-xs text-gray-300 break-all select-text">
+          {dataDir || "Cargando..."}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" className="border-white/10" onClick={() => openDataDir()}>
+            <FolderOpen className="mr-2 h-3.5 w-3.5" /> Abrir carpeta
+          </Button>
+          <Button variant="outline" size="sm" className="border-white/10" onClick={handleChangeDataDir} disabled={changingDataDir}>
+            {changingDataDir ? "Eligiendo..." : "Cambiar carpeta..."}
+          </Button>
+        </div>
+        {dataDirCustom && (
+          <p className="text-xs text-muted-foreground">
+            Los datos ya existentes no se mueven automáticamente — solo cambia dónde se guardan las cosas nuevas a partir
+            del próximo reinicio.
+          </p>
+        )}
+      </Panel>
+    </>
+  );
+}
+
+function PersonalizationSection() {
+  const [notificationSound, setNotificationSoundState] = useState<NotificationSoundId>(() => getNotificationSound());
+
+  const handleChange = (id: NotificationSoundId) => {
     setNotificationSoundState(id);
     setNotificationSound(id);
     playNotificationSound(id);
   };
 
-  const handleSaveAdmin = () => {
-    localStorage.setItem("azureClientId", azureClientId);
-    toast.success("Configuración privada guardada");
-  };
+  return (
+    <Panel
+      icon={Bell}
+      title="Notificaciones"
+      description="Sonido de los avisos: mensajes, solicitudes de amistad, invitaciones y quién se conecta. Con ALaunchi minimizado, además, sale la notificación de Windows."
+    >
+      <div className="flex items-center gap-2">
+        <Select value={notificationSound} onValueChange={(v) => handleChange(v as NotificationSoundId)}>
+          <SelectTrigger className="bg-background/50 border-white/10 text-white flex-1">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {NOTIFICATION_SOUNDS.map((s) => (
+              <SelectItem key={s.id} value={s.id}>
+                {s.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="border-white/10"
+          onClick={() => playNotificationSound(notificationSound)}
+          disabled={notificationSound === "none"}
+          title="Probar sonido"
+        >
+          <Volume2 className="h-4 w-4" />
+        </Button>
+      </div>
+    </Panel>
+  );
+}
 
-  const handleLogout = () => {
-    logout();
+function AccountSection() {
+  const { isAuthenticated, username, uuid, email, gamertag, signedInAt, logout } = useAuth();
+  const [, setLocation] = useLocation();
+
+  const handleLogout = async () => {
+    await logout();
     setLocation("/login");
   };
 
+  if (!isAuthenticated || !username || !uuid) {
+    return <p className="text-sm text-muted-foreground px-1">No has iniciado sesión.</p>;
+  }
+
   return (
-    <div className="min-h-full bg-background text-foreground flex flex-col">
-      <header className="h-16 border-b border-white/5 bg-card/50 flex items-center px-6 sticky top-0 z-50 gap-4">
-        <Button variant="ghost" size="icon" onClick={() => setLocation("/")} className="text-gray-400 hover:text-white">
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
-        <h1 className="text-xl font-bold text-white">Ajustes</h1>
-      </header>
-
-      <main className="flex-1 p-8 max-w-2xl mx-auto w-full space-y-6">
-
-        {isElectron && (
-          <Card className="bg-card/50 border-white/5">
-            <CardHeader>
-              <CardTitle className="text-white flex items-center gap-2">
-                <Cpu className="h-5 w-5 text-amber-400" /> Rendimiento
-              </CardTitle>
-              <CardDescription>
-                Memoria RAM asignada a Minecraft. Recomendado: 2–4 GB para modpacks grandes.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <Label>Memoria máxima</Label>
-                  <span className="text-amber-400 font-bold text-sm">{maxMemoryMb >= 1024 ? `${(maxMemoryMb / 1024).toFixed(1)} GB` : `${maxMemoryMb} MB`}</span>
-                </div>
-                <Slider
-                  min={512}
-                  max={16384}
-                  step={512}
-                  value={[maxMemoryMb]}
-                  onValueChange={([v]) => setMaxMemoryMb(v)}
-                  className="accent-amber-400"
-                />
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>512 MB</span>
-                  <span>16 GB</span>
-                </div>
-              </div>
-              <Button onClick={handleSavePerformance} className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold">
-                <Save className="mr-2 h-4 w-4" /> Guardar
-              </Button>
-            </CardContent>
-          </Card>
-        )}
-
-        <Card className="bg-card/50 border-white/5">
-          <CardHeader>
-            <CardTitle className="text-white flex items-center gap-2">
-              <Bell className="h-5 w-5 text-amber-400" /> Notificaciones
-            </CardTitle>
-            <CardDescription>
-              Sonido para los avisos de Windows (nuevo mensaje, alguien se conecta). No suenan
-              mientras estás usando la ventana de ALaunchi.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2">
-              <Select value={notificationSound} onValueChange={(v) => handleChangeNotificationSound(v as NotificationSoundId)}>
-                <SelectTrigger className="bg-background/50 border-white/10 text-white flex-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {NOTIFICATION_SOUNDS.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>{s.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={() => playNotificationSound(notificationSound)}
-                disabled={notificationSound === "none"}
-                title="Probar sonido"
-              >
-                <Volume2 className="h-4 w-4" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        {isElectron && (
-          <Card className="bg-card/50 border-white/5">
-            <CardHeader>
-              <CardTitle className="text-white flex items-center gap-2">
-                <FolderCog className="h-5 w-5 text-amber-400" /> Ubicación de datos
-              </CardTitle>
-              <CardDescription>
-                Carpeta raíz donde ALaunchi guarda instancias, caché, Java y objetos descargados.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="bg-background/50 border border-white/10 rounded-md px-3 py-2.5 font-mono text-xs text-gray-300 break-all">
-                {dataDir || "Cargando..."}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" onClick={() => openDataDir()}>
-                  <FolderOpen className="mr-2 h-3.5 w-3.5" /> Abrir carpeta
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleChangeDataDir}
-                  disabled={changingDataDir}
-                >
-                  {changingDataDir ? "Eligiendo..." : "Cambiar carpeta..."}
-                </Button>
-              </div>
-              {dataDirCustom && (
-                <p className="text-xs text-muted-foreground">
-                  Los datos ya existentes no se mueven automáticamente — solo cambia dónde se
-                  guardan las cosas nuevas a partir del próximo reinicio.
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        <MyRepoCard />
-
-        {isAppOwner && (
-          <Card className="bg-card/50 border-amber-500/20 border">
-            <CardHeader>
-              <CardTitle className="text-white flex items-center gap-2">
-                <ShieldCheck className="h-5 w-5 text-amber-400" />
-                Configuración privada (admin)
-              </CardTitle>
-              <CardDescription>
-                Solo visible para cuentas en la whitelist de administración. Los usuarios normales
-                nunca ven ni tocan esto — vienen configurados por defecto en la app.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-2">
-                <Label htmlFor="azureClientId">Azure Client ID</Label>
-                <Input
-                  id="azureClientId"
-                  value={azureClientId}
-                  onChange={(e) => setAzureClientId(e.target.value)}
-                  className="bg-background/50 border-white/10 text-white font-mono"
-                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Déjalo vacío para usar el valor por defecto embebido en la app.
-                </p>
-              </div>
-
-              <Button onClick={handleSaveAdmin} className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold w-full">
-                <Save className="mr-2 h-4 w-4" /> Guardar configuración privada
-              </Button>
-            </CardContent>
-          </Card>
-        )}
-
-        {isAuthenticated && (
-          <div className="pt-2">
-            <Button
-              variant="destructive"
-              onClick={handleLogout}
-              className="bg-destructive/10 text-destructive hover:bg-destructive/20 border border-destructive/20"
-            >
-              <LogOut className="mr-2 h-4 w-4" /> Cerrar sesión
-            </Button>
+    <section className={cn(GLASS, "relative p-5 overflow-hidden")}>
+      <div className="pointer-events-none absolute -bottom-20 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
+      <div className="relative space-y-5">
+        <div className="flex items-center gap-4">
+          <Head uuid={uuid} username={username} className="h-16 w-16 rounded-lg shadow-lg" />
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Minecraft</p>
+            <p className="text-xl font-bold text-white truncate">{username}</p>
+            <p className="text-[10px] text-muted-foreground font-mono truncate select-text">{uuid}</p>
           </div>
-        )}
+        </div>
 
-      </main>
+        <div className="grid sm:grid-cols-2 gap-2">
+          <InfoTile label="Cuenta de Microsoft" value={gamertag ?? "—"} hint={gamertag ? "Gamertag de Xbox" : "Se mostrará al renovarse la sesión"} />
+          <InfoTile label="Correo electrónico" value={email ?? "—"} selectable />
+          <InfoTile
+            label="Último inicio de sesión"
+            value={
+              signedInAt
+                ? new Date(signedInAt).toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" })
+                : "Antes de la versión 1.9.11"
+            }
+            hint={signedInAt ? undefined : "Se registra a partir del próximo inicio de sesión"}
+          />
+        </div>
+
+        <div className="pt-1 border-t border-white/5">
+          <Button
+            variant="destructive"
+            onClick={handleLogout}
+            className="mt-4 bg-destructive/10 text-destructive hover:bg-destructive/20 border border-destructive/20"
+          >
+            <LogOut className="mr-2 h-4 w-4" /> Cerrar sesión
+          </Button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function InfoTile({ label, value, hint, selectable }: { label: string; value: string; hint?: string; selectable?: boolean }) {
+  return (
+    <div className="rounded-lg bg-white/[0.04] border border-white/5 px-3 py-2.5 min-w-0">
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className={cn("text-sm font-medium text-gray-100 truncate", selectable && "select-text")} title={value}>
+        {value}
+      </p>
+      {hint && <p className="text-[10px] text-muted-foreground/70 mt-0.5">{hint}</p>}
     </div>
   );
 }
