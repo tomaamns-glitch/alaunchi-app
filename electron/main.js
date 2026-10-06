@@ -10,6 +10,7 @@ const { promisify } = require("util");
 const crypto = require("crypto");
 const os = require("os");
 const dns = require("dns");
+const net = require("net");
 const { Readable, Writable } = require("stream");
 const AdmZip = require("adm-zip");
 const ftp = require("basic-ftp");
@@ -444,6 +445,115 @@ ipcMain.handle("instances:add-server", async (_event, { modpackId, name, ip }) =
   await fs.writeFile(tmp, writeNbt(doc));
   await fs.rename(tmp, file);
   return { added: true };
+});
+
+// Server List Ping — the same status request Minecraft's Multijugador screen
+// does, to get a server's icon (favicon, a PNG data URL), MOTD and player count.
+// https://minecraft.wiki/w/Java_Edition_protocol/Server_List_Ping
+function writeVarInt(value) {
+  const bytes = [];
+  let v = value >>> 0;
+  do {
+    let b = v & 0x7f;
+    v >>>= 7;
+    if (v !== 0) b |= 0x80;
+    bytes.push(b);
+  } while (v !== 0);
+  return Buffer.from(bytes);
+}
+
+function readVarInt(buf, offset) {
+  let value = 0;
+  let size = 0;
+  for (;;) {
+    if (offset + size >= buf.length) return null; // need more bytes
+    const b = buf[offset + size];
+    value |= (b & 0x7f) << (7 * size);
+    size++;
+    if ((b & 0x80) === 0) return { value, size };
+    if (size > 5) throw new Error("VarInt demasiado largo");
+  }
+}
+
+async function resolveServerAddress(address) {
+  const m = String(address).trim().match(/^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/);
+  if (!m) throw new Error("Dirección no válida");
+  const host = m[1].replace(/^\[|\]$/g, "");
+  if (m[2]) return { host, port: Number(m[2]) };
+  // No explicit port: servers often publish a _minecraft._tcp SRV record
+  // (that's how play.example.com can point at another host/port).
+  try {
+    const [srv] = await dns.promises.resolveSrv(`_minecraft._tcp.${host}`);
+    if (srv) return { host: srv.name, port: srv.port };
+  } catch {}
+  return { host, port: 25565 };
+}
+
+function pingMinecraftServer(address, timeoutMs = 6000) {
+  return resolveServerAddress(address).then(
+    ({ host, port }) =>
+      new Promise((resolve, reject) => {
+        const socket = net.connect({ host, port });
+        let buffer = Buffer.alloc(0);
+        let done = false;
+        const finish = (err, result) => {
+          if (done) return;
+          done = true;
+          socket.destroy();
+          if (err) reject(err);
+          else resolve(result);
+        };
+        socket.setTimeout(timeoutMs, () => finish(new Error("Sin respuesta del servidor")));
+        socket.on("error", (e) => finish(e));
+        socket.on("connect", () => {
+          const hostBytes = Buffer.from(host, "utf8");
+          const portBuf = Buffer.alloc(2);
+          portBuf.writeUInt16BE(port);
+          const handshake = Buffer.concat([
+            writeVarInt(0x00),
+            writeVarInt(767), // protocol version; any value works for a status ping
+            writeVarInt(hostBytes.length),
+            hostBytes,
+            portBuf,
+            writeVarInt(1), // next state: status
+          ]);
+          socket.write(Buffer.concat([writeVarInt(handshake.length), handshake]));
+          socket.write(Buffer.from([0x01, 0x00])); // status request
+        });
+        socket.on("data", (chunk) => {
+          buffer = Buffer.concat([buffer, chunk]);
+          if (buffer.length > 4 * 1024 * 1024) return finish(new Error("Respuesta demasiado grande"));
+          try {
+            const len = readVarInt(buffer, 0);
+            if (!len || buffer.length < len.size + len.value) return;
+            let o = len.size;
+            const id = readVarInt(buffer, o);
+            o += id.size;
+            const strLen = readVarInt(buffer, o);
+            o += strLen.size;
+            const json = JSON.parse(buffer.toString("utf8", o, o + strLen.value));
+            finish(null, json);
+          } catch (e) {
+            finish(e);
+          }
+        });
+      })
+  );
+}
+
+ipcMain.handle("mc:ping-server", async (_event, { address }) => {
+  try {
+    const status = await pingMinecraftServer(address);
+    const favicon = typeof status?.favicon === "string" && status.favicon.startsWith("data:image/png;base64,") ? status.favicon : null;
+    return {
+      online: true,
+      favicon,
+      players: status?.players ? { online: Number(status.players.online) || 0, max: Number(status.players.max) || 0 } : null,
+      version: typeof status?.version?.name === "string" ? status.version.name : null,
+    };
+  } catch (e) {
+    return { online: false, favicon: null, players: null, version: null, error: e?.message || String(e) };
+  }
 });
 
 async function ensureObject(hash, downloadUrl, headers) {
