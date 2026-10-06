@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   launchMinecraft: (args) => ipcRenderer.invoke("mc:launch", args),
   getInstanceRunState: () => ipcRenderer.invoke("instances:get-run-state"),
   stopInstance: (args) => ipcRenderer.invoke("instances:stop", args),
+  addServerToInstance: (args) => ipcRenderer.invoke("instances:add-server", args),
   onInstanceRunState: (callback) => {
     const handler = (_, data) => callback(data);
     ipcRenderer.on("instances:run-state", handler);

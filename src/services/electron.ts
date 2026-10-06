@@ -100,6 +100,14 @@ export async function downloadInstanceFile(modpackId: string, path: string, url:
   if (isElectron) await eAPI.downloadInstanceFile({ modpackId, path, url, sha1 });
 }
 
+/** Adds a server to an instance's Multijugador list (its servers.dat).
+ *  `added: false` = that address was already in the list. Throws if the
+ *  instance is open — Minecraft would overwrite the file when closing. */
+export async function addServerToInstance(modpackId: string, name: string, ip: string): Promise<{ added: boolean }> {
+  if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
+  return eAPI.addServerToInstance({ modpackId, name, ip });
+}
+
 /** Reads a file already inside an instance as base64 — used to upload the
  *  sender's own copy when sharing content in chat. */
 export async function readInstanceFile(modpackId: string, path: string): Promise<string> {
