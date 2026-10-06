@@ -2,6 +2,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
 import { useChatHeads, useVisibleChatBubbles } from "@/hooks/use-chat-heads";
+import { useBarInvites } from "@/hooks/use-invites";
+import { InviteBubbles, InviteCard } from "@/components/invite-bubbles";
 
 /** Row of square "chat head" bubbles next to the players button — one per
  *  pinned/unread conversation. Square (vs. the round players button) so it
@@ -13,12 +15,16 @@ export function ChatBubbleRow() {
   const openUuid = useChatHeads((s) => s.openUuid);
   const openChat = useChatHeads((s) => s.openChat);
   const minimizeChat = useChatHeads((s) => s.minimizeChat);
+  const invites = useBarInvites();
 
-  if (uuids.length === 0) return null;
+  if (uuids.length === 0 && invites.length === 0) return <InviteCard />;
 
   return (
-    // Its bubbles toggle the chat themselves — not an "outside" click for it.
+    <>
+    {/* Invitations to online instances first, then the chats. Its bubbles
+        toggle their popups themselves — not an "outside" click for them. */}
     <div data-keep-popups-open className="flex items-center gap-1.5">
+      <InviteBubbles />
       <AnimatePresence>
         {uuids.map((uuid) => {
           const entry = chatIndex[uuid];
@@ -37,6 +43,8 @@ export function ChatBubbleRow() {
         })}
       </AnimatePresence>
     </div>
+    <InviteCard />
+    </>
   );
 }
 

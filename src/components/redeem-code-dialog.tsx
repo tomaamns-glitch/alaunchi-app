@@ -6,10 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/hooks/use-auth";
-import { redeemAccessCode } from "@/services/access-codes";
-import { fetchSnapshot, cacheSnapshot } from "@/services/github";
-import { addGrantedSource, getReadToken } from "@/lib/sources";
-import { normalizeCode } from "@/services/access-codes";
+import { joinWithCode } from "@/lib/join-instance";
 
 interface RedeemCodeDialogProps {
   open: boolean;
@@ -36,23 +33,12 @@ export function RedeemCodeDialog({ open, onOpenChange, onRedeemed }: RedeemCodeD
     setSubmitting(true);
     setError(null);
     try {
-      const access = await redeemAccessCode(code, uuid, username);
+      const access = await joinWithCode(code, uuid, username);
       if (!access) {
         setError("Código no válido.");
         return;
       }
-      // The code carries the repo (and its read token, if private) — adding it
-      // as a source is what makes the catalog read that repo at all.
-      addGrantedSource({ repoUrl: access.repoUrl, readToken: access.readToken, codes: [normalizeCode(code)] });
-      const { modpackId, repoUrl } = access;
       toast.success("Instancia online añadida.");
-      // Fire-and-forget — by the time the player finds the pack in the
-      // carousel and hits "Instalar", the manifest is (usually) already
-      // sitting in the cache, so that first click skips straight to
-      // downloading files instead of waiting on this fetch too.
-      fetchSnapshot(repoUrl, modpackId, getReadToken(repoUrl))
-        .then((manifest) => manifest && cacheSnapshot(modpackId, manifest))
-        .catch(() => {});
       onRedeemed();
       onOpenChange(false);
       reset();

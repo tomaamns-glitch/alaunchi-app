@@ -19,6 +19,8 @@ import { getMySource, repoKey, sameRepo } from "@/lib/sources";
 import { OFFLINE_REASON_LABEL } from "@/lib/online-history";
 import { installOnlineInstance } from "@/lib/install-online-instance";
 import { RedeemCodeDialog } from "@/components/redeem-code-dialog";
+import { InstanceLogo } from "@/components/invite-bubbles";
+import { useInvites } from "@/hooks/use-invites";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { Modpack } from "@/services/github";
@@ -48,6 +50,8 @@ export function OnlineInstancesPanel({ onNavigate }: { onNavigate: (path: string
   const [tab, setTab] = useState<Tab>("online");
   const [redeemOpen, setRedeemOpen] = useState(false);
   const [leaving, setLeaving] = useState<Modpack | null>(null);
+  const invites = Object.values(useInvites((s) => s.invites)).sort((a, b) => (b.sentAt || 0) - (a.sentAt || 0));
+  const inviteBusy = useInvites((s) => s.busyKey);
 
   // Nothing loaded yet and nobody tried (e.g. opened from the Hub) — load once.
   useEffect(() => {
@@ -127,6 +131,43 @@ export function OnlineInstancesPanel({ onNavigate }: { onNavigate: (path: string
       <div className="flex-1 min-h-0 overflow-y-auto py-2 space-y-3">
         {tab === "online" ? (
           <>
+            {invites.length > 0 && (
+              <section className="space-y-1.5">
+                <h3 className="px-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                  Invitaciones ({invites.length})
+                </h3>
+                {invites.map((inv) => (
+                  <div key={inv.key} className="flex items-center gap-2.5 rounded-lg border border-accent/30 bg-accent/[0.06] px-2.5 py-2">
+                    <InstanceLogo invite={inv} className="h-9 w-9 rounded-md shrink-0" />
+                    <p className="min-w-0 flex-1 text-xs text-gray-300 leading-snug">
+                      <span className="font-semibold text-white">{inv.fromUsername}</span> te invita a{" "}
+                      <span className="font-bold" style={{ color: inv.color || "hsl(205 90% 55%)" }}>
+                        {inv.modpackName}
+                      </span>
+                    </p>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-[11px] border-white/15"
+                        disabled={inviteBusy === inv.key}
+                        onClick={() => useInvites.getState().reject(inv.key)}
+                      >
+                        Rechazar
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="h-7 px-2 text-[11px]"
+                        disabled={inviteBusy === inv.key}
+                        onClick={() => useInvites.getState().accept(inv.key)}
+                      >
+                        {inviteBusy === inv.key ? <Loader2 className="h-3 w-3 animate-spin" /> : "Aceptar"}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </section>
+            )}
             {loading && !loaded ? (
               <div className="flex justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-accent" />

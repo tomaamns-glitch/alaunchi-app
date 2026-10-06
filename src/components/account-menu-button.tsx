@@ -12,6 +12,7 @@ import { ProfileMenuPanel } from "@/components/profile-menu-panel";
 import { OnlineInstancesPanel } from "@/components/online-instances-panel";
 import { ServersPanel } from "@/components/servers-panel";
 import { useSavedServers } from "@/lib/saved-servers";
+import { useInvites } from "@/hooks/use-invites";
 import { UserProfileMenuView } from "@/components/user-profile-menu-panel";
 import { useAvatarDecoration } from "@/hooks/use-avatar-decoration";
 import { subscribeIncomingRequests } from "@/services/friends";
@@ -60,6 +61,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
   const openUserProfile = useHeaderOverlay((s) => s.openUserProfile);
   const openChat = useChatHeads((s) => s.openChat);
   const [pendingRequests, setPendingRequests] = useState(0);
+  const inviteCount = useInvites((s) => Object.keys(s.invites).length);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const [buttonSize, setButtonSize] = useState({ w: 160, h: 38 });
   const [previewSlot, setPreviewSlot] = useState<HTMLDivElement | null>(null);
@@ -145,7 +147,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   <div className="flex-1 flex flex-col gap-1.5 pt-1">
                     <MenuTile icon={User} label="Perfil" onClick={() => setProfileView("profile")} />
                     <MenuTile icon={Users} label="Amigos" badge={pendingRequests} onClick={() => setProfileView("friends")} />
-                    <MenuTile icon={Globe} label="Instancias online" onClick={() => setProfileView("online")} />
+                    <MenuTile icon={Globe} label="Instancias online" badge={inviteCount} onClick={() => setProfileView("online")} />
                     <MenuTile icon={Server} label="Servers" onClick={() => setProfileView("servers")} />
                     <MenuTile icon={Settings} label="Configuración" onClick={() => go("/settings")} />
                   </div>
