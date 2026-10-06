@@ -978,7 +978,29 @@ app.whenReady().then(async () => {
     const busy = runningInstances.size > 0 || activeModpackOps.size > 0;
     if (!windowHidden || busy) return;
     console.info("[AutoUpdate] Launcher inactivo en la bandeja — instalando la actualización.");
+    installNow();
+  };
+
+  // Hands over to the installer as fast as possible. The NSIS installer looks
+  // for running ALaunchi.exe processes before touching any file, and every one
+  // still alive (main, GPU, renderers) costs it 1–3 s of "wait, then taskkill"
+  // — time in which nothing is on screen. So: start the installer, then drop
+  // the tray and every window right away instead of waiting for the normal
+  // quit sequence, and force the exit if anything still lingers.
+  let installStarted = false;
+  const installNow = () => {
+    if (installStarted) return;
+    installStarted = true;
+    isQuitting = true;
     autoUpdater.quitAndInstall(true, true);
+    try {
+      tray?.destroy();
+      tray = null;
+    } catch {}
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.destroy();
+    }
+    setTimeout(() => app.exit(0), 1500).unref?.();
   };
 
   autoUpdater.logger = console;
@@ -1006,7 +1028,10 @@ app.whenReady().then(async () => {
     updateDownloaded = true;
     try { fsSync.writeFileSync(UPDATE_READY_FLAG, String(Date.now())); } catch {}
     if (!launched) {
-      autoUpdater.quitAndInstall(true, true);
+      // A moment for the splash to say it's installing (and that the
+      // launcher reopens by itself) before the window goes away.
+      sendSplashState({ state: "installing" });
+      setTimeout(installNow, 900);
     } else {
       // Downloaded in the background while the launcher is already open — the
       // player may be mid-session, so don't yank it out from under them. Install
