@@ -51,6 +51,7 @@ export function InstanceProgressChip({
   installed,
   online,
   size = 34,
+  radius,
   className,
 }: {
   entry: InstanceProgress | undefined;
@@ -60,6 +61,8 @@ export function InstanceProgressChip({
   /** Online instance (from a creator's repo): shows the download/update percentage. */
   online: boolean;
   size?: number;
+  /** Corner radius in px (by default, proportional to the size). */
+  radius?: number;
   className?: string;
 }) {
   const d = describe(entry, runState, installed, online);
@@ -75,7 +78,7 @@ export function InstanceProgressChip({
       startedAt={entry?.startedAt}
       showTimer={false}
       size={size}
-      radius={Math.round(size * 0.28)}
+      radius={radius ?? Math.round(size * 0.28)}
       color="hsl(var(--foreground))"
       surfaceColor="hsl(var(--card))"
       progressColor="hsl(var(--accent))"

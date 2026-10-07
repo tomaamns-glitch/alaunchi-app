@@ -375,12 +375,13 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
             installed={!!pack.installed && status !== "installing"}
             online={pack.source !== "custom"}
             size={56}
+            radius={8}
             className="text-base"
           />
         ) : (
         <Button
           data-testid={pack.installed ? `button-play-${pack.id}` : `button-install-${pack.id}`}
-          className={`w-full font-bold h-14 text-base tracking-wide transition-all border-transparent focus-visible:ring-0 focus-visible:ring-offset-0 ${
+          className={`w-full rounded-lg font-bold h-14 text-base tracking-wide transition-all border-transparent focus-visible:ring-0 focus-visible:ring-offset-0 ${
             isRunning
               ? "bg-red-600 hover:bg-red-500 text-white shadow-[0_0_15px_rgba(220,38,38,0.25)]"
               : pack.installed
