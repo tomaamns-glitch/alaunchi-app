@@ -49,6 +49,8 @@ import {
   stopInstance,
   useInstanceRunState,
 } from "@/hooks/use-instance-run-state";
+import { useInstanceProgress } from "@/hooks/use-instance-progress";
+import { InstanceProgressChip } from "@/components/instance-progress-chip";
 
 const api = (window as any).electronAPI;
 
@@ -105,6 +107,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   // manager...): busy while any of them is launching it, "Cerrar" once its
   // Minecraft window is open.
   const runState = useInstanceRunState(pack.id);
+  const chip = useInstanceProgress(pack.id);
 
   // Update announcement — shown once per arrival at this pack in the carousel
   // (this component remounts fresh each time via `key={currentPack.id}` below,
@@ -343,6 +346,9 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   // Busy because of something this bar isn't driving itself (another button
   // launched it, the game window is still opening, or it's closing).
   const isBusyElsewhere = !isActing && isRunStateBusy(runState);
+  // Downloading / updating / opening: the Call Chip takes the button's place
+  // (and stays a moment after, with the check or the error).
+  const showChip = isActing || isBusyElsewhere || chip.active;
 
   // One continuous line per side, from the button's top-center, around its
   // border to a bottom corner, then straight out to that side's screen edge.
@@ -361,6 +367,17 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   return (
     <div className="relative w-64">
       <div ref={btnWrapRef}>
+        {showChip ? (
+          <InstanceProgressChip
+            entry={chip.entry}
+            runState={chip.runState}
+            status={chip.status}
+            installed={!!pack.installed && status !== "installing"}
+            online={pack.source !== "custom"}
+            size={56}
+            className="text-base"
+          />
+        ) : (
         <Button
           data-testid={pack.installed ? `button-play-${pack.id}` : `button-install-${pack.id}`}
           className={`w-full font-bold h-14 text-base tracking-wide transition-all border-transparent focus-visible:ring-0 focus-visible:ring-offset-0 ${
@@ -391,9 +408,10 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
             </>
           )}
         </Button>
+        )}
       </div>
 
-      {!isActing && runState === "idle" && pack.installed && pack.updateAvailable && (
+      {!showChip && runState === "idle" && pack.installed && pack.updateAvailable && (
         <Button
           variant="ghost"
           size="sm"

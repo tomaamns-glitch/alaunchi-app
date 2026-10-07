@@ -4,6 +4,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { InstanceSettingsDialog } from "@/components/instance-settings-dialog";
+import { InstanceProgressChip } from "@/components/instance-progress-chip";
+import { useInstanceProgress } from "@/hooks/use-instance-progress";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -204,6 +206,7 @@ export default function ModpackDetail() {
     pastModpacks.find((p) => p.id === id && p.installed);
   const { busy: playBusy, running: playRunning, runState: playRunState, toggle: playToggle } = useLaunchModpack(pack);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const playProgress = useInstanceProgress(pack?.id);
   useDynamicAccent(pack?.bannerUrl || pack?.imageUrl);
 
   const [loading, setLoading] = useState(false);
@@ -1427,6 +1430,17 @@ export default function ModpackDetail() {
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <div className="flex flex-col items-center gap-1 shrink-0">
+                  {playProgress.active ? (
+                    <InstanceProgressChip
+                      entry={playProgress.entry}
+                      runState={playProgress.runState}
+                      status={playProgress.status}
+                      installed={!!pack.installed}
+                      online={pack.source !== "custom"}
+                      size={36}
+                      className="w-60"
+                    />
+                  ) : (
                   <Button
                     onClick={playToggle}
                     disabled={playBusy}
@@ -1451,6 +1465,7 @@ export default function ModpackDetail() {
                           ? "ACTUALIZAR Y JUGAR"
                           : "JUGAR"}
                   </Button>
+                  )}
                   {totalPlaytimeMs > 0 && (
                     <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                       {formatPlaytime(totalPlaytimeMs)}

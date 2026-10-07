@@ -4,6 +4,8 @@ import { Boxes, Clock, Download, Gamepad2, Heart, Home as HomeIcon, Loader2, Loc
 import { useAuth } from "@/hooks/use-auth";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
+import { useInstanceProgress } from "@/hooks/use-instance-progress";
+import { InstanceProgressChip } from "@/components/instance-progress-chip";
 import { runStateBusyLabel } from "@/hooks/use-instance-run-state";
 import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
 import { ProfileFrame } from "@/components/profile-frame";
@@ -47,6 +49,7 @@ const tabTrigger =
  *  yet, that's the "instalar desde el perfil de otro" piece for later. */
 function OwnedOnlineCard({ pack, onOpen }: { pack: Modpack; onOpen: () => void }) {
   const { busy, running, runState, toggle } = useLaunchModpack(pack);
+  const progress = useInstanceProgress(pack.id);
   const cover = pack.bannerUrl || pack.imageUrl;
   return (
     <div className="rounded-xl border border-white/10 bg-card/40 overflow-hidden hover:border-accent/40 transition-colors">
@@ -67,6 +70,17 @@ function OwnedOnlineCard({ pack, onOpen }: { pack: Modpack; onOpen: () => void }
         </div>
       </button>
       <div className="px-4 pb-4">
+        {progress.active ? (
+          <InstanceProgressChip
+            entry={progress.entry}
+            runState={progress.runState}
+            status={progress.status}
+            installed={!!pack.installed}
+            online={pack.source !== "custom"}
+            size={32}
+            className="rounded-full"
+          />
+        ) : (
         <Button
           size="sm"
           variant={running ? "destructive" : "default"}
@@ -83,6 +97,7 @@ function OwnedOnlineCard({ pack, onOpen }: { pack: Modpack; onOpen: () => void }
           )}
           {busy ? runStateBusyLabel(runState) : running ? "CERRAR" : "JUGAR"}
         </Button>
+        )}
       </div>
     </div>
   );
