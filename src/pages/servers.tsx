@@ -39,10 +39,10 @@ import {
   type ServerFileEntry,
 } from "@/services/servers";
 import { NewServerDialog } from "@/components/new-server-dialog";
+import { ConfigEditorDialog } from "@/components/config-editor-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -287,11 +287,11 @@ export default function Servers() {
     }
   };
 
-  const handleSaveFile = async () => {
+  const handleSaveFile = async (content: string) => {
     if (!connectedId || !editingFile) return;
     setEditingFileSaving(true);
     try {
-      await writeServerTextFile(connectedId, editingFile.path, editingFile.content);
+      await writeServerTextFile(connectedId, editingFile.path, content);
       toast.success("Archivo guardado.");
       setEditingFile(null);
     } catch (e: any) {
@@ -584,34 +584,14 @@ export default function Servers() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={!!editingFile} onOpenChange={(open) => !open && setEditingFile(null)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="font-mono text-sm">{editingFile?.path}</DialogTitle>
-          </DialogHeader>
-          {editingFileLoading ? (
-            <div className="flex items-center justify-center py-16">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : (
-            <Textarea
-              value={editingFile?.content ?? ""}
-              onChange={(e) => setEditingFile((f) => (f ? { ...f, content: e.target.value } : f))}
-              className="font-mono text-xs min-h-[24rem] resize-none"
-              spellCheck={false}
-            />
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditingFile(null)}>
-              Cancelar
-            </Button>
-            <Button onClick={handleSaveFile} disabled={editingFileLoading || editingFileSaving}>
-              {editingFileSaving && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-              Guardar
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfigEditorDialog
+        path={editingFile?.path ?? null}
+        content={editingFile?.content ?? ""}
+        loading={editingFileLoading}
+        saving={editingFileSaving}
+        onSave={handleSaveFile}
+        onClose={() => setEditingFile(null)}
+      />
     </div>
   );
 }

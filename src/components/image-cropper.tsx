@@ -9,8 +9,10 @@ interface CropperProps {
   src: string;
   /** width / height of the crop frame (and of the exported image). */
   aspect: number;
-  /** Longest edge of the exported JPEG. */
+  /** Longest edge of the exported image. */
   exportWidth?: number;
+  /** PNG keeps transparency (icons); JPEG is lighter (banners, photos). */
+  format?: "jpeg" | "png";
   onCancel: () => void;
   onApply: (dataUrl: string) => void;
   applying?: boolean;
@@ -18,7 +20,7 @@ interface CropperProps {
 
 /** Drag to reposition, slider to zoom — a WYSIWYG crop into a fixed aspect, so a
  *  square photo dropped onto a wide banner shows exactly the slice you chose. */
-function Cropper({ src, aspect, exportWidth = 1600, onCancel, onApply, applying }: CropperProps) {
+function Cropper({ src, aspect, exportWidth = 1600, format = "jpeg", onCancel, onApply, applying }: CropperProps) {
   const frameRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [frame, setFrame] = useState({ w: 0, h: 0 });
@@ -93,7 +95,7 @@ function Cropper({ src, aspect, exportWidth = 1600, onCancel, onApply, applying 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-    onApply(canvas.toDataURL("image/jpeg", 0.85));
+    onApply(format === "png" ? canvas.toDataURL("image/png") : canvas.toDataURL("image/jpeg", 0.85));
   };
 
   return (
@@ -151,22 +153,27 @@ interface BannerCropDialogProps {
   /** null = closed. */
   src: string | null;
   aspect: number;
+  title?: string;
+  exportWidth?: number;
+  format?: "jpeg" | "png";
   applying?: boolean;
   onOpenChange: (open: boolean) => void;
   onApply: (dataUrl: string) => void;
 }
 
-export function BannerCropDialog({ src, aspect, applying, onOpenChange, onApply }: BannerCropDialogProps) {
+export function BannerCropDialog({ src, aspect, title = "Encuadrar el banner", exportWidth, format, applying, onOpenChange, onApply }: BannerCropDialogProps) {
   return (
     <Dialog open={!!src} onOpenChange={(o) => !o && onOpenChange(false)}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Encuadrar el banner</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
         {src && (
           <Cropper
             src={src}
             aspect={aspect}
+            exportWidth={exportWidth}
+            format={format}
             applying={applying}
             onCancel={() => onOpenChange(false)}
             onApply={onApply}

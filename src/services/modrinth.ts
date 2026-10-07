@@ -438,3 +438,119 @@ export async function fetchCategoryTags(category: "mods" | "shaderpacks" | "reso
     return [];
   }
 }
+
+// ─── Public modpacks (Hub → Modrinth) ─────────────────────────────────────────
+
+export interface ModpackHit {
+  projectId: string;
+  slug: string;
+  title: string;
+  description: string;
+  author: string;
+  iconUrl: string | null;
+  downloads: number;
+  follows: number;
+  /** Genre categories only (no loaders). */
+  categories: string[];
+  /** Loaders it supports, from its categories (fabric, forge, neoforge, quilt…). */
+  loaders: string[];
+  gameVersions: string[];
+  gallery: string[];
+  dateModified: string;
+}
+
+export interface ModpackSearch {
+  query: string;
+  /** Genre categories — all must match. */
+  categories: string[];
+  loader: "fabric" | "forge" | "neoforge" | null;
+  gameVersion: string | null;
+  sort: ModrinthSort | "updated";
+  offset: number;
+}
+
+const LOADER_TAGS = new Set(["fabric", "forge", "neoforge", "quilt"]);
+
+export async function searchModpacks(s: ModpackSearch): Promise<{ hits: ModpackHit[]; total: number }> {
+  try {
+    const facets: string[][] = [["project_type:modpack"]];
+    for (const c of s.categories) facets.push([`categories:${c}`]);
+    if (s.loader) facets.push([`categories:${s.loader}`]);
+    if (s.gameVersion) facets.push([`versions:${s.gameVersion}`]);
+    const params = new URLSearchParams({
+      query: s.query,
+      facets: JSON.stringify(facets),
+      index: s.sort,
+      offset: String(s.offset),
+      limit: String(SEARCH_PAGE_SIZE),
+    });
+    const res = await fetch(`${API}/search?${params}`);
+    if (!res.ok) return { hits: [], total: 0 };
+    const data = await res.json();
+    return {
+      total: data.total_hits ?? 0,
+      hits: (data.hits ?? []).map((h: any) => ({
+        projectId: h.project_id,
+        slug: h.slug,
+        title: h.title,
+        description: h.description,
+        author: h.author,
+        iconUrl: h.icon_url || null,
+        downloads: h.downloads ?? 0,
+        follows: h.follows ?? 0,
+        categories: (h.display_categories ?? h.categories ?? []).filter((c: string) => !LOADER_TAGS.has(c)),
+        loaders: (h.categories ?? []).filter((c: string) => LOADER_TAGS.has(c)),
+        gameVersions: h.versions ?? [],
+        gallery: h.gallery ?? [],
+        dateModified: h.date_modified,
+      })),
+    };
+  } catch {
+    return { hits: [], total: 0 };
+  }
+}
+
+export interface ModpackVersion {
+  versionId: string;
+  versionNumber: string;
+  name: string;
+  versionType: "release" | "beta" | "alpha";
+  gameVersions: string[];
+  loaders: string[];
+  datePublished: string;
+  downloads: number;
+  /** The .mrpack. */
+  url: string;
+  sha1: string;
+  size: number;
+}
+
+/** Every version of a modpack that ships an .mrpack, newest first. */
+export async function listModpackVersions(projectId: string): Promise<ModpackVersion[]> {
+  try {
+    const res = await fetch(`${API}/project/${projectId}/version`);
+    if (!res.ok) return [];
+    const versions: any[] = await res.json();
+    return versions
+      .map((v) => {
+        const file = (v.files ?? []).find((f: any) => f.filename?.endsWith(".mrpack") && f.primary) ?? (v.files ?? []).find((f: any) => f.filename?.endsWith(".mrpack"));
+        if (!file) return null;
+        return {
+          versionId: v.id,
+          versionNumber: v.version_number,
+          name: v.name,
+          versionType: v.version_type,
+          gameVersions: v.game_versions ?? [],
+          loaders: v.loaders ?? [],
+          datePublished: v.date_published,
+          downloads: v.downloads ?? 0,
+          url: file.url,
+          sha1: file.hashes?.sha1 ?? "",
+          size: file.size ?? 0,
+        } as ModpackVersion;
+      })
+      .filter((v): v is ModpackVersion => v !== null);
+  } catch {
+    return [];
+  }
+}

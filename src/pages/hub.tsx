@@ -15,6 +15,11 @@ import { NewFolderDialog } from "@/components/new-folder-dialog";
 import { HubSidebar, type HubView } from "@/components/hub-sidebar";
 import { InstanceTile } from "@/components/hub-tile";
 import { Button } from "@/components/ui/button";
+import SwellLight from "@/components/swell-light";
+import { CurseForgeImportDialog, CurseForgeLogo } from "@/components/curseforge-import-dialog";
+import { ModrinthModpacksDialog } from "@/components/modrinth-modpacks-dialog";
+import { ModrinthGlyph } from "@/components/admin-modrinth-browser";
+import { useTheme } from "@/lib/theme";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
@@ -27,6 +32,9 @@ const TILE_MIN = 140;
 const TILE_MAX = 340;
 
 export default function Hub() {
+  const theme = useTheme((s) => s.theme);
+  const [curseForgeOpen, setCurseForgeOpen] = useState(false);
+  const [modrinthOpen, setModrinthOpen] = useState(false);
   const { isAuthenticated, username, uuid } = useAuth();
   const [, setLocation] = useLocation();
   const { instances, loadInstances } = useCustomInstances();
@@ -146,16 +154,27 @@ export default function Hub() {
 
   return (
     <div className="relative h-full overflow-hidden bg-background text-foreground flex flex-col">
-      {/* Background glow: a soft blue light drifting around the whole window,
-          under every card (z-0) — the footer's backdrop-blur softens it further
-          when it passes behind. Pure CSS (index.css), stops with reduced motion. */}
-      <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden" aria-hidden>
-        <div className="hub-glow hub-glow-main">
-          <div className="hub-glow-shape" />
-        </div>
-        <div className="hub-glow hub-glow-trail">
-          <div className="hub-glow-shape" />
-        </div>
+      {/* Animated background: soft blue light rolling across the window, with
+          a glowing trail behind the cursor (components/swell-light.tsx), under
+          every card (z-0). Colors follow the theme — on a light background the
+          light needs a darker blue and dark (not white) highlights to show. */}
+      <div
+        className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
+        style={{ opacity: theme === "light" ? 0.6 : 0.9 }}
+        aria-hidden
+      >
+        <SwellLight
+          key={theme}
+          color={theme === "light" ? "hsl(208 92% 44%)" : "#259DF4"}
+          glintColor={theme === "light" ? "#0b2f5c" : "#7fc4ff"}
+          // Mostly dark: only the crests of the swell light up, highlights
+          // stay faint, and the cursor leaves a small, short trail.
+          contrast={2.2}
+          glint={0.3}
+          cursorSize={18}
+          cursorStrength={0.6}
+          trail={0.9}
+        />
       </div>
       <div className="relative z-10 flex-1 flex flex-col min-h-0 px-6 pt-6 pb-4 gap-6">
         {/* Same floating glass-card treatment as the Perfil header — rounded-xl,
@@ -225,6 +244,24 @@ export default function Hub() {
                 </Popover>
               )}
 
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-white/10"
+                onClick={() => setModrinthOpen(true)}
+                title="Descargar modpacks públicos de Modrinth"
+              >
+                <ModrinthGlyph className="mr-1.5 h-4 w-4 text-[#1bd96a]" /> Modrinth
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-white/10"
+                onClick={() => setCurseForgeOpen(true)}
+                title="Importar instancias de CurseForge"
+              >
+                <CurseForgeLogo className="mr-1.5 h-4 w-4 text-[#F16436]" /> CurseForge
+              </Button>
               <Button size="sm" onClick={() => setDialogOpen(true)}>
                 <Plus className="mr-1.5 h-3.5 w-3.5" /> Nueva instancia
               </Button>
@@ -277,6 +314,12 @@ export default function Hub() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         onCreated={(id) => setLocation(`/modpack/${id}`)}
+      />
+      <CurseForgeImportDialog open={curseForgeOpen} onOpenChange={setCurseForgeOpen} />
+      <ModrinthModpacksDialog
+        open={modrinthOpen}
+        onOpenChange={setModrinthOpen}
+        onOpenInstance={(id) => setLocation(`/modpack/${id}`)}
       />
       <NewFolderDialog open={newFolderOpen} onOpenChange={setNewFolderOpen} onCreate={createFolder} />
 

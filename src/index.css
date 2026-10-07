@@ -339,73 +339,6 @@
     inset: -1px;
   }
 }
-/* Hub (Mis instancias) background glow — see pages/hub.tsx. The outer
-   element only travels (transform: translate, cheap to animate) through
-   waypoints spread over the whole window; the inner shape morphs (uneven
-   border-radius), stretches and turns on its own, slower cycles so the blob
-   never repeats the same silhouette at the same spot. The trail follows the
-   same path slightly behind. */
-.hub-glow {
-  position: absolute;
-  top: 0;
-  left: 0;
-  will-change: transform;
-}
-.hub-glow-shape {
-  width: 100%;
-  height: 100%;
-  will-change: transform, border-radius;
-  animation: hub-glow-morph 17s ease-in-out infinite alternate;
-}
-.hub-glow-main {
-  width: 380px;
-  height: 300px;
-  margin: -150px 0 0 -190px;
-  animation: hub-glow-wander 38s ease-in-out infinite;
-}
-.hub-glow-main .hub-glow-shape {
-  background: radial-gradient(ellipse at 45% 55%, hsl(210 95% 58% / 0.34), hsl(210 95% 58% / 0.17) 55%, hsl(210 95% 58% / 0.05) 92%);
-  filter: blur(32px);
-}
-.hub-glow-trail {
-  width: 220px;
-  height: 180px;
-  margin: -90px 0 0 -110px;
-  animation: hub-glow-wander 38s ease-in-out infinite;
-  animation-delay: -1.2s;
-}
-.hub-glow-trail .hub-glow-shape {
-  background: radial-gradient(ellipse at 55% 45%, hsl(195 95% 62% / 0.24), hsl(195 95% 62% / 0.1) 60%, hsl(195 95% 62% / 0.03) 92%);
-  filter: blur(26px);
-  animation-duration: 11s;
-  animation-direction: alternate-reverse;
-}
-@keyframes hub-glow-morph {
-  0%   { border-radius: 62% 38% 46% 54% / 48% 62% 38% 52%; transform: rotate(0deg) scale(1.1, 0.85); }
-  25%  { border-radius: 38% 62% 58% 42% / 62% 35% 65% 38%; transform: rotate(50deg) scale(0.85, 1.15); }
-  50%  { border-radius: 50% 50% 34% 66% / 36% 58% 42% 64%; transform: rotate(110deg) scale(1.25, 0.8); }
-  75%  { border-radius: 70% 30% 52% 48% / 55% 45% 55% 45%; transform: rotate(160deg) scale(0.9, 1.05); }
-  100% { border-radius: 42% 58% 70% 30% / 40% 66% 34% 60%; transform: rotate(220deg) scale(1.15, 0.9); }
-}
-@keyframes hub-glow-wander {
-  0%   { transform: translate(12vw, 18vh); }
-  14%  { transform: translate(48vw, 8vh); }
-  28%  { transform: translate(86vw, 24vh); }
-  42%  { transform: translate(72vw, 62vh); }
-  56%  { transform: translate(40vw, 84vh); }
-  70%  { transform: translate(10vw, 70vh); }
-  85%  { transform: translate(28vw, 42vh); }
-  100% { transform: translate(12vw, 18vh); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .hub-glow,
-  .hub-glow-shape {
-    animation: none;
-  }
-  .hub-glow {
-    transform: translate(70vw, 20vh);
-  }
-}
 
 /* ─── LIGHT THEME ─────────────────────────────────────────────────────────────
    Ajustes → Personalización (src/lib/theme.ts sets data-theme="light" on <html>).
@@ -495,7 +428,3 @@
   --tw-prose-td-borders: #e5e7eb;
 }
 
-/* The Hub's drifting light reads stronger on a light background. */
-:root[data-theme="light"] .hub-glow-shape {
-  opacity: 0.8;
-}
