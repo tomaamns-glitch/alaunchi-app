@@ -1,6 +1,6 @@
 {
   "name": "alaunchi",
-  "version": "1.9.13",
+  "version": "1.9.14",
   "description": "ALaunchi - Minecraft Modpack Launcher",
   "private": true,
   "type": "module",
@@ -8,7 +8,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "electron:dev": "concurrently -k --names \"VITE,ELECTRON\" -c \"cyan,yellow\" \"vite\" \"wait-on http://127.0.0.1:5173 && cross-env NODE_ENV=development electron .\"",
-    "build": "vite build",
+    "build:splash": "esbuild scripts/splash/entry.js --bundle --minify --format=iife --target=chrome120 --legal-comments=inline --loader:.png=dataurl --outfile=electron/splash-effects.js",
+    "build": "npm run build:splash && vite build",
     "dist": "npm run build && electron-builder --win",
     "release": "npm run build && electron-builder --win --publish always"
   },

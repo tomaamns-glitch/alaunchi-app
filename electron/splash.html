@@ -24,6 +24,49 @@
     box-sizing: border-box;
     padding: 40px 0 36px;
   }
+  /* Gradient waves behind everything (splash-effects.js). */
+  #waves {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    pointer-events: none;
+  }
+  .brand, .spinner, .status {
+    position: relative;
+    z-index: 1;
+  }
+  .status-percent {
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9), 0 0 2px rgba(0, 0, 0, 0.9);
+  }
+  /* Shimmer sweeping across the status text, from React Bits' Thought Line
+     (reactbits.dev/micro/thought-line, MIT + Commons Clause). The text is
+     transparent, so the shadow goes on as a filter instead of text-shadow. */
+  .status-text {
+    background: linear-gradient(
+      100deg,
+      rgba(255, 255, 255, 0.6) 36%,
+      #bfe3ff 46%,
+      #ffffff 50%,
+      #bfe3ff 54%,
+      rgba(255, 255, 255, 0.6) 64%
+    );
+    /* Each loop moves the gradient exactly one tile (250% wide → -166.67%
+       position), so the next copy picks up where this one left: no jump. */
+    background-size: 250% 100%;
+    background-repeat: repeat-x;
+    background-position: 0 0;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.95)) drop-shadow(0 0 6px rgba(0, 0, 0, 0.6));
+    animation: shimmer 2.4s ease-in-out infinite;
+  }
+  @keyframes shimmer {
+    to { background-position: -166.667% 0; }
+  }
   .brand {
     display: flex;
     flex-direction: column;
@@ -36,6 +79,22 @@
     object-fit: contain;
     filter: drop-shadow(0 6px 18px rgba(20, 120, 255, 0.35));
   }
+  /* Logo drawn as electric lines (splash-effects.js): arch and door traced
+     separately so each keeps its color. The box is bigger than the logo so the
+     glow isn't clipped; the margins give that space back to the layout. */
+  .logo-electric {
+    position: relative;
+    width: 150px;
+    height: 150px;
+    margin: -27px 0;
+  }
+  .logo-electric > div {
+    position: absolute;
+    inset: 0;
+  }
+  .logo-electric > .door {
+    pointer-events: none;
+  }
   .wordmark {
     font-size: 44px;
     font-weight: 700;
@@ -44,9 +103,21 @@
   .wordmark .al {
     color: hsl(205 90% 55%);
   }
+  /* Loading indicator: the crystal ball (splash-ball.js), or the old ring if
+     WebGL2 isn't there. */
   .spinner {
+    width: 150px;
+    height: 150px;
+    margin: -40px 0 -36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .spinner.fallback::after {
+    content: "";
     width: 52px;
     height: 52px;
+    box-sizing: border-box;
     border-radius: 50%;
     border: 4px solid rgba(255, 255, 255, 0.08);
     border-top-color: hsl(205 90% 55%);
@@ -60,47 +131,104 @@
     flex-direction: column;
     align-items: center;
     gap: 6px;
+    margin-top: -18px;
   }
   .status-text {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 14.5px;
+    font-weight: 800;
     letter-spacing: 0.02em;
-    color: rgba(255, 255, 255, 0.75);
   }
   .status-percent {
+    transition: color 1.4s ease;
     font-size: 11px;
     font-variant-numeric: tabular-nums;
     color: hsl(205 90% 55%);
     min-height: 14px;
   }
+  .updating .status-percent {
+    color: hsl(25 95% 58%);
+  }
 </style>
 </head>
 <body>
+  <div id="waves"></div>
   <div class="brand">
-    <img src="splash-logo.png" alt="" draggable="false" />
+    <div class="logo-electric" id="logo"><div class="arch"></div><div class="door"></div></div>
     <div class="wordmark"><span class="al">AL</span>aunchi</div>
   </div>
-  <div class="spinner"></div>
+  <div class="spinner" id="ball"></div>
   <div class="status">
-    <div class="status-text" id="statusText">Cargando...</div>
+    <div class="status-text" id="statusText">Cargando</div>
     <div class="status-percent" id="statusPercent"></div>
   </div>
 
+  <script src="splash-effects.js"></script>
+  <script>
+    // Background. If WebGL2 isn't there the splash keeps its plain background.
+    try {
+      window.mountGradientWaves?.(document.getElementById("waves"), {
+        horizonColor: "#0A3AD6",
+        waveColor: "#1F7DFF",
+        crestColor: "#8FD0FF",
+        brightness: 1,
+        mouseInteraction: true,
+      });
+    } catch (e) {
+      console.error("[splash] waves:", e);
+    }
+
+    // Logo as electric lines; the plain image if WebGL2 isn't there.
+    (function electricLogo() {
+      const logo = document.getElementById("logo");
+      const common = { scale: 0.68, fitImage: true, thickness: 1.3, strands: 3, crackle: 1.2, bend: 0.5, glow: 0.8, intensity: 1, speed: 2 };
+      let ok = false;
+      try {
+        if (window.mountElectricLogo) {
+          ok = !!window.mountElectricLogo(logo.querySelector(".arch"), { ...common, src: window.splashLogoMasks.arch, color: "#c4e4ff", glowColor: "#2f8cff" });
+          if (ok) window.mountElectricLogo(logo.querySelector(".door"), { ...common, src: window.splashLogoMasks.door, color: "#ffe3a8", glowColor: "#ff8a1a", arcs: 0.6 });
+        }
+      } catch (e) {
+        console.error("[splash] electric logo:", e);
+      }
+      if (!ok) logo.outerHTML = '<img src="splash-logo.png" alt="" draggable="false" />';
+    })();
+
+    // Blue while loading, fades to orange while an update downloads/installs.
+    const BALL_BLUE = "#3D9BFF";
+    const BALL_ORANGE = "#FF8A2A";
+    let ball = null;
+    (function crystalBall() {
+      const el = document.getElementById("ball");
+      let ok = false;
+      try {
+        if (window.mountCrystalizedBall) {
+          ball = window.mountCrystalizedBall(el, { preset: "abyss", color: BALL_BLUE, size: 0.6, particleCount: 3500, interactive: true });
+          ok = !!el.querySelector("canvas");
+        }
+      } catch (e) {
+        console.error("[splash] crystal ball:", e);
+      }
+      if (!ok) el.classList.add("fallback");
+    })();
+  </script>
   <script>
     const statusText = document.getElementById("statusText");
     const statusPercent = document.getElementById("statusPercent");
 
     window.splashAPI?.onState((data) => {
+      const updating = data.state === "updating" || data.state === "installing";
+      ball?.setColor?.(updating ? BALL_ORANGE : BALL_BLUE, 1.4);
+      document.body.classList.toggle("updating", updating);
       if (data.state === "updating") {
-        statusText.textContent = "Actualizando...";
+        statusText.textContent = "Actualizando";
         statusPercent.textContent = data.percent ? Math.round(data.percent) + "%" : "";
       } else if (data.state === "installing") {
         // The window closes right after this while the installer runs, and the
         // launcher reopens on its own — say so, so the gap isn't a surprise.
-        statusText.textContent = "Instalando actualización...";
+        statusText.textContent = "Instalando actualización";
         statusPercent.textContent = "ALaunchi se abrirá solo en unos segundos";
       } else {
-        statusText.textContent = "Cargando...";
+        statusText.textContent = "Cargando";
         statusPercent.textContent = "";
       }
     });
