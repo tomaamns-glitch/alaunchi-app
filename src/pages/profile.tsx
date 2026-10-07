@@ -21,6 +21,8 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { useInstanceFolders } from "@/hooks/use-instance-folders";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
+import { useInstanceProgress } from "@/hooks/use-instance-progress";
+import { InstanceProgressChip } from "@/components/instance-progress-chip";
 import { runStateBusyLabel } from "@/hooks/use-instance-run-state";
 import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
 import { ProfileFrame } from "@/components/profile-frame";
@@ -67,6 +69,7 @@ const tabTrigger =
 
 function InstanceCard({ pack, onOpen }: { pack: Modpack; onOpen: () => void }) {
   const { busy, running, runState, toggle } = useLaunchModpack(pack);
+  const progress = useInstanceProgress(pack.id);
   const cover = pack.bannerUrl || pack.imageUrl;
 
   return (
@@ -89,6 +92,17 @@ function InstanceCard({ pack, onOpen }: { pack: Modpack; onOpen: () => void }) {
         </div>
       </button>
       <div className="px-4 pb-4">
+        {progress.active ? (
+          <InstanceProgressChip
+            entry={progress.entry}
+            runState={progress.runState}
+            status={progress.status}
+            installed={!!pack.installed}
+            online={pack.source !== "custom"}
+            size={32}
+            className="rounded-full"
+          />
+        ) : (
         <Button
           size="sm"
           variant={running ? "destructive" : "default"}
@@ -105,6 +119,7 @@ function InstanceCard({ pack, onOpen }: { pack: Modpack; onOpen: () => void }) {
           )}
           {busy ? runStateBusyLabel(runState) : running ? "CERRAR" : "JUGAR"}
         </Button>
+        )}
       </div>
     </div>
   );
