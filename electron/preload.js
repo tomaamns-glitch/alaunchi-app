@@ -52,6 +52,21 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Custom (locally-created) instances
   createInstance: (args) => ipcRenderer.invoke("instances:create", args),
+  updateInstanceSettings: (args) => ipcRenderer.invoke("instances:update-settings", args),
+  scanCurseForge: () => ipcRenderer.invoke("curseforge:scan"),
+  chooseCurseForgeFolder: () => ipcRenderer.invoke("curseforge:choose-folder"),
+  importCurseForgeInstance: (args) => ipcRenderer.invoke("curseforge:import", args),
+  installModrinthModpack: (args) => ipcRenderer.invoke("modrinth:install-modpack", args),
+  onModrinthInstallProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("modrinth:install-progress", handler);
+    return () => ipcRenderer.removeListener("modrinth:install-progress", handler);
+  },
+  onCurseForgeImportProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("curseforge:import-progress", handler);
+    return () => ipcRenderer.removeListener("curseforge:import-progress", handler);
+  },
   deleteInstance: (args) => ipcRenderer.invoke("instances:delete", args),
   deleteOnlineInstanceFiles: (args) => ipcRenderer.invoke("instances:delete-online", args),
   listMinecraftVersions: () => ipcRenderer.invoke("versions:list-minecraft"),

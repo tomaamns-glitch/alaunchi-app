@@ -3,6 +3,7 @@ import { useLocation, useParams } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
+import { InstanceSettingsDialog } from "@/components/instance-settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -29,6 +30,7 @@ import {
   Play,
   Heart,
   MoreVertical,
+  Settings2,
   FolderOpen,
   Smile,
   Box,
@@ -201,6 +203,7 @@ export default function ModpackDetail() {
     instances.find((p) => p.id === id) ??
     pastModpacks.find((p) => p.id === id && p.installed);
   const { busy: playBusy, running: playRunning, runState: playRunState, toggle: playToggle } = useLaunchModpack(pack);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   useDynamicAccent(pack?.bannerUrl || pack?.imageUrl);
 
   const [loading, setLoading] = useState(false);
@@ -1393,6 +1396,10 @@ export default function ModpackDetail() {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
+                    <DropdownMenuItem onSelect={() => setTimeout(() => setSettingsOpen(true), 0)}>
+                      <Settings2 className="mr-2 h-4 w-4" />
+                      Configuración
+                    </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={async () => {
                         try {
@@ -2504,6 +2511,7 @@ export default function ModpackDetail() {
           )}
         </DialogContent>
       </Dialog>
+      <InstanceSettingsDialog pack={pack} open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   );
 }

@@ -81,7 +81,8 @@ export function Titlebar() {
           </span>
         </div>
         <div style={noDragStyle} className="flex items-center h-full">
-          {isAdmin && (
+          {/* SERVER: always in dev builds (it's being reworked), creators only in releases. */}
+          {(isAdmin || import.meta.env.DEV) && (
             <>
               <button
                 onClick={() => setLocation("/servers")}
@@ -93,6 +94,10 @@ export function Titlebar() {
                 SERVER
               </button>
               <div className="w-px h-4 bg-white/10" />
+            </>
+          )}
+          {isAdmin && (
+            <>
               <button
                 onClick={() => setLocation("/admin")}
                 className="h-full px-3 flex items-center justify-center text-[10px] font-mono font-bold text-gray-400 hover:bg-white/10 hover:text-white transition-colors"

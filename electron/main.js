@@ -1581,6 +1581,395 @@ ipcMain.handle("instances:create", async (_, { name, loaderType, minecraftVersio
   return meta;
 });
 
+// ─── IMPORTAR DESDE CURSEFORGE ───────────────────────────────────────────────
+// CurseForge keeps each instance in <root>/minecraft/Instances/<folder> with a
+// minecraftinstance.json describing it (game version, exact modloader build,
+// installed addons…) next to the regular game folders. Importing creates an
+// ALaunchi custom instance with the same Minecraft + loader and copies the
+// game folders over; the CurseForge instance itself is never touched.
+
+// baseModLoader.type in minecraftinstance.json.
+const CURSEFORGE_LOADERS = { 1: "forge", 4: "fabric", 5: "quilt", 6: "neoforge" };
+
+// CurseForge's own files and per-session leftovers — not instance content.
+const CURSEFORGE_SKIP = new Set([
+  "minecraftinstance.json",
+  "manifest.json",
+  "modlist.html",
+  ".curseclient",
+  "logs",
+  "crash-reports",
+  "downloads",
+  "usercache.json",
+  "usernamecache.json",
+]);
+
+function defaultCurseForgeInstancesDir() {
+  return path.join(os.homedir(), "curseforge", "minecraft", "Instances");
+}
+
+// Remembered when the user picks a different folder by hand.
+const CURSEFORGE_DIR_FILE = path.join(app.getPath("userData"), "curseforge-dir.json");
+
+async function curseForgeInstancesDir() {
+  try {
+    const saved = JSON.parse(await fs.readFile(CURSEFORGE_DIR_FILE, "utf8"))?.dir;
+    if (saved && fsSync.existsSync(saved)) return saved;
+  } catch {}
+  return defaultCurseForgeInstancesDir();
+}
+
+/** Accepts the CurseForge root, its minecraft/ folder or Instances/ itself. */
+function normalizeCurseForgeDir(dir) {
+  for (const candidate of [dir, path.join(dir, "Instances"), path.join(dir, "minecraft", "Instances")]) {
+    if (fsSync.existsSync(candidate) && path.basename(candidate).toLowerCase() === "instances") return candidate;
+  }
+  return null;
+}
+
+async function readCurseForgeInstance(instancesDir, folder) {
+  const dir = path.join(instancesDir, folder);
+  let info;
+  try {
+    info = JSON.parse((await fs.readFile(path.join(dir, "minecraftinstance.json"), "utf8")).replace(/^﻿/, ""));
+  } catch {
+    return null; // not a CurseForge instance folder
+  }
+  const base = info.baseModLoader || null;
+  const loaderType = base ? CURSEFORGE_LOADERS[base.type] || "unknown" : "vanilla";
+  let unsupported = null;
+  if (loaderType === "quilt") unsupported = "ALaunchi no es compatible con Quilt";
+  else if (loaderType === "unknown") unsupported = "Modloader desconocido";
+  else if (!info.gameVersion) unsupported = "No indica la versión de Minecraft";
+
+  // Instance picture: a custom one if set, else the pack's icon.png.
+  let iconDataUrl = null;
+  for (const candidate of [info.profileImagePath, path.join(dir, "icon.png")]) {
+    if (!candidate || !fsSync.existsSync(candidate)) continue;
+    try {
+      const img = nativeImage.createFromPath(candidate);
+      if (!img.isEmpty()) {
+        iconDataUrl = img.resize({ width: 96, height: 96, quality: "good" }).toDataURL();
+        break;
+      }
+    } catch {}
+  }
+
+  const lastPlayed = Date.parse(info.lastPlayed || "");
+  return {
+    folder,
+    name: (info.name || folder).trim(),
+    minecraftVersion: info.gameVersion || "",
+    loaderType,
+    loaderVersion: base?.forgeVersion || null,
+    addonCount: Array.isArray(info.installedAddons) ? info.installedAddons.length : 0,
+    fromModpack: !!info.installedModpack,
+    lastPlayed: Number.isFinite(lastPlayed) && lastPlayed > 0 ? lastPlayed : null,
+    iconDataUrl,
+    unsupported,
+  };
+}
+
+/** Folders of CurseForge instances already imported (custom instances' meta). */
+async function importedCurseForgeFolders() {
+  const out = new Set();
+  try {
+    for (const entry of await fs.readdir(CUSTOM_INSTANCES_DIR, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const meta = JSON.parse(await fs.readFile(path.join(CUSTOM_INSTANCES_DIR, entry.name, "alaunchi-meta.json"), "utf8"));
+        if (meta.importedFrom?.type === "curseforge" && meta.importedFrom.path) out.add(path.resolve(meta.importedFrom.path).toLowerCase());
+      } catch {}
+    }
+  } catch {}
+  return out;
+}
+
+ipcMain.handle("curseforge:scan", async () => {
+  const instancesDir = await curseForgeInstancesDir();
+  if (!fsSync.existsSync(instancesDir)) return { instancesDir, found: false, instances: [] };
+  const imported = await importedCurseForgeFolders();
+  const folders = (await fs.readdir(instancesDir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+  const instances = (await Promise.all(folders.map((f) => readCurseForgeInstance(instancesDir, f))))
+    .filter(Boolean)
+    .map((inst) => ({ ...inst, alreadyImported: imported.has(path.resolve(instancesDir, inst.folder).toLowerCase()) }))
+    .sort((a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0) || a.name.localeCompare(b.name));
+  return { instancesDir, found: true, instances };
+});
+
+ipcMain.handle("curseforge:choose-folder", async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Carpeta de CurseForge",
+    message: "Elige la carpeta de CurseForge (o su carpeta Instances)",
+    properties: ["openDirectory"],
+  });
+  if (result.canceled || !result.filePaths[0]) return { canceled: true };
+  const instancesDir = normalizeCurseForgeDir(result.filePaths[0]);
+  if (!instancesDir) throw new Error("En esa carpeta no hay ninguna carpeta Instances de CurseForge.");
+  await fs.writeFile(CURSEFORGE_DIR_FILE, JSON.stringify({ dir: instancesDir }));
+  return { canceled: false, instancesDir };
+});
+
+/** Every file under `dir` (relative paths), skipping CURSEFORGE_SKIP at the top level. */
+async function listFilesToCopy(dir, rel = "") {
+  const out = [];
+  for (const entry of await fs.readdir(path.join(dir, rel), { withFileTypes: true })) {
+    if (!rel && CURSEFORGE_SKIP.has(entry.name.toLowerCase())) continue;
+    const child = rel ? path.join(rel, entry.name) : entry.name;
+    if (entry.isDirectory()) out.push(...(await listFilesToCopy(dir, child)));
+    else if (entry.isFile()) out.push(child);
+  }
+  return out;
+}
+
+ipcMain.handle("curseforge:import", async (event, { folder }) => {
+  const instancesDir = await curseForgeInstancesDir();
+  const sourceDir = safeJoin(instancesDir, String(folder || ""));
+  if (path.dirname(sourceDir) !== path.resolve(instancesDir)) throw new Error("Carpeta de instancia no válida.");
+  const info = await readCurseForgeInstance(instancesDir, folder);
+  if (!info) throw new Error("No es una instancia de CurseForge (falta minecraftinstance.json).");
+  if (info.unsupported) throw new Error(info.unsupported);
+
+  const id = await generateInstanceId(info.name);
+  const instanceDir = path.join(CUSTOM_INSTANCES_DIR, id);
+  const send = (data) => {
+    if (!event.sender.isDestroyed()) event.sender.send("curseforge:import-progress", { folder, ...data });
+  };
+
+  try {
+    const files = await listFilesToCopy(sourceDir);
+    let totalBytes = 0;
+    const sizes = await Promise.all(files.map((f) => fs.stat(path.join(sourceDir, f)).then((s) => s.size).catch(() => 0)));
+    for (const s of sizes) totalBytes += s;
+    let doneBytes = 0;
+    send({ done: 0, total: totalBytes, files: files.length });
+
+    await fs.mkdir(instanceDir, { recursive: true });
+    for (let i = 0; i < files.length; i++) {
+      const dest = path.join(instanceDir, files[i]);
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      await fs.copyFile(path.join(sourceDir, files[i]), dest);
+      doneBytes += sizes[i];
+      if (i % 20 === 0 || i === files.length - 1) send({ done: doneBytes, total: totalBytes, current: files[i] });
+    }
+    for (const sub of ["mods", "resourcepacks", "shaderpacks"]) await fs.mkdir(path.join(instanceDir, sub), { recursive: true });
+
+    const meta = {
+      id,
+      name: info.name,
+      version: "1",
+      minecraftVersion: info.minecraftVersion,
+      loaderType: info.loaderType,
+      loaderVersion: info.loaderType === "vanilla" ? undefined : info.loaderVersion || undefined,
+      iconDataUrl: info.iconDataUrl || undefined,
+      installedAt: Date.now(),
+      source: "custom",
+      importedFrom: { type: "curseforge", path: sourceDir },
+    };
+    // Written last: an instance only exists for the app once its files are all there.
+    await fs.writeFile(path.join(instanceDir, "alaunchi-meta.json"), JSON.stringify(meta, null, 2));
+    console.info(`[curseforge] Importada "${info.name}" → ${id} (${files.length} archivos)`);
+    return meta;
+  } catch (e) {
+    await fs.rm(instanceDir, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
+});
+
+// ─── MODPACKS PÚBLICOS DE MODRINTH ───────────────────────────────────────────
+// A Modrinth modpack version is an .mrpack: a zip with modrinth.index.json
+// (game + loader versions, and every file to download with its hashes and
+// mirrors) plus overrides/ and client-overrides/ folders copied as-is.
+// Installing one creates an ALaunchi custom instance.
+// https://support.modrinth.com/en/articles/8802351-modrinth-modpack-format-mrpack
+
+// Hosts the .mrpack format allows file downloads from.
+const MRPACK_HOSTS = new Set(["cdn.modrinth.com", "github.com", "raw.githubusercontent.com", "gitlab.com"]);
+const MRPACK_LOADERS = { forge: "forge", neoforge: "neoforge", "fabric-loader": "fabric" };
+
+function isAllowedMrpackUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && MRPACK_HOSTS.has(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+ipcMain.handle("modrinth:install-modpack", async (event, { url, sha1, name, iconDataUrl, projectId, versionId, versionNumber }) => {
+  if (!isAllowedMrpackUrl(url) || !url.endsWith(".mrpack")) throw new Error("Enlace de modpack no válido.");
+  const send = (data) => {
+    if (!event.sender.isDestroyed()) event.sender.send("modrinth:install-progress", { versionId, ...data });
+  };
+
+  await fs.mkdir(CACHE_DIR, { recursive: true });
+  const packPath = path.join(CACHE_DIR, `modpack-${crypto.randomBytes(4).toString("hex")}.mrpack`);
+  let instanceDir = null;
+  try {
+    send({ stage: "pack", done: 0, total: 0 });
+    await downloadFile(url, packPath, (done, total) => send({ stage: "pack", done, total }));
+    if (sha1 && (await hashFileSha1(packPath)) !== String(sha1).toLowerCase()) {
+      throw new Error("El modpack llegó dañado (el hash no coincide). Vuelve a intentarlo.");
+    }
+
+    const zip = new AdmZip(packPath);
+    const indexEntry = zip.getEntry("modrinth.index.json");
+    if (!indexEntry) throw new Error("El archivo no es un modpack de Modrinth (falta modrinth.index.json).");
+    const index = JSON.parse(indexEntry.getData().toString("utf8"));
+    if (index.game !== "minecraft") throw new Error("Este modpack no es de Minecraft.");
+    const deps = index.dependencies || {};
+    const minecraftVersion = deps.minecraft;
+    if (!minecraftVersion) throw new Error("El modpack no indica la versión de Minecraft.");
+    if (deps["quilt-loader"]) throw new Error("Este modpack usa Quilt, que ALaunchi no admite.");
+    const loaderKey = Object.keys(MRPACK_LOADERS).find((k) => deps[k]);
+    const loaderType = loaderKey ? MRPACK_LOADERS[loaderKey] : "vanilla";
+    const loaderVersion = loaderKey ? deps[loaderKey] : undefined;
+
+    // Client side only: files marked unsupported on the client are server-only.
+    const files = (index.files || []).filter((f) => f && f.path && (f.env?.client ?? "required") !== "unsupported");
+
+    const id = await generateInstanceId(name || index.name || "modpack");
+    instanceDir = path.join(CUSTOM_INSTANCES_DIR, id);
+    await fs.mkdir(instanceDir, { recursive: true });
+
+    // Files, in parallel; every failure is collected before giving up so the
+    // error lists all of them at once.
+    let done = 0;
+    const failures = [];
+    send({ stage: "files", done, total: files.length });
+    let next = 0;
+    const worker = async () => {
+      while (next < files.length) {
+        const f = files[next++];
+        let dest;
+        try {
+          dest = safeJoin(instanceDir, f.path);
+        } catch {
+          failures.push(`${f.path} (ruta no válida)`);
+          continue;
+        }
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        const mirrors = (f.downloads || []).filter(isAllowedMrpackUrl);
+        let ok = false;
+        for (const mirror of mirrors) {
+          try {
+            await downloadFile(mirror, dest);
+            if (f.hashes?.sha1 && (await hashFileSha1(dest)) !== String(f.hashes.sha1).toLowerCase()) {
+              throw new Error("hash");
+            }
+            ok = true;
+            break;
+          } catch {
+            await fs.rm(dest, { force: true }).catch(() => {});
+          }
+        }
+        if (!ok) failures.push(path.basename(f.path));
+        done++;
+        send({ stage: "files", done, total: files.length, current: path.basename(f.path) });
+      }
+    };
+    await Promise.all(Array.from({ length: 6 }, worker));
+    if (failures.length) {
+      throw new Error(
+        `No se pudieron descargar ${failures.length} archivo(s) del modpack: ${failures.slice(0, 8).join(", ")}${failures.length > 8 ? "…" : ""}`
+      );
+    }
+
+    // overrides/ first, then client-overrides/ on top.
+    send({ stage: "overrides", done: 0, total: 0 });
+    for (const prefix of ["overrides/", "client-overrides/"]) {
+      for (const entry of zip.getEntries()) {
+        if (entry.isDirectory || !entry.entryName.startsWith(prefix)) continue;
+        const rel = entry.entryName.slice(prefix.length);
+        if (!rel) continue;
+        const dest = safeJoin(instanceDir, rel);
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await fs.writeFile(dest, entry.getData());
+      }
+    }
+    for (const sub of ["mods", "resourcepacks", "shaderpacks"]) await fs.mkdir(path.join(instanceDir, sub), { recursive: true });
+
+    const meta = {
+      id,
+      name: name || index.name || id,
+      version: "1",
+      minecraftVersion,
+      loaderType,
+      loaderVersion,
+      iconDataUrl: typeof iconDataUrl === "string" && iconDataUrl.startsWith("data:image/") ? iconDataUrl : undefined,
+      installedAt: Date.now(),
+      source: "custom",
+      importedFrom: { type: "modrinth", projectId, versionId, versionNumber },
+    };
+    // Written last: an instance only exists for the app once it's complete.
+    await fs.writeFile(path.join(instanceDir, "alaunchi-meta.json"), JSON.stringify(meta, null, 2));
+    console.info(`[modrinth] Instalado "${meta.name}" ${versionNumber || ""} → ${id} (${files.length} archivos)`);
+    return meta;
+  } catch (e) {
+    if (instanceDir) await fs.rm(instanceDir, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  } finally {
+    await fs.rm(packPath, { force: true }).catch(() => {});
+  }
+});
+
+// Per-instance configuration (gestor de instancia → ⋮ → Configuración).
+// Private instances are the player's own, so name/images change the instance
+// itself. For an online instance those belong to its creator: they're stored
+// as local `overrides` (only on this PC, cleared with null) that the renderer
+// lays over the catalog data. maxMemoryMb: null = use the global setting.
+const MAX_INSTANCE_IMAGE = 3_000_000; // data URL length
+
+ipcMain.handle("instances:update-settings", async (_, { id, name, iconDataUrl, bannerDataUrl, maxMemoryMb, resetOverrides }) => {
+  const metaPath = path.join(instanceDirFor(assertSafeInstanceId(id)), "alaunchi-meta.json");
+  let meta;
+  try {
+    meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
+  } catch {
+    throw new Error("La instancia no está instalada.");
+  }
+  const image = (v) => {
+    if (v === undefined) return undefined;
+    if (v === null || v === "") return null;
+    if (typeof v !== "string" || !v.startsWith("data:image/") || v.length > MAX_INSTANCE_IMAGE) throw new Error("Imagen no válida o demasiado grande.");
+    return v;
+  };
+  const icon = image(iconDataUrl);
+  const banner = image(bannerDataUrl);
+  const cleanName = typeof name === "string" ? name.trim().slice(0, 64) : undefined;
+
+  if (meta.source === "custom") {
+    if (cleanName) meta.name = cleanName;
+    if (icon !== undefined) meta.iconDataUrl = icon || undefined;
+    if (banner !== undefined) meta.bannerDataUrl = banner || undefined;
+  } else if (resetOverrides) {
+    delete meta.overrides;
+  } else {
+    const o = { ...(meta.overrides || {}) };
+    if (cleanName !== undefined) {
+      if (cleanName && cleanName !== meta.name) o.name = cleanName;
+      else delete o.name;
+    }
+    if (icon !== undefined) {
+      if (icon) o.iconDataUrl = icon;
+      else delete o.iconDataUrl;
+    }
+    if (banner !== undefined) {
+      if (banner) o.bannerDataUrl = banner;
+      else delete o.bannerDataUrl;
+    }
+    if (Object.keys(o).length) meta.overrides = o;
+    else delete meta.overrides;
+  }
+  if (maxMemoryMb !== undefined) {
+    if (maxMemoryMb === null) delete meta.maxMemoryMb;
+    else if (Number(maxMemoryMb) >= 512 && Number(maxMemoryMb) <= 65536) meta.maxMemoryMb = Math.round(Number(maxMemoryMb));
+    else throw new Error("Memoria no válida.");
+  }
+  await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
+  return meta;
+});
+
 // Leaving an online instance without keeping its files. Only ever touches
 // INSTANCES_DIR (never a custom instance), and refuses while the game or an
 // install is running — Windows would leave a half-deleted folder behind.
@@ -2079,7 +2468,15 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
     }
   }
 
+  // Merged over the previous meta, not rebuilt from scratch: it also holds
+  // things an update must keep — playtime (totalPlaytimeMs, activeSession) and
+  // the player's own settings for this instance (overrides, maxMemoryMb).
+  let previousMeta = {};
+  try {
+    previousMeta = JSON.parse(await fs.readFile(metaPath, "utf8")) || {};
+  } catch {}
   const meta = {
+    ...previousMeta,
     id: modpackId,
     name: modpack?.name ?? modpackId,
     version: manifest.version,
@@ -2865,10 +3262,16 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
     }
   }
 
+  // RAM: the instance's own setting (its configuration dialog) wins over the
+  // global one in Ajustes → Archivos y RAM.
   let maxMemory = "2G";
   try {
     const settings = JSON.parse(await fs.readFile(path.join(APP_DATA_DIR, "settings.json"), "utf8"));
     if (settings.maxMemoryMb && settings.maxMemoryMb >= 512) maxMemory = `${settings.maxMemoryMb}M`;
+  } catch {}
+  try {
+    const instanceMeta = JSON.parse(await fs.readFile(path.join(instanceDir, "alaunchi-meta.json"), "utf8"));
+    if (Number(instanceMeta.maxMemoryMb) >= 512) maxMemory = `${Math.round(instanceMeta.maxMemoryMb)}M`;
   } catch {}
 
   const dedupedClasspath = [...new Set(classpath)];
@@ -2953,7 +3356,12 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
     ? ["ignore", logFd, logFd]
     : ["ignore", "ignore", "ignore"];
 
-  const child = spawn(javaPath, mcArgs, { detached: true, stdio });
+  // cwd = the instance folder, like the official launcher. Without it the game
+  // inherited the launcher's working directory (the install folder, which every
+  // update replaces — or the project folder in dev), and any mod writing to a
+  // relative path (Crash Assistant's local/, etc.) put its data there: shared
+  // between instances and wiped on each update.
+  const child = spawn(javaPath, mcArgs, { detached: true, stdio, cwd: instanceDir });
   if (logFd !== null) fsSync.closeSync(logFd);
 
   // spawn() failing outright (java binary missing/no permissions: ENOENT/EACCES) emits

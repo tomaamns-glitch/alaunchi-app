@@ -410,3 +410,98 @@ export function onPlaytimeSessionEnded(callback: (data: { modpackId: string; tot
   if (!isElectron) return () => {};
   return eAPI.onPlaytimeSessionEnded(callback);
 }
+
+// ─── Importar desde CurseForge ─────────────────────────────────────────────
+
+export interface CurseForgeInstance {
+  /** Folder name inside CurseForge's Instances/ — the import key. */
+  folder: string;
+  name: string;
+  minecraftVersion: string;
+  loaderType: "forge" | "fabric" | "neoforge" | "vanilla" | "quilt" | "unknown";
+  loaderVersion: string | null;
+  addonCount: number;
+  fromModpack: boolean;
+  lastPlayed: number | null;
+  iconDataUrl: string | null;
+  /** Why it can't be imported (Quilt, unknown loader…), null if it can. */
+  unsupported: string | null;
+  alreadyImported: boolean;
+}
+
+export interface CurseForgeScan {
+  instancesDir: string;
+  found: boolean;
+  instances: CurseForgeInstance[];
+}
+
+export interface CurseForgeImportProgress {
+  folder: string;
+  done: number;
+  total: number;
+  files?: number;
+  current?: string;
+}
+
+export async function scanCurseForge(): Promise<CurseForgeScan> {
+  if (!isElectron) return { instancesDir: "", found: false, instances: [] };
+  return eAPI.scanCurseForge();
+}
+
+export async function chooseCurseForgeFolder(): Promise<{ canceled: boolean; instancesDir?: string }> {
+  if (!isElectron) return { canceled: true };
+  return eAPI.chooseCurseForgeFolder();
+}
+
+export async function importCurseForgeInstance(folder: string): Promise<{ id: string; name: string }> {
+  if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
+  return eAPI.importCurseForgeInstance({ folder });
+}
+
+export function onCurseForgeImportProgress(callback: (p: CurseForgeImportProgress) => void): () => void {
+  if (!isElectron || !eAPI.onCurseForgeImportProgress) return () => {};
+  return eAPI.onCurseForgeImportProgress(callback);
+}
+
+// ─── Modpacks públicos de Modrinth ─────────────────────────────────────────
+
+export interface ModrinthInstallProgress {
+  versionId: string;
+  stage: "pack" | "files" | "overrides";
+  done: number;
+  total: number;
+  current?: string;
+}
+
+export async function installModrinthModpack(args: {
+  url: string;
+  sha1: string;
+  name: string;
+  iconDataUrl?: string;
+  projectId: string;
+  versionId: string;
+  versionNumber: string;
+}): Promise<{ id: string; name: string }> {
+  if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
+  return eAPI.installModrinthModpack(args);
+}
+
+export function onModrinthInstallProgress(callback: (p: ModrinthInstallProgress) => void): () => void {
+  if (!isElectron || !eAPI.onModrinthInstallProgress) return () => {};
+  return eAPI.onModrinthInstallProgress(callback);
+}
+
+/** Gestor de instancia → Configuración. Images are data URLs (null = remove);
+ *  maxMemoryMb null = use the global RAM; resetOverrides (online instances)
+ *  goes back to the creator's name and images. */
+export async function updateInstanceSettings(args: {
+  id: string;
+  name?: string;
+  iconDataUrl?: string | null;
+  bannerDataUrl?: string | null;
+  maxMemoryMb?: number | null;
+  resetOverrides?: boolean;
+}): Promise<Record<string, any>> {
+  if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
+  return eAPI.updateInstanceSettings(args);
+}

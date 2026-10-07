@@ -21,6 +21,15 @@ const isElectron = !!eAPI;
 interface InstalledState {
   installed: boolean;
   installedVersion?: string;
+  /** The player's own name/images for an online instance (its Configuración). */
+  overrides?: { name?: string; iconDataUrl?: string; bannerDataUrl?: string };
+}
+
+/** Lays the player's local overrides over the creator's name/images. */
+function withOverrides(mp: Modpack, local?: InstalledState): Modpack {
+  const o = local?.overrides;
+  if (!o) return mp;
+  return { ...mp, name: o.name || mp.name, imageUrl: o.iconDataUrl || mp.imageUrl, bannerUrl: o.bannerDataUrl || mp.bannerUrl };
 }
 
 async function getInstalledState(): Promise<Record<string, InstalledState>> {
@@ -29,7 +38,7 @@ async function getInstalledState(): Promise<Record<string, InstalledState>> {
       const meta: Record<string, any> = await eAPI.getInstalledModpacks();
       const result: Record<string, InstalledState> = {};
       for (const [id, m] of Object.entries(meta)) {
-        result[id] = { installed: true, installedVersion: (m as any).version };
+        result[id] = { installed: true, installedVersion: (m as any).version, overrides: (m as any).overrides };
       }
       return result;
     } catch {
@@ -202,7 +211,9 @@ function pastFromHistory(history: OnlineHistory, installedState: Record<string, 
   return Object.values(history)
     .filter((e) => e.status === "past")
     .sort((a, b) => (b.since ?? 0) - (a.since ?? 0))
-    .map((e) => pastEntryToModpack(e, installedState[e.id]?.installed ? installedState[e.id].installedVersion : undefined));
+    .map((e) =>
+      withOverrides(pastEntryToModpack(e, installedState[e.id]?.installed ? installedState[e.id].installedVersion : undefined), installedState[e.id])
+    );
 }
 
 export const useModpacks = create<ModpackState>((set, get) => ({
@@ -253,7 +264,7 @@ export const useModpacks = create<ModpackState>((set, get) => ({
         const updateAvailable =
           local.installed && local.installedVersion !== undefined && local.installedVersion !== mp.version;
         return {
-          ...mp,
+          ...withOverrides(mp, local),
           installed: local.installed,
           installedVersion: local.installedVersion,
           updateAvailable,
