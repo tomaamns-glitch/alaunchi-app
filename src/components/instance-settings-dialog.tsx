@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Cpu, ImagePlus, Info, Loader2, RotateCcw, Trash2 } from "lucide-react";
+import { Cpu, ImagePlus, Info, Loader2, Lock, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -34,13 +34,14 @@ function readFileAsDataUrl(file: File): Promise<string> {
 
 /**
  * Gestor de instancia → ⋮ → Configuración: banner, picture, name and the RAM
- * this instance gets. On a private instance that edits the instance itself; on
- * an online one name/images are the player's own local version (only on this
- * PC) over the creator's, with a button to go back to the creator's
- * (electron/main.js' instances:update-settings).
+ * this instance gets. On a private instance all of it is editable. On an online
+ * one the name and images belong to the creator and are locked (padlock instead
+ * of the change buttons); only the RAM is the player's to set.
  */
 export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Modpack; open: boolean; onOpenChange: (open: boolean) => void }) {
   const isCustom = pack.source === "custom";
+  // Online instance: name/banner/picture are the creator's, not editable here.
+  const looksLocked = !isCustom;
   const [name, setName] = useState(pack.name);
   const [icon, setIcon] = useState<ImageEdit>({ kind: "unchanged" });
   const [banner, setBanner] = useState<ImageEdit>({ kind: "unchanged" });
@@ -49,7 +50,6 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
   const [customRam, setCustomRam] = useState(false);
   const [ram, setRam] = useState(4096);
   const [initialRam, setInitialRam] = useState<number | null>(null);
-  const [hasOverrides, setHasOverrides] = useState(false);
   const [saving, setSaving] = useState(false);
   const iconInput = useRef<HTMLInputElement>(null);
   const bannerInput = useRef<HTMLInputElement>(null);
@@ -66,7 +66,6 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
       setInitialRam(own);
       setCustomRam(own !== null);
       if (own !== null) setRam(own);
-      setHasOverrides(!!meta.overrides && Object.keys(meta.overrides).length > 0);
     });
   }, [open, pack.id, pack.name]);
 
@@ -119,20 +118,6 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
     }
   };
 
-  const resetToCreator = async () => {
-    setSaving(true);
-    try {
-      await updateInstanceSettings({ id: pack.id, resetOverrides: true });
-      await refresh();
-      toast.success("Nombre e imágenes del creador restablecidos.");
-      onOpenChange(false);
-    } catch (e: any) {
-      toast.error(e?.message || "No se pudo restablecer.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
   return (
     <>
       <Dialog open={open} onOpenChange={(v) => !saving && onOpenChange(v)}>
@@ -142,13 +127,48 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
             <DialogDescription className="text-xs">
               {isCustom
                 ? "Cambia cómo se ve esta instancia y cuánta memoria usa."
-                : "El nombre y las imágenes que pongas aquí son solo para ti, en este equipo: no cambian la instancia del creador."}
+                : "El nombre y las imágenes de una instancia online los decide su creador. Aquí puedes ajustar la memoria."}
             </DialogDescription>
           </DialogHeader>
 
           <div className="px-5 pb-4 space-y-5 max-h-[68vh] overflow-y-auto">
             {/* Banner with the picture over it, like the instance header. */}
             <div className="space-y-2">
+              {looksLocked ? (
+              <div className="relative">
+                <div
+                  className="relative block w-full overflow-hidden rounded-xl border border-white/10 bg-black/30"
+                  style={{ aspectRatio: String(BANNER_ASPECT) }}
+                >
+                  {shownBanner ? (
+                    <img src={shownBanner} alt="" className="absolute inset-0 h-full w-full object-cover" />
+                  ) : (
+                    <span className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">Sin banner</span>
+                  )}
+                  <span
+                    className="absolute top-2 right-2 h-7 w-7 flex items-center justify-center rounded-full bg-black/60 text-white/90"
+                    title="El banner lo decide el creador de la instancia"
+                  >
+                    <Lock className="h-3.5 w-3.5" />
+                  </span>
+                </div>
+                <div className="absolute -bottom-6 left-4 h-20 w-20 overflow-hidden rounded-xl border-2 border-card bg-black/60 shadow-xl">
+                  {shownIcon ? (
+                    <img src={shownIcon} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <span className="flex h-full w-full items-center justify-center text-2xl font-black text-accent/60">
+                      {pack.name.charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                  <span
+                    className="absolute bottom-1 right-1 h-6 w-6 flex items-center justify-center rounded-full bg-black/60 text-white/90"
+                    title="La foto la decide el creador de la instancia"
+                  >
+                    <Lock className="h-3 w-3" />
+                  </span>
+                </div>
+              </div>
+              ) : (
               <div className="relative">
                 <button
                   type="button"
@@ -184,7 +204,10 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
                   </span>
                 </button>
               </div>
-              <div className="flex justify-end gap-1.5 pt-1">
+              )}
+              <div className="flex justify-end gap-1.5 pt-1 min-h-7">
+                {!looksLocked && (
+                <>
                 {shownIcon && (
                   <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" onClick={() => setIcon({ kind: "removed" })}>
                     <Trash2 className="mr-1 h-3 w-3" /> Quitar foto
@@ -195,14 +218,26 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
                     <Trash2 className="mr-1 h-3 w-3" /> Quitar banner
                   </Button>
                 )}
+                </>
+                )}
               </div>
               <input ref={iconInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={(e) => { pickFile("icon", e.target.files?.[0]); e.target.value = ""; }} />
               <input ref={bannerInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={(e) => { pickFile("banner", e.target.files?.[0]); e.target.value = ""; }} />
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-gray-200">Nombre</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={64} className="bg-background/50 border-white/10" />
+              <Label className="text-gray-200 flex items-center gap-1.5">
+                Nombre
+                {looksLocked && <Lock className="h-3 w-3 text-muted-foreground" />}
+              </Label>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                maxLength={64}
+                disabled={looksLocked}
+                title={looksLocked ? "El nombre lo decide el creador de la instancia" : undefined}
+                className="bg-background/50 border-white/10"
+              />
             </div>
 
             <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
@@ -235,11 +270,6 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
           </div>
 
           <div className="px-5 py-3 border-t border-white/5 flex items-center gap-2">
-            {!isCustom && hasOverrides && (
-              <Button variant="ghost" size="sm" className="mr-auto text-xs text-muted-foreground" disabled={saving} onClick={resetToCreator}>
-                <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Usar los del creador
-              </Button>
-            )}
             <Button variant="outline" className="ml-auto border-white/10" disabled={saving} onClick={() => onOpenChange(false)}>
               Cancelar
             </Button>

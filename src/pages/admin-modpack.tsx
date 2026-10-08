@@ -43,6 +43,7 @@ import {
   Link2,
   Ban,
   Send,
+  Library,
 } from "lucide-react";
 import {
   fetchSnapshot,
@@ -77,6 +78,15 @@ import {
 import { sendInvite, cancelInvite, subscribePendingInvites, updatePendingInviteCodes, type PendingInvite } from "@/services/invites";
 import { getInstanceAccentColor } from "@/lib/instance-color";
 import { PlayerPicker, Head } from "@/components/player-picker";
+import { ModLibraryDialog } from "@/components/mod-library-dialog";
+import {
+  isLibraryProjectId,
+  libraryMatch,
+  librarySha1Index,
+  subscribeLibraryMods,
+  type LibraryBuild,
+  type LibraryMod,
+} from "@/services/mod-library";
 
 // Minecraft instance top-level folders. When the picked/dropped folder's own name
 // matches one of these, it IS the destination folder (e.g. dragging in "shaderpacks"
@@ -254,6 +264,11 @@ export default function AdminModpack() {
   const [versionDeps, setVersionDeps] = useState<Map<string, ModrinthVersionDependency[]>>(new Map());
   const [missingInfo, setMissingInfo] = useState<Map<string, { title: string; iconUrl: string | null }>>(new Map());
   const [browserOpen, setBrowserOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  // The group's mod library (services/mod-library.ts), live: identifies its jars
+  // in the file list and feeds "Añadir desde la biblioteca".
+  const [libraryMods, setLibraryMods] = useState<LibraryMod[]>([]);
+  useEffect(() => subscribeLibraryMods(setLibraryMods, () => setLibraryMods([])), []);
   const [addingDeps, setAddingDeps] = useState<string | null>(null);
 
   const replaceTargetPath = useRef<string | null>(null);
@@ -408,6 +423,20 @@ export default function AdminModpack() {
   }, [identifyKey, knownMatches]);
 
   const activeRows = rows.filter((r) => r.status !== "removed");
+
+  // Library jars, for display only — kept out of `matches`, which feeds the
+  // Modrinth-only dependency lookups below.
+  const libraryMatches = useMemo(() => {
+    const index = librarySha1Index(libraryMods);
+    const out = new Map<string, ModrinthMatch>();
+    for (const r of rows) {
+      const hit = r.sha1 && !matches.has(r.key) ? index.get(r.sha1) : undefined;
+      if (hit) out.set(r.key, libraryMatch(hit.mod, hit.build));
+    }
+    return out;
+  }, [rows, matches, libraryMods]);
+  /** What a row is, for display: its Modrinth project, else its library mod. */
+  const matchFor = (key: string) => matches.get(key) ?? libraryMatches.get(key);
 
   // What each Modrinth project in the update is, and where.
   const presentProjects = useMemo(() => {
@@ -669,6 +698,43 @@ export default function AdminModpack() {
         .map((a) => (swapAdd.has(a.id) ? { ...a, file: swapAdd.get(a.id)! } : a)),
       ...additions,
     ]);
+  };
+
+  /** "Añadir desde la biblioteca": downloads the jar and stages it like a file
+   *  added by hand, swapping out another build of the same library mod. */
+  const stageLibraryBuild = async (_mod: LibraryMod, build: LibraryBuild, replacePath?: string) => {
+    const res = await fetch(build.downloadUrl);
+    if (!res.ok) throw new Error(`No se pudo descargar ${build.fileName} (HTTP ${res.status}).`);
+    const file = new File([await res.blob()], build.fileName, { type: "application/java-archive" });
+    const path = `mods/${build.fileName}`;
+    setFileSha1((prev) => new Map(prev).set(file, build.sha1));
+
+    if (replacePath && replacePath !== path) {
+      const old = rows.find((r) => r.path === replacePath);
+      if (old?.status === "added") setStagedAdds((prev) => prev.filter((a) => a.id !== old.addId));
+      else if (old) {
+        setRemovedPaths((prev) => new Set(prev).add(replacePath));
+        setStagedReplacements((prev) => {
+          const next = new Map(prev);
+          next.delete(replacePath);
+          return next;
+        });
+      }
+    }
+    if (existingPaths.has(path)) {
+      setStagedReplacements((prev) => new Map(prev).set(path, file));
+      setRemovedPaths((prev) => {
+        const next = new Set(prev);
+        next.delete(path);
+        return next;
+      });
+      return;
+    }
+    setStagedAdds((prev) =>
+      prev.some((a) => a.path === path)
+        ? prev.map((a) => (a.path === path ? { ...a, file } : a))
+        : [...prev, { id: crypto.randomUUID(), path, file, editable: false, required: true }]
+    );
   };
 
   const handleAddMissingDeps = async (projectIds: string[]) => {
@@ -1024,7 +1090,7 @@ export default function AdminModpack() {
   };
 
   const totalFiles = activeRows.length;
-  const identifiedCount = activeRows.filter((r) => matches.has(r.key)).length;
+  const identifiedCount = activeRows.filter((r) => !!matchFor(r.key)).length;
 
   return (
     <div className="relative h-full overflow-hidden bg-background text-foreground flex flex-col">
@@ -1173,6 +1239,15 @@ export default function AdminModpack() {
                       className="h-8 bg-accent hover:bg-accent/90 text-accent-foreground font-bold"
                     >
                       <ModrinthGlyph className="mr-1.5 h-4 w-4" /> Añadir desde Modrinth
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setLibraryOpen(true)}
+                      disabled={publishing}
+                      className="h-8 border-white/10"
+                    >
+                      <Library className="mr-1.5 h-3.5 w-3.5" /> Biblioteca
                     </Button>
                     <Button size="sm" variant="outline" className="h-8 border-white/10" disabled={publishing} onClick={() => filesInputRef.current?.click()}>
                       <FilePlus className="mr-1.5 h-3.5 w-3.5" /> Archivos
@@ -1323,12 +1398,17 @@ export default function AdminModpack() {
                           (() => {
                             const row = entry.row;
                             const meta = statusMeta[row.status];
-                            const match = matches.get(row.key);
+                            const match = matchFor(row.key);
+                            const fromLibrary = isLibraryProjectId(match?.projectId);
                             const neededBy = match ? requiredBy.get(match.projectId) : undefined;
                             const hashing = isIdentifiable(row.path) && !row.sha1 && row.status !== "unchanged" && row.status !== "removed";
                             return (
                               <div key={row.key} className={cn("flex items-center gap-3 px-3 py-2 text-xs rounded-lg w-full border transition-colors", meta.rowClass)}>
-                                {match ? (
+                                {match && fromLibrary ? (
+                                  <span title="Biblioteca de mods" className="shrink-0">
+                                    <ProjectIcon url={match.iconUrl} title={match.title} className="h-9 w-9" />
+                                  </span>
+                                ) : match ? (
                                   <a
                                     href={`https://modrinth.com/project/${match.projectId}`}
                                     target="_blank"
@@ -1358,6 +1438,11 @@ export default function AdminModpack() {
                                           {match.title}
                                         </span>
                                         <span className="text-[10px] text-muted-foreground shrink-0 truncate max-w-[10rem]">{versionLabel(match.versionNumber)}</span>
+                                        {fromLibrary && (
+                                          <span className="shrink-0 flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-accent/15 text-accent">
+                                            <Library className="h-2.5 w-2.5" /> Biblioteca
+                                          </span>
+                                        )}
                                       </div>
                                       <p className="font-mono text-[10.5px] text-muted-foreground truncate select-text">{entry.name}</p>
                                     </>
@@ -1496,7 +1581,7 @@ export default function AdminModpack() {
                             ) : (
                               optionalRows.map((row) => {
                                 const inGroup = group.paths.includes(row.path);
-                                const match = matches.get(row.key);
+                                const match = matchFor(row.key);
                                 return (
                                   <button
                                     type="button"
@@ -1840,6 +1925,19 @@ export default function AdminModpack() {
         present={presentForBrowser}
         onAdd={stageModrinthDownloads}
       />
+      {pack && (
+        <ModLibraryDialog
+          open={libraryOpen}
+          onOpenChange={setLibraryOpen}
+          pack={pack}
+          subtitle={`Añadir al modpack ${pack.name}`}
+          verbs={{ install: "Añadir", installed: "En el modpack", done: "añadido a la actualización" }}
+          installedMods={activeRows
+            .filter((r) => r.path.startsWith("mods/"))
+            .map((r) => ({ path: r.path, sha1: r.sha1, mandatory: false }))}
+          onInstall={stageLibraryBuild}
+        />
+      )}
     </div>
   );
 }

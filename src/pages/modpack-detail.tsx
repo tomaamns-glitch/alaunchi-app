@@ -5,6 +5,18 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { InstanceSettingsDialog } from "@/components/instance-settings-dialog";
 import { ModLibraryDialog } from "@/components/mod-library-dialog";
+import {
+  fetchLibraryMod,
+  identifyLibraryFiles,
+  isLibraryProjectId,
+  isLibraryVersionId,
+  libraryBuildAsUpdate,
+  libraryMatch,
+  libraryModIdOf,
+  libraryProjectDetail,
+  libraryVersionsFor,
+  compatibleBuild,
+} from "@/services/mod-library";
 import { InstanceProgressChip } from "@/components/instance-progress-chip";
 import { useInstanceProgress } from "@/hooks/use-instance-progress";
 import { Button } from "@/components/ui/button";
@@ -890,8 +902,14 @@ export default function ModpackDetail() {
         setSchematics(schematicFiles);
       }
 
-      const matches = await identifyModrinthFiles([...manifestFiles, ...optionalFiles]);
+      const allFiles = [...manifestFiles, ...optionalFiles];
+      const [modrinthFound, libraryFound] = await Promise.all([
+        identifyModrinthFiles(allFiles),
+        identifyLibraryFiles(allFiles),
+      ]);
       if (cancelled) return;
+      // Our own library's jars aren't on Modrinth; Modrinth wins if both match.
+      const matches = new Map([...libraryFound, ...modrinthFound]);
       setModrinthMatches(matches);
 
       if (pack && optionalFiles.length > 0) {
@@ -902,7 +920,9 @@ export default function ModpackDetail() {
             if (!match) return;
             const cat = categoryOf(f.path);
             if (!cat) return;
-            const latest = await getLatestVersion(match.projectId, pack.loaderType, pack.minecraftVersion, cat);
+            const latest = isLibraryProjectId(match.projectId)
+              ? (await libraryVersionsFor(match.projectId, pack.minecraftVersion, pack.loaderType))[0] ?? null
+              : await getLatestVersion(match.projectId, pack.loaderType, pack.minecraftVersion, cat);
             if (latest && latest.versionId !== match.versionId) {
               updateEntries.set(f.path, latest);
             }
@@ -934,10 +954,19 @@ export default function ModpackDetail() {
     setModDetailLoading(true);
     setModDetailTab("description");
     const cat = categoryOf(selectedModPath) ?? activeCategory;
-    Promise.all([
-      getProjectDetail(match.projectId),
-      listVersions(match.projectId, pack.loaderType, pack.minecraftVersion, cat),
-    ])
+    const libraryModId = libraryModIdOf(match.projectId);
+    const load: Promise<[ModrinthProjectDetail | null, ModrinthUpdate[]]> = libraryModId
+      ? fetchLibraryMod(libraryModId)
+          .catch(() => null)
+          .then((mod): [ModrinthProjectDetail | null, ModrinthUpdate[]] => {
+            const build = mod ? compatibleBuild(mod, pack.minecraftVersion, pack.loaderType) : null;
+            return [mod ? libraryProjectDetail(mod) : null, mod && build ? [libraryBuildAsUpdate(mod, build)] : []];
+          })
+      : Promise.all([
+          getProjectDetail(match.projectId),
+          listVersions(match.projectId, pack.loaderType, pack.minecraftVersion, cat),
+        ]);
+    load
       .then(([detail, versions]) => {
         if (cancelled) return;
         setProjectDetail(detail);
@@ -965,6 +994,7 @@ export default function ModpackDetail() {
     setTranslatedDescription(null);
     const text = projectDetail?.body;
     if (!text || !text.trim()) return;
+    if (selectedModPath && isLibraryProjectId(modrinthMatches.get(selectedModPath)?.projectId)) return;
     let cancelled = false;
     translateHtmlAwareToSpanish(text).then((translated) => {
       if (!cancelled) setTranslatedDescription(translated);
@@ -1318,7 +1348,7 @@ export default function ModpackDetail() {
     const pathByVersion = new Map<string, string>();
     for (const path of modPaths) {
       const versionId = modrinthMatches.get(path)?.versionId;
-      if (versionId) pathByVersion.set(versionId, path);
+      if (versionId && !isLibraryVersionId(versionId)) pathByVersion.set(versionId, path);
     }
     getVersionsByIds(Array.from(pathByVersion.keys())).then((versions) => {
       if (cancelled) return;
@@ -1650,8 +1680,11 @@ export default function ModpackDetail() {
 
     // mods / shaderpacks / resourcepacks
     const category = classification.category as Category;
-    const matches = await identifyModrinthFiles([{ path: targetPath, sha1 }]).catch(() => new Map<string, ModrinthMatch>());
-    const match = matches.get(targetPath) ?? null;
+    const [modrinthFound, libraryFound] = await Promise.all([
+      identifyModrinthFiles([{ path: targetPath, sha1 }]).catch(() => new Map<string, ModrinthMatch>()),
+      identifyLibraryFiles([{ path: targetPath, sha1 }]),
+    ]);
+    const match = modrinthFound.get(targetPath) ?? libraryFound.get(targetPath) ?? null;
     const rows = rowsFor(category);
     const resolution = resolveContentConflict({
       targetPath,
@@ -1819,6 +1852,7 @@ export default function ModpackDetail() {
                       {selectedRow && (
                         <span className="text-sm text-muted-foreground shrink-0">v{selectedMatch.versionNumber}</span>
                       )}
+                      {!isLibraryProjectId(selectedMatch.projectId) && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1835,10 +1869,16 @@ export default function ModpackDetail() {
                       >
                         <Heart className={`h-4 w-4 ${isModFavorited ? "fill-accent text-accent" : ""}`} />
                       </button>
+                      )}
                     </div>
                     {!!projectDetail?.description && (
                       <p className="text-sm text-gray-300 select-text">{projectDetail.description}</p>
                     )}
+                    {isLibraryProjectId(selectedMatch.projectId) ? (
+                      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <Library className="h-3.5 w-3.5 text-accent" /> Biblioteca de mods del grupo
+                      </div>
+                    ) : (
                     <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                       <span>{(projectDetail?.downloads ?? 0).toLocaleString()} descargas</span>
                       <span className="opacity-50">•</span>
@@ -1854,6 +1894,7 @@ export default function ModpackDetail() {
                         </>
                       )}
                     </div>
+                    )}
                   </div>
                 </motion.div>
               ) : searchMode ? (
@@ -2965,12 +3006,30 @@ export default function ModpackDetail() {
             ...(content?.mods ?? []).map((f) => ({ path: f.path, sha1: f.sha1, mandatory: f.required !== false })),
             ...optionalContent.mods.map((f) => ({ path: f.path, sha1: f.sha1, mandatory: false })),
           ]}
-          onInstalled={(file, replacedPath) =>
+          onInstall={async (mod, build, replacePath) => {
+            const newPath = `mods/${build.fileName}`;
+            if (replacePath) await updateInstanceFile(pack.id, replacePath, newPath, build.downloadUrl, build.sha1);
+            else await downloadInstanceFile(pack.id, newPath, build.downloadUrl, build.sha1);
+            const file = { path: newPath, size: build.size, sha1: build.sha1 };
             setOptionalContent((prev) => ({
               ...prev,
-              mods: [...prev.mods.filter((f) => f.path !== file.path && f.path !== replacedPath), file],
-            }))
-          }
+              mods: [...prev.mods.filter((f) => f.path !== file.path && f.path !== replacePath), file],
+            }));
+            // Identified straight away: icon, name and its detail page like any Modrinth mod.
+            setModrinthMatches((prev) => {
+              const next = new Map(prev);
+              if (replacePath) next.delete(replacePath);
+              next.set(newPath, libraryMatch(mod, build));
+              return next;
+            });
+            if (replacePath) {
+              setUpdates((prev) => {
+                const next = new Map(prev);
+                next.delete(replacePath);
+                return next;
+              });
+            }
+          }}
         />
       )}
 
