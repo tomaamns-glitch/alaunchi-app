@@ -3424,18 +3424,26 @@ async function neoforgeVersionsForMc(mcVersion) {
   );
   const versions = data.versions || [];
   const parts = mcVersion.split(".");
-  const major = parts[1];
-  const minor = parts[2] || "0";
-  const prefix = mcVersion === "1.20.1" ? "47." : `${major}.${minor}.`;
+  // NeoForge numbers its builds after the MC version:
+  //   old scheme  1.21.1 → 21.1.x      (drops the leading "1.")
+  //   year scheme 26.1   → 26.1.0.x, 26.1.2 → 26.1.2.x (keeps it, patch defaults to 0)
+  // 1.20.1 NeoForge lives in a different artifact (net/neoforged/forge) that the
+  // installer below doesn't handle, so it correctly yields no builds.
+  const prefix =
+    parts[0] === "1"
+      ? `${parts[1]}.${parts[2] || "0"}.`
+      : `${parts[0]}.${parts[1] || "0"}.${parts[2] || "0"}.`;
   // The API returns them oldest-first; reverse so index 0 is newest, matching
   // every other version list in this file (Mojang manifest, Fabric loader list).
-  return versions.filter((v) => v.startsWith(prefix)).reverse();
+  // Builds with a "+…" suffix (e.g. "26.1.0.0-alpha.1+snapshot-1") target MC
+  // snapshots/pre-releases, not the release picked here.
+  return versions.filter((v) => v.startsWith(prefix) && !v.includes("+")).reverse();
 }
 
 async function resolveNeoforgeVersion(mcVersion) {
   try {
     const matching = await neoforgeVersionsForMc(mcVersion);
-    return matching[0] || null;
+    return matching.find((v) => !/beta|alpha/i.test(v)) || matching[0] || null;
   } catch {
     return null;
   }

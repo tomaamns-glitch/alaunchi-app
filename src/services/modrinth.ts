@@ -259,6 +259,17 @@ export async function getProjectInfo(projectId: string): Promise<{ title: string
   return p ? { title: p.title, iconUrl: p.icon_url } : null;
 }
 
+/** Batch form of getProjectInfo — one request for every id not cached yet.
+ *  Ids Modrinth doesn't know are simply absent from the result. */
+export async function getProjectsInfo(
+  projectIds: string[]
+): Promise<Record<string, { title: string; iconUrl: string | null }>> {
+  const projects = await lookupProjects(projectIds);
+  return Object.fromEntries(
+    Object.entries(projects).map(([id, p]) => [id, { title: p.title, iconUrl: p.icon_url }])
+  );
+}
+
 /**
  * Latest available version of a project for a given loader + Minecraft version,
  * used to offer updates for optionally-installed (non-manifest) files.
