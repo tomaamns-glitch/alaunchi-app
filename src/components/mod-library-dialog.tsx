@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { LoaderIcon } from "@/components/loader-icon";
-import { downloadInstanceFile, updateInstanceFile, type InstanceFile } from "@/services/electron";
 import { formatBytes } from "@/lib/format";
 import {
   LIBRARY_LOADER_LABELS,
@@ -26,8 +25,14 @@ interface ModLibraryDialogProps {
   pack: { id: string; name: string; minecraftVersion: string; loaderType: string };
   /** Every file currently in the instance's mods/ folder (pack-shipped + optional). */
   installedMods: { path: string; sha1: string | null | undefined; mandatory: boolean }[];
-  /** A library jar was installed (`replacedPath` set when it replaced an older one). */
-  onInstalled: (file: InstanceFile, replacedPath?: string) => void;
+  /** Puts the build into the instance (or, in the admin editor, stages it for
+   *  the next publish), replacing `replacePath` when it's another build of the
+   *  same mod. Throws to report failure. */
+  onInstall: (mod: LibraryMod, build: LibraryBuild, replacePath?: string) => Promise<void>;
+  /** Wording: "Instalar"/"instalado" in an instance, "Añadir"/"añadido" in the admin editor. */
+  verbs?: { install: string; installed: string; done: string };
+  /** Where the dialog is used, shown under the title. */
+  subtitle?: string;
 }
 
 type Status =
@@ -40,7 +45,17 @@ type Status =
 /** The instance manager's "Biblioteca" — like the Modrinth install browser, but
  *  for the group's own mods (services/mod-library.ts). Only builds for the
  *  instance's exact Minecraft version + loader can be installed. */
-export function ModLibraryDialog({ open, onOpenChange, pack, installedMods, onInstalled }: ModLibraryDialogProps) {
+const INSTANCE_VERBS = { install: "Instalar", installed: "Instalado", done: "instalado" };
+
+export function ModLibraryDialog({
+  open,
+  onOpenChange,
+  pack,
+  installedMods,
+  onInstall,
+  verbs = INSTANCE_VERBS,
+  subtitle,
+}: ModLibraryDialogProps) {
   const [mods, setMods] = useState<LibraryMod[] | null>(null);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -88,17 +103,11 @@ export function ModLibraryDialog({ open, onOpenChange, pack, installedMods, onIn
 
   const install = async (mod: LibraryMod, build: LibraryBuild, status: Status) => {
     setBusyIds((s) => new Set(s).add(mod.id));
-    const newPath = `mods/${build.fileName}`;
     try {
-      if (status.kind === "update") {
-        await updateInstanceFile(pack.id, status.oldPath, newPath, build.downloadUrl, build.sha1);
-      } else {
-        await downloadInstanceFile(pack.id, newPath, build.downloadUrl, build.sha1);
-      }
-      onInstalled({ path: newPath, size: build.size, sha1: build.sha1 }, status.kind === "update" ? status.oldPath : undefined);
-      toast.success(status.kind === "update" ? `${mod.name} actualizado.` : `${mod.name} instalado.`);
+      await onInstall(mod, build, status.kind === "update" ? status.oldPath : undefined);
+      toast.success(status.kind === "update" ? `${mod.name} actualizado.` : `${mod.name} ${verbs.done}.`);
     } catch (err: any) {
-      toast.error(err?.message || `No se pudo instalar ${mod.name}.`);
+      toast.error(err?.message || `No se pudo añadir ${mod.name}.`);
     } finally {
       setBusyIds((s) => {
         const next = new Set(s);
@@ -121,7 +130,7 @@ export function ModLibraryDialog({ open, onOpenChange, pack, installedMods, onIn
     if (status.kind === "installed") {
       return (
         <span className="inline-flex items-center gap-1 text-xs text-accent shrink-0">
-          <Check className="h-3.5 w-3.5" /> Instalado
+          <Check className="h-3.5 w-3.5" /> {verbs.installed}
         </span>
       );
     }
@@ -145,7 +154,7 @@ export function ModLibraryDialog({ open, onOpenChange, pack, installedMods, onIn
         ) : (
           <Download className="mr-1.5 h-3.5 w-3.5" />
         )}
-        {status.kind === "update" ? "Actualizar" : "Instalar"}
+        {status.kind === "update" ? "Actualizar" : verbs.install}
       </Button>
     );
   };
@@ -167,7 +176,7 @@ export function ModLibraryDialog({ open, onOpenChange, pack, installedMods, onIn
             <Library className="h-5 w-5 text-accent" /> Biblioteca de mods
           </DialogTitle>
           <DialogDescription className="flex items-center gap-1.5">
-            Mods del grupo para {pack.name} · {pack.minecraftVersion}
+            {subtitle ?? `Mods del grupo para ${pack.name}`} · {pack.minecraftVersion}
             <LoaderIcon loader={pack.loaderType} className="h-3.5 w-3.5" />
             {loaderLabel}
           </DialogDescription>

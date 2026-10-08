@@ -21,16 +21,11 @@ const isElectron = !!eAPI;
 interface InstalledState {
   installed: boolean;
   installedVersion?: string;
-  /** The player's own name/images for an online instance (its Configuración). */
-  overrides?: { name?: string; iconDataUrl?: string; bannerDataUrl?: string };
 }
 
-/** Lays the player's local overrides over the creator's name/images. */
-function withOverrides(mp: Modpack, local?: InstalledState): Modpack {
-  const o = local?.overrides;
-  if (!o) return mp;
-  return { ...mp, name: o.name || mp.name, imageUrl: o.iconDataUrl || mp.imageUrl, bannerUrl: o.bannerDataUrl || mp.bannerUrl };
-}
+// Online instances always show the creator's name and images. Older versions
+// let players set their own (`overrides` in the instance's meta); those are
+// deliberately no longer applied — only the creator decides how a pack looks.
 
 async function getInstalledState(): Promise<Record<string, InstalledState>> {
   if (isElectron) {
@@ -38,7 +33,7 @@ async function getInstalledState(): Promise<Record<string, InstalledState>> {
       const meta: Record<string, any> = await eAPI.getInstalledModpacks();
       const result: Record<string, InstalledState> = {};
       for (const [id, m] of Object.entries(meta)) {
-        result[id] = { installed: true, installedVersion: (m as any).version, overrides: (m as any).overrides };
+        result[id] = { installed: true, installedVersion: (m as any).version };
       }
       return result;
     } catch {
@@ -212,7 +207,7 @@ function pastFromHistory(history: OnlineHistory, installedState: Record<string, 
     .filter((e) => e.status === "past")
     .sort((a, b) => (b.since ?? 0) - (a.since ?? 0))
     .map((e) =>
-      withOverrides(pastEntryToModpack(e, installedState[e.id]?.installed ? installedState[e.id].installedVersion : undefined), installedState[e.id])
+      pastEntryToModpack(e, installedState[e.id]?.installed ? installedState[e.id].installedVersion : undefined)
     );
 }
 
@@ -264,7 +259,7 @@ export const useModpacks = create<ModpackState>((set, get) => ({
         const updateAvailable =
           local.installed && local.installedVersion !== undefined && local.installedVersion !== mp.version;
         return {
-          ...withOverrides(mp, local),
+          ...mp,
           installed: local.installed,
           installedVersion: local.installedVersion,
           updateAvailable,

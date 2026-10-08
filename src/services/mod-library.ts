@@ -1,6 +1,7 @@
 import { ref as dbRef, get, onValue, push, remove, set, update } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 import { uploadSharedContent } from "@/services/content-share";
+import type { ModrinthMatch, ModrinthProjectDetail, ModrinthUpdate } from "@/services/modrinth";
 
 // Our own mod library ("Biblioteca de mods"): mods made by the group, published
 // by one person and installable by every ALaunchi user from the instance manager.
@@ -200,4 +201,114 @@ export function imageFileToIconDataUrl(file: File): Promise<string> {
     };
     img.src = url;
   });
+}
+
+// ── Library mods dressed up as Modrinth data ───────────────────────────────
+// The instance manager and the admin editor are built around Modrinth's shapes
+// (ModrinthMatch / ModrinthUpdate / ModrinthProjectDetail). A library mod maps
+// onto them 1:1 under a "lib:" projectId, so its row, detail page, versions tab
+// and update button all work unchanged. Anything that talks to the Modrinth API
+// must skip these ids (isLibraryProjectId / isLibraryVersionId).
+
+const LIB_PREFIX = "lib:";
+
+export function isLibraryProjectId(projectId: string | null | undefined): boolean {
+  return !!projectId && projectId.startsWith(LIB_PREFIX);
+}
+export const isLibraryVersionId = isLibraryProjectId;
+
+export function libraryProjectId(modId: string): string {
+  return LIB_PREFIX + modId;
+}
+
+/** The library mod id behind a "lib:" projectId, or null. */
+export function libraryModIdOf(projectId: string): string | null {
+  return isLibraryProjectId(projectId) ? projectId.slice(LIB_PREFIX.length) : null;
+}
+
+function buildVersionId(modId: string, build: LibraryBuild): string {
+  return `${LIB_PREFIX}${modId}:${buildKey(build.mcVersion, build.loader)}`;
+}
+
+export function libraryMatch(mod: LibraryMod, build: LibraryBuild): ModrinthMatch {
+  return {
+    title: mod.name,
+    iconUrl: mod.icon || null,
+    projectId: libraryProjectId(mod.id),
+    versionId: buildVersionId(mod.id, build),
+    versionNumber: build.modVersion || build.fileName.replace(/\.jar$/i, ""),
+  };
+}
+
+export function libraryBuildAsUpdate(mod: LibraryMod, build: LibraryBuild): ModrinthUpdate {
+  return {
+    versionId: buildVersionId(mod.id, build),
+    versionNumber: build.modVersion || build.fileName.replace(/\.jar$/i, ""),
+    versionType: "release",
+    filename: build.fileName,
+    url: build.downloadUrl,
+    sha1: build.sha1,
+    size: build.size,
+    datePublished: new Date(build.uploadedAt).toISOString(),
+    downloads: 0,
+    dependencies: [],
+  };
+}
+
+export function libraryProjectDetail(mod: LibraryMod): ModrinthProjectDetail {
+  return {
+    description: mod.description,
+    body: mod.details,
+    categories: [],
+    downloads: 0,
+    followers: 0,
+    gallery: [],
+  };
+}
+
+/** sha1 → the library mod + build that file is. */
+export function librarySha1Index(mods: LibraryMod[]): Map<string, { mod: LibraryMod; build: LibraryBuild }> {
+  const out = new Map<string, { mod: LibraryMod; build: LibraryBuild }>();
+  for (const mod of mods) for (const build of Object.values(mod.builds)) out.set(build.sha1, { mod, build });
+  return out;
+}
+
+/** Identifies files that are library jars (by sha1). Never throws: a library
+ *  that can't be read (offline, missing RTDB rule) just identifies nothing. */
+export async function identifyLibraryFiles(
+  files: { path: string; sha1?: string | null }[]
+): Promise<Map<string, ModrinthMatch>> {
+  const out = new Map<string, ModrinthMatch>();
+  if (!files.some((f) => f.sha1)) return out;
+  let mods: LibraryMod[];
+  try {
+    mods = await fetchLibraryMods();
+  } catch {
+    return out;
+  }
+  const index = librarySha1Index(mods);
+  for (const f of files) {
+    const hit = f.sha1 ? index.get(f.sha1) : undefined;
+    if (hit) out.set(f.path, libraryMatch(hit.mod, hit.build));
+  }
+  return out;
+}
+
+export async function fetchLibraryMod(modId: string): Promise<LibraryMod | null> {
+  const snap = await get(dbRef(rtdb, `${ROOT}/${modId}`));
+  return snap.exists() ? normalize(modId, snap.val()) : null;
+}
+
+/** The library build for an instance (exact Minecraft version + loader), as a
+ *  Modrinth-shaped version — what the update check and the versions tab use. */
+export async function libraryVersionsFor(projectId: string, mcVersion: string, loader: string): Promise<ModrinthUpdate[]> {
+  const modId = libraryModIdOf(projectId);
+  if (!modId) return [];
+  try {
+    const mod = await fetchLibraryMod(modId);
+    const build = mod ? compatibleBuild(mod, mcVersion, loader) : null;
+    return mod && build ? [libraryBuildAsUpdate(mod, build)] : [];
+  } catch {
+    return [];
+  }
 }
