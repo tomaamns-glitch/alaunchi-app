@@ -58,7 +58,9 @@ import { getLastViewPath, setLastView } from "@/lib/last-view";
 import { useAuth } from "@/hooks/use-auth";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { useInvites } from "@/hooks/use-invites";
-import { onUpdateInstalled } from "@/services/electron";
+import { onContentLockPurged, onUpdateInstalled } from "@/services/electron";
+import { useModpacks } from "@/hooks/use-modpacks";
+import { toast } from "sonner";
 
 const queryClient = new QueryClient();
 
@@ -270,6 +272,17 @@ function App() {
   useEffect(() => {
     loadPersistedAuth();
   }, [loadPersistedAuth]);
+
+  // Bloqueo de contenido: main removed files a player dropped into a locked
+  // instance's folders while the launcher was running — say so.
+  useEffect(
+    () =>
+      onContentLockPurged(({ modpackId, deleted }) => {
+        const name = useModpacks.getState().modpacks.find((m) => m.id === modpackId)?.name ?? modpackId;
+        toast.warning(`${name}: contenido bloqueado por el creador — se quitaron ${deleted.length} archivo(s) añadidos a mano.`);
+      }),
+    []
+  );
 
   // Once the first screen is up and the app is idle, fetch the other pages'
   // chunks in the background (see the lazy imports above).

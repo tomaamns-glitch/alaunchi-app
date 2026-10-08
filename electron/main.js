@@ -331,8 +331,11 @@ function acquireModpackOp(modpackId, kind) {
 }
 
 function releaseModpackOp(modpackId) {
+  const kind = activeModpackOps.get(modpackId);
   activeModpackOps.delete(modpackId);
   broadcastRunState();
+  // An install/update just finished: check a locked instance against its new file list.
+  if (kind === "installing" && contentLocks.has(modpackId)) scheduleContentLock(modpackId);
 }
 
 // ─── ESTADO DE EJECUCIÓN POR INSTANCIA ──────────────────────────────────────
@@ -3135,6 +3138,8 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
 
   acquireModpackOp(modpackId, "launching");
   try {
+  // Bloqueo de contenido: last sweep right before the game reads its mods.
+  if (contentLocks.has(modpackId)) await enforceContentLock(modpackId).catch(() => {});
   const effectiveClientId = clientId || LAUNCHER_CONFIG.azureClientId || "";
   if (!xuid) {
     console.warn(`[mc:launch] WARNING: launching with empty --xuid. Online server joins will fail with "Sesión no válida". User should re-login with Microsoft.`);
@@ -4730,6 +4735,143 @@ ipcMain.handle("mc:purge-xray-files", async (_, { modpackId }) => {
     }
   }
   return { deletedFiles };
+});
+
+// ── Bloqueo de contenido ─────────────────────────────────────────────────────
+// An online instance whose creator turned on "Bloqueo de contenido" may only
+// contain the modpack's own mods/shaders/resource packs: anything else a player
+// drops into those folders is deleted — on catalog load, every time one of
+// those folders changes while the launcher runs (fs.watch), and right before
+// launching. "The modpack's own" = the file list of the installed snapshot
+// (meta.snapshot.files, or installedManifest for old installs); without that
+// list nothing is touched. The renderer tells us which instances are locked
+// (mc:set-content-locks) since that flag comes from the catalog.
+const LOCKED_CONTENT_DIRS = ["mods", "shaderpacks", "resourcepacks"];
+// Only content-like entries are ever removed — mods/ can also hold files and
+// folders that mods themselves create.
+const LOCKABLE_FILE = {
+  mods: /\.(jar|zip|litemod)(\.disabled)?$/i,
+  shaderpacks: /\.zip$/i,
+  resourcepacks: /\.zip$/i,
+};
+const contentLocks = new Set(); // modpackIds currently locked
+const contentLockWatchers = new Map(); // modpackId -> fs.FSWatcher[]
+const contentLockTimers = new Map(); // modpackId -> debounce timeout
+
+async function enforceContentLock(modpackId) {
+  // Mid install/update the new files land before the new file list is saved —
+  // never judge them against the old list (releaseModpackOp re-runs this after).
+  if (activeModpackOps.get(modpackId) === "installing") return [];
+  const instanceDir = instanceDirFor(modpackId);
+  let meta;
+  try {
+    meta = JSON.parse(await fs.readFile(path.join(instanceDir, "alaunchi-meta.json"), "utf8"));
+  } catch {
+    return [];
+  }
+  const list = Array.isArray(meta.snapshot?.files) ? meta.snapshot.files : Array.isArray(meta.installedManifest) ? meta.installedManifest : null;
+  if (!list) return [];
+  const allowed = list.map((f) => (f && typeof f.path === "string" ? f.path.replace(/\\/g, "/") : null)).filter(Boolean);
+  const allowedSet = new Set(allowed);
+
+  const deleted = [];
+  for (const dir of LOCKED_CONTENT_DIRS) {
+    let entries;
+    try {
+      entries = await fs.readdir(path.join(instanceDir, dir), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const rel = `${dir}/${entry.name}`;
+      const abs = path.join(instanceDir, dir, entry.name);
+      try {
+        if (entry.isFile()) {
+          if (!LOCKABLE_FILE[dir].test(entry.name) || allowedSet.has(rel)) continue;
+          await fs.unlink(abs);
+          deleted.push(rel);
+        } else if (entry.isDirectory() && dir !== "mods") {
+          // An unzipped shader/resource pack — kept only if the modpack ships files inside it.
+          if (allowed.some((p) => p.startsWith(`${rel}/`))) continue;
+          await fs.rm(abs, { recursive: true, force: true });
+          deleted.push(rel);
+        }
+      } catch (e) {
+        // In use by a running game (Windows locks loaded jars) — retried on the next pass.
+        console.warn(`[ContentLock] No se pudo quitar ${rel}:`, e.message);
+      }
+    }
+  }
+  if (deleted.length > 0) {
+    for (const w of BrowserWindow.getAllWindows()) w.webContents.send("content-lock:purged", { modpackId, deleted });
+  }
+  return deleted;
+}
+
+function scheduleContentLock(modpackId) {
+  clearTimeout(contentLockTimers.get(modpackId));
+  contentLockTimers.set(
+    modpackId,
+    setTimeout(() => {
+      contentLockTimers.delete(modpackId);
+      if (contentLocks.has(modpackId)) enforceContentLock(modpackId).catch(() => {});
+    }, 800)
+  );
+}
+
+function unwatchContentLock(modpackId) {
+  for (const w of contentLockWatchers.get(modpackId) || []) {
+    try {
+      w.close();
+    } catch {}
+  }
+  contentLockWatchers.delete(modpackId);
+  clearTimeout(contentLockTimers.get(modpackId));
+  contentLockTimers.delete(modpackId);
+}
+
+function watchContentLock(modpackId) {
+  unwatchContentLock(modpackId);
+  const instanceDir = instanceDirFor(modpackId);
+  const watchers = [];
+  for (const dir of LOCKED_CONTENT_DIRS) {
+    const full = path.join(instanceDir, dir);
+    try {
+      fsSync.mkdirSync(full, { recursive: true });
+      const w = fsSync.watch(full, () => scheduleContentLock(modpackId));
+      w.on("error", () => {});
+      watchers.push(w);
+    } catch {}
+  }
+  contentLockWatchers.set(modpackId, watchers);
+}
+
+// The full set of locked, installed instances (replaces the previous one).
+ipcMain.handle("mc:set-content-locks", async (_, { modpackIds }) => {
+  const next = new Set((Array.isArray(modpackIds) ? modpackIds : []).filter((id) => {
+    try {
+      assertSafeInstanceId(id);
+      return true;
+    } catch {
+      return false;
+    }
+  }));
+  for (const id of [...contentLocks]) {
+    if (!next.has(id)) {
+      contentLocks.delete(id);
+      unwatchContentLock(id);
+    }
+  }
+  const deletedById = {};
+  for (const id of next) {
+    if (!contentLocks.has(id)) {
+      contentLocks.add(id);
+      watchContentLock(id);
+    }
+    const deleted = await enforceContentLock(id).catch(() => []);
+    if (deleted.length) deletedById[id] = deleted;
+  }
+  return deletedById;
 });
 
 // .emotecraft files are a custom binary container (name/author/keyframe data,

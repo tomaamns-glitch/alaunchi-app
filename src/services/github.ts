@@ -16,6 +16,9 @@ export interface Modpack {
   totalSizeMb: number;
   /** When on, clients filter/delete anything with "xray" in the filename for this pack. */
   antiXray?: boolean;
+  /** "Bloqueo de contenido": players can't add mods/shaders/resource packs, and
+   *  anything not shipped by the modpack is deleted from those folders. */
+  lockContent?: boolean;
   /** Repo this online instance was read from ("https://github.com/owner/repo").
    *  Set by fetchModpacks — every install/update/changelog call must go to THIS
    *  repo (see lib/sources.ts), there's no global catalog anymore. */
@@ -927,7 +930,7 @@ export async function updateModpackMetadata(
   token: string,
   repoUrl: string,
   modpackId: string,
-  updates: Partial<Pick<Modpack, "name" | "description" | "imageUrl" | "bannerUrl" | "antiXray">>
+  updates: Partial<Pick<Modpack, "name" | "description" | "imageUrl" | "bannerUrl" | "antiXray" | "lockContent">>
 ): Promise<void> {
   const parsed = parseRepo(repoUrl);
   if (!parsed) throw new Error("URL de repositorio no válida.");

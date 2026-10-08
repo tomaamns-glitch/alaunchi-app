@@ -363,6 +363,19 @@ export async function purgeXrayFiles(modpackId: string): Promise<string[]> {
   return result?.deletedFiles ?? [];
 }
 
+/** Bloqueo de contenido: the complete set of locked, installed instances. Main
+ *  watches their content folders and removes anything the modpack doesn't ship
+ *  (now, on every change, and before launching). Returns what it removed now. */
+export async function setContentLocks(modpackIds: string[]): Promise<Record<string, string[]>> {
+  if (!isElectron) return {};
+  return (await eAPI.setContentLocks({ modpackIds })) ?? {};
+}
+
+export function onContentLockPurged(callback: (data: { modpackId: string; deleted: string[] }) => void): () => void {
+  if (!isElectron) return () => {};
+  return eAPI.onContentLockPurged(callback);
+}
+
 /** Raw per-instance metadata (installed version, playtime, etc.), keyed by modpack id. */
 export async function getInstalledModpacksMeta(): Promise<Record<string, any>> {
   if (!isElectron) return {};

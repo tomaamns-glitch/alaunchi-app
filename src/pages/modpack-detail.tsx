@@ -10,6 +10,8 @@ import { ShareImageDialog, type ShareableImage } from "@/components/share-image-
 import { ShareInstanceDialog } from "@/components/share-instance-dialog";
 import { DuplicateInstanceDialog } from "@/components/duplicate-instance-dialog";
 import { addToGallery, showInstanceFile } from "@/services/personal-library";
+import { onContentLockPurged } from "@/services/electron";
+import { getMySource, sameRepo } from "@/lib/sources";
 import {
   fetchLibraryMod,
   identifyLibraryFiles,
@@ -855,6 +857,21 @@ export default function ModpackDetail() {
   const [modHistory, setModHistory] = useState<string[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [shareImage, setShareImage] = useState<ShareableImage | null>(null);
+  // Bloqueo de contenido: main removed files from this instance — keep the list in sync.
+  useEffect(
+    () =>
+      onContentLockPurged(({ modpackId, deleted }) => {
+        if (modpackId !== id) return;
+        const gone = (p: string) => deleted.some((d) => p === d || p.startsWith(`${d}/`));
+        setOptionalContent((prev) => ({
+          ...prev,
+          mods: prev.mods.filter((f) => !gone(f.path)),
+          shaderpacks: prev.shaderpacks.filter((f) => !gone(f.path)),
+          resourcepacks: prev.resourcepacks.filter((f) => !gone(f.path)),
+        }));
+      }),
+    [id]
+  );
   const [sharingInstance, setSharingInstance] = useState(false);
   const [duplicatingInstance, setDuplicatingInstance] = useState(false);
   const openMod = (path: string) => {
@@ -1572,16 +1589,24 @@ export default function ModpackDetail() {
     installMissing: installDependencies,
   };
 
+  // Bloqueo de contenido (Admin → Ajustes): the creator decided this instance's
+  // mods/shaders/resource packs are exactly the modpack's — every way of adding
+  // or swapping one is hidden here (main also removes anything dropped in by
+  // hand). Never applies to the creator, nor to private instances.
+  const contentLocked = !!pack.lockContent && pack.source !== "custom" && !sameRepo(pack.repoUrl, getMySource()?.repoUrl);
+
   const effectiveCategory = categories.includes(activeCategory) ? activeCategory : categories[0];
   const selectedCategory = selectedModPath ? categoryOf(selectedModPath) ?? effectiveCategory : null;
   const selectedMatch = selectedModPath ? modrinthMatches.get(selectedModPath) : null;
   const selectedRow =
     selectedModPath && selectedCategory ? rowsFor(selectedCategory).find((r) => r.path === selectedModPath) : null;
   const selectedLocked = !!selectedRow?.mandatory;
-  const selectedUpdate = selectedModPath && selectedRow && !selectedLocked ? updates.get(selectedModPath) : undefined;
+  const selectedUpdate =
+    selectedModPath && selectedRow && !selectedLocked && !contentLocked ? updates.get(selectedModPath) : undefined;
   const selectedUpToDate = !!selectedRow && !selectedLocked && !selectedUpdate;
-  const selectedActionable = !selectedLocked && !selectedUpToDate;
-  const showHeaderAction = !!selectedModPath && !!selectedMatch && !!selectedCategory;
+  const selectedActionable = !selectedLocked && !selectedUpToDate && !contentLocked;
+  // Locked content: nothing to install, so no button for a mod that isn't installed.
+  const showHeaderAction = !!selectedModPath && !!selectedMatch && !!selectedCategory && !(contentLocked && !selectedRow);
   const selectedBusy = selectedModPath ? busyPaths.has(selectedModPath) : false;
 
   const handleHeaderInstallClick = () => {
@@ -1708,6 +1733,10 @@ export default function ModpackDetail() {
     }
 
     // mods / shaderpacks / resourcepacks
+    if (contentLocked) {
+      toast.error("El creador de esta instancia ha bloqueado añadir mods, shaders y resource packs.");
+      return;
+    }
     const category = classification.category as Category;
     const [modrinthFound, libraryFound] = await Promise.all([
       identifyModrinthFiles([{ path: targetPath, sha1 }]).catch(() => new Map<string, ModrinthMatch>()),
@@ -2319,7 +2348,7 @@ export default function ModpackDetail() {
                         {modVersions.map((v) => {
                           const isInstalled = v.versionId === selectedMatch?.versionId;
                           const busy = busyPaths.has(selectedModPath!);
-                          const locked = !!selectedRow && selectedRow.mandatory && !isInstalled;
+                          const locked = (!!selectedRow && selectedRow.mandatory && !isInstalled) || (contentLocked && !isInstalled);
                           const typeMeta = VERSION_TYPE_META[v.versionType];
                           return (
                             <div
@@ -2407,7 +2436,7 @@ export default function ModpackDetail() {
                               <span className="inline-flex items-center gap-1 text-[11px] text-accent shrink-0">
                                 <Check className="h-3.5 w-3.5" /> Instalada
                               </span>
-                            ) : pack.installed ? (
+                            ) : pack.installed && !contentLocked ? (
                               <Button
                                 size="sm"
                                 className="h-7 text-xs shrink-0"
@@ -2594,7 +2623,16 @@ export default function ModpackDetail() {
                     </TabsList>
                     {pack.installed && (
                       <div className="flex items-center gap-2">
-                        {!emotesOpen && !schematicsOpen && !screenshotsOpen && (
+                        {!emotesOpen && !schematicsOpen && !screenshotsOpen && contentLocked && (
+                          <span
+                            className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-white/10 bg-white/5 text-xs font-semibold text-muted-foreground"
+                            title="El creador de esta instancia no permite añadir mods, shaders ni resource packs."
+                          >
+                            <Lock className="h-3.5 w-3.5" />
+                            Contenido bloqueado
+                          </span>
+                        )}
+                        {!emotesOpen && !schematicsOpen && !screenshotsOpen && !contentLocked && (
                           <Button
                             size="sm"
                             onClick={() => setSearchMode(true)}
@@ -2604,7 +2642,7 @@ export default function ModpackDetail() {
                             {`Instalar ${CATEGORY_META[effectiveCategory].label}`}
                           </Button>
                         )}
-                        {!emotesOpen && !schematicsOpen && !screenshotsOpen && effectiveCategory === "mods" && (
+                        {!emotesOpen && !schematicsOpen && !screenshotsOpen && !contentLocked && effectiveCategory === "mods" && (
                           <Button
                             size="icon"
                             variant="outline"
@@ -3141,10 +3179,10 @@ export default function ModpackDetail() {
                               mandatory={row.mandatory}
                               title={title}
                               match={modrinthMatches.get(row.path)}
-                              update={updates.get(row.path)}
+                              update={contentLocked ? undefined : updates.get(row.path)}
                               busy={busyPaths.has(row.path)}
                               dependentTitles={c === "mods" ? dependentTitlesByPath.get(row.path) : undefined}
-                              missingDeps={c === "mods" ? missingDepsByPath.get(row.path) : undefined}
+                              missingDeps={c === "mods" && !contentLocked ? missingDepsByPath.get(row.path) : undefined}
                               onInstallMissing={onRowInstallMissing}
                               sharedLayout={row.path === lastOpenedPath}
                               onOpen={onRowOpen}

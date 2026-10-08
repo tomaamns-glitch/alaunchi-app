@@ -98,6 +98,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // File system / settings
   openInstanceFolder: (args) => ipcRenderer.invoke("mc:open-instance-folder", args),
   purgeXrayFiles: (args) => ipcRenderer.invoke("mc:purge-xray-files", args),
+  setContentLocks: (args) => ipcRenderer.invoke("mc:set-content-locks", args),
+  onContentLockPurged: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("content-lock:purged", handler);
+    return () => ipcRenderer.removeListener("content-lock:purged", handler);
+  },
   listEmotes: (args) => ipcRenderer.invoke("mc:list-emotes", args),
   listScreenshots: (args) => ipcRenderer.invoke("mc:list-screenshots", args),
   showInstanceFile: (args) => ipcRenderer.invoke("mc:show-instance-file", args),
