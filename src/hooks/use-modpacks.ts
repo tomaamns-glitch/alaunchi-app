@@ -3,7 +3,7 @@ import { create } from "zustand";
 import { toast } from "sonner";
 import { Modpack, fetchModpacks } from "../services/github";
 import { addGrantedSource, getGrantedSource, getGrantedSources, getMySource, getReadToken, repoKey, sameRepo } from "../lib/sources";
-import { purgeXrayFiles } from "../services/electron";
+import { purgeXrayFiles, setContentLocks } from "../services/electron";
 import { getUserAccessSet, grantKey, refreshAccess, revokeAccess } from "../services/access-codes";
 import {
   type OnlineHistory,
@@ -64,6 +64,18 @@ function sweepXrayContent(modpacks: Modpack[]) {
   }
 }
 
+
+/** Bloqueo de contenido: hands main the set of this player's locked instances
+ *  (installed, lockContent on, and not their own — a creator is never locked
+ *  out of their own pack). Runs on every load, like the xray sweep, so turning
+ *  the option on or off reaches players with the next catalog read. */
+function applyContentLocks(modpacks: Modpack[]) {
+  const myRepo = getMySource()?.repoUrl;
+  const locked = modpacks.filter((mp) => mp.installed && mp.lockContent && !sameRepo(mp.repoUrl, myRepo));
+  // What gets removed is announced through the content-lock:purged event
+  // (App.tsx), which also covers removals while the launcher keeps running.
+  setContentLocks(locked.map((mp) => mp.id)).catch(() => {});
+}
 
 // Which online instances of a repo this user may see: all of them in their
 // own repo (they're its creator and manage every pack), only the granted ones
@@ -295,6 +307,7 @@ export const useModpacks = create<ModpackState>((set, get) => ({
         sourceErrors,
       });
       sweepXrayContent(visible);
+      applyContentLocks(visible);
     } catch (e: any) {
       set({ loaded: true, loading: false, error: e?.message ?? "Error al cargar modpacks" });
     }

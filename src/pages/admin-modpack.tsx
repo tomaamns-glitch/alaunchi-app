@@ -120,6 +120,7 @@ interface SettingsForm {
   imageUrl: string;
   bannerUrl: string;
   antiXray: boolean;
+  lockContent: boolean;
 }
 
 type RowStatus = "unchanged" | "added" | "replaced" | "removed";
@@ -246,6 +247,7 @@ export default function AdminModpack() {
     imageUrl: "",
     bannerUrl: "",
     antiXray: false,
+    lockContent: false,
   });
   const [settingsSaving, setSettingsSaving] = useState(false);
 
@@ -319,6 +321,7 @@ export default function AdminModpack() {
       imageUrl: pack.imageUrl,
       bannerUrl: pack.bannerUrl,
       antiXray: pack.antiXray ?? false,
+      lockContent: pack.lockContent ?? false,
     });
     const repoUrl = getMySource()?.repoUrl ?? "";
     const token = getMySource()?.adminToken;
@@ -1670,6 +1673,22 @@ export default function AdminModpack() {
                     <Switch
                       checked={settingsForm.antiXray}
                       onCheckedChange={(v) => setSettingsForm({ ...settingsForm, antiXray: v })}
+                      disabled={settingsSaving}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 border-t border-white/5 pt-4">
+                    <div>
+                      <Label className="text-gray-200">Bloqueo de contenido</Label>
+                      <p className="text-xs text-muted-foreground max-w-sm mt-0.5">
+                        Los jugadores no podrán añadir mods, shaders ni resource packs desde el gestor de la instancia, y la
+                        app eliminará automáticamente cualquiera que metan a mano en esas carpetas y que no forme parte del
+                        modpack. A ti, como creador, no te afecta.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={settingsForm.lockContent}
+                      onCheckedChange={(v) => setSettingsForm({ ...settingsForm, lockContent: v })}
                       disabled={settingsSaving}
                     />
                   </div>
