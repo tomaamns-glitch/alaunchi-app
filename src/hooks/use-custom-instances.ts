@@ -30,6 +30,7 @@ function metaToModpack(meta: Record<string, any>): Modpack {
     totalSizeMb: 0,
     source: "custom",
     installedAt: meta.installedAt,
+    isCopy: !!meta.duplicatedFrom,
   };
 }
 

@@ -25,8 +25,11 @@ import {
   Moon,
   Sun,
   Check,
+  MonitorDown,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { readSettings, writeSettings, isElectron, getDataDir, chooseDataDir, openDataDir } from "@/services/electron";
 import {
   NOTIFICATION_SOUNDS,
@@ -37,6 +40,7 @@ import {
 } from "@/lib/notification-sound";
 import { getLastViewPath } from "@/lib/last-view";
 import { useTheme, type Theme } from "@/lib/theme";
+import { useAnimatedBackground } from "@/lib/animated-background";
 import { cn } from "@/lib/utils";
 
 type SectionId = "storage" | "personalization" | "developer" | "account";
@@ -272,6 +276,8 @@ function PersonalizationSection() {
   return (
     <>
     <ThemePanel />
+    <AnimatedBackgroundPanel />
+    <BackgroundPanel />
     <Panel
       icon={Bell}
       title="Notificaciones"
@@ -304,6 +310,72 @@ function PersonalizationSection() {
       </div>
     </Panel>
     </>
+  );
+}
+
+function AnimatedBackgroundPanel() {
+  const enabled = useAnimatedBackground((s) => s.enabled);
+  const setEnabled = useAnimatedBackground((s) => s.setEnabled);
+  return (
+    <Panel
+      icon={Sparkles}
+      title="Fondo animado"
+      description={
+        enabled
+          ? "La luz en movimiento detrás de Mis instancias y del gestor de cada instancia."
+          : "Fondo quieto: una nube suave del mismo color, sin movimiento. Gasta menos."
+      }
+    >
+      <div className="flex items-center justify-between gap-3">
+        <Label htmlFor="animated-background" className="text-sm text-gray-100">
+          Fondo en movimiento
+        </Label>
+        <Switch id="animated-background" checked={enabled} onCheckedChange={setEnabled} />
+      </div>
+    </Panel>
+  );
+}
+
+/** Whether closing the window leaves ALaunchi running in the tray (default) or
+ *  quits it — settings.json `closeToTray`, read by electron/main.js. */
+function BackgroundPanel() {
+  const [closeToTray, setCloseToTray] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    readSettings()
+      .then((s) => setCloseToTray(s.closeToTray !== false))
+      .finally(() => setLoaded(true));
+  }, []);
+
+  const handleChange = async (on: boolean) => {
+    setCloseToTray(on);
+    try {
+      const current = await readSettings();
+      await writeSettings({ ...current, closeToTray: on });
+    } catch {
+      setCloseToTray(!on);
+      toast.error("No se pudo guardar el ajuste.");
+    }
+  };
+
+  return (
+    <Panel
+      icon={MonitorDown}
+      title="Al cerrar la ventana"
+      description={
+        closeToTray
+          ? "ALaunchi sigue en segundo plano (icono junto al reloj): el chat, los avisos y el tiempo jugado siguen funcionando. Para salir del todo: clic derecho en el icono → Cerrar."
+          : "Cerrar la ventana cierra ALaunchi del todo. Si cierras mientras juegas, esa partida no sumará tiempo jugado y no te llegarán mensajes ni avisos."
+      }
+    >
+      <div className="flex items-center justify-between gap-3">
+        <Label htmlFor="close-to-tray" className="text-sm text-gray-100">
+          Seguir en segundo plano
+        </Label>
+        <Switch id="close-to-tray" checked={closeToTray} disabled={!loaded || !isElectron} onCheckedChange={handleChange} />
+      </div>
+    </Panel>
   );
 }
 

@@ -8,7 +8,7 @@ import { useLaunchModpack } from "@/hooks/use-launch-modpack";
 import { useShowcaseSkin } from "@/hooks/use-showcase-skin";
 import { ProfileFrame } from "@/components/profile-frame";
 import { ProfileEditDialog } from "@/components/profile-edit-dialog";
-import { ProfileCustomizeDialog } from "@/components/profile-customize-dialog";
+import { ProfileCustomizeDialog } from "@/components/lazy-heavy";
 import { getInstalledModpacksMeta } from "@/services/electron";
 import { getFavorites, type FavoriteCategory } from "@/services/favorites";
 import { DEFAULT_PROFILE_BANNER } from "@/services/banner";

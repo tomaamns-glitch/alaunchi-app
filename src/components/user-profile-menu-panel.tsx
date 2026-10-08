@@ -20,7 +20,7 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
 import { usePlayerSkinUrl } from "@/hooks/use-player-head";
 import { useChatHeads } from "@/hooks/use-chat-heads";
-import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
+import { SkinViewerAnimated } from "@/components/lazy-heavy";
 import { ProfileFrame } from "@/components/profile-frame";
 import { InstallFavoriteDialog } from "@/components/install-favorite-dialog";
 import { subscribeProfile, visibleOnlineInstances, type PublicProfileSnapshot, type PublicInstanceSummary } from "@/services/public-profile";
@@ -118,7 +118,7 @@ export function UserProfileMenuView({ targetUuid, myUuid, myUsername, backButton
   };
 
   return (
-    <div className="flex gap-4">
+    <div className="flex gap-6">
       <div className="flex flex-col items-center gap-2 shrink-0">
         <div className="rounded-xl bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.18),transparent_70%)]">
           {profile && skinUrl ? (
@@ -126,13 +126,13 @@ export function UserProfileMenuView({ targetUuid, myUuid, myUsername, backButton
               key={`${targetUuid}:${profile.avatarDecoration}`}
               skinUrl={skinUrl}
               variant="auto-detect"
-              width={150}
-              height={200}
+              width={190}
+              height={254}
               effect={toSkinEffect(profile.avatarDecoration)}
               className="cursor-grab active:cursor-grabbing"
             />
           ) : (
-            <div className="w-[150px] h-[200px] flex items-center justify-center">
+            <div className="w-[190px] h-[254px] flex items-center justify-center">
               {profile !== null && <Loader2 className="h-5 w-5 animate-spin text-accent/60" />}
             </div>
           )}
@@ -140,7 +140,7 @@ export function UserProfileMenuView({ targetUuid, myUuid, myUsername, backButton
         {backButton}
       </div>
 
-      <div className="w-[22rem] h-[246px]">
+      <div className="w-[29rem] h-[300px]">
         {profile === undefined ? (
           <div className="h-full flex items-center justify-center">
             <Loader2 className="h-5 w-5 animate-spin text-accent" />

@@ -163,7 +163,7 @@ export type HeaderOverlay = "profile" | "presence" | "presence-all-instance" | n
 /** Which screen the account menu shows. Lives here (not in the menu itself) so
  *  other footer popups can open it straight on a given screen — e.g. the
  *  players panel's "Amigos" heading opens it on "friends". */
-export type ProfileView = "menu" | "skin" | "friends" | "profile" | "user" | "online" | "servers";
+export type ProfileView = "menu" | "skin" | "friends" | "profile" | "user" | "online" | "servers" | "library";
 
 interface HeaderOverlayState {
   active: HeaderOverlay;

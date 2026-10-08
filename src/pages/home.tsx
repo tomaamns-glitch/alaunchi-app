@@ -29,6 +29,7 @@ import { OFFLINE_REASON_LABEL } from "@/lib/online-history";
 import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AccountMenuButton } from "@/components/account-menu-button";
+import { InstanceGroupChat } from "@/components/instance-group-chat";
 import { ChangelogHistoryButton } from "@/components/changelog-history-button";
 import { ChangelogViewerDialog } from "@/components/changelog-viewer-dialog";
 import { PresenceButton } from "@/components/presence-button";
@@ -911,6 +912,9 @@ export default function Home() {
               open={activePopup === "presence"}
               onOpenChange={(next) => (next ? openOverlay("presence") : closeOverlay())}
             />
+            {uuid && viewContext.type === "carousel" && (
+              <InstanceGroupChat pack={viewContext.pack} myUuid={uuid} myUsername={username ?? ""} />
+            )}
             {uuid && (
               <div className="relative">
                 <ChatBubbleRow />

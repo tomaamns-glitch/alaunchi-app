@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef } from "react";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
@@ -9,16 +9,49 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
 import Home from "@/pages/home";
-import Admin from "@/pages/admin";
-import AdminModpack from "@/pages/admin-modpack";
-import AdminLibrary from "@/pages/admin-library";
-import Servers from "@/pages/servers";
-import Settings from "@/pages/settings";
-import Profile from "@/pages/profile";
-import PublicProfile from "@/pages/public-profile";
-import Friends from "@/pages/friends";
 import Hub from "@/pages/hub";
-import ModpackDetail from "@/pages/modpack-detail";
+import { prefetchHeavyChunks } from "@/components/lazy-heavy";
+
+// Rendimiento: only the screens the app can start on (Hub, Inicio, Login) are in
+// the startup bundle; every other page — and what only it uses (schematic and
+// emote viewers, admin publishing, servers…) — is its own chunk, fetched in the
+// background once the app is idle (prefetchLazyPages below), so navigating to
+// it later is still instant. Same routes, same components.
+const loadModpackDetail = () => import("@/pages/modpack-detail");
+const loadSettings = () => import("@/pages/settings");
+const loadProfile = () => import("@/pages/profile");
+const loadPublicProfile = () => import("@/pages/public-profile");
+const loadFriends = () => import("@/pages/friends");
+const loadServers = () => import("@/pages/servers");
+const loadAdmin = () => import("@/pages/admin");
+const loadAdminModpack = () => import("@/pages/admin-modpack");
+const loadAdminLibrary = () => import("@/pages/admin-library");
+const ModpackDetail = lazy(loadModpackDetail);
+const Settings = lazy(loadSettings);
+const Profile = lazy(loadProfile);
+const PublicProfile = lazy(loadPublicProfile);
+const Friends = lazy(loadFriends);
+const Servers = lazy(loadServers);
+const Admin = lazy(loadAdmin);
+const AdminModpack = lazy(loadAdminModpack);
+const AdminLibrary = lazy(loadAdminLibrary);
+
+function prefetchLazyPages() {
+  // Most-visited first.
+  const loaders = [
+    loadModpackDetail,
+    loadSettings,
+    loadProfile,
+    loadPublicProfile,
+    loadFriends,
+    loadServers,
+    loadAdmin,
+    loadAdminModpack,
+    loadAdminLibrary,
+  ];
+  for (const load of loaders) load().catch(() => {});
+  prefetchHeavyChunks();
+}
 import { Titlebar } from "@/components/titlebar";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { getLastViewPath, setLastView } from "@/lib/last-view";
@@ -200,7 +233,11 @@ function Router() {
         exit="exit"
         className="h-full"
       >
-        <RouteSwitch location={location} />
+        {/* A lazy page still on its way renders nothing for that moment (it's
+            prefetched in the background, so in practice it's already here). */}
+        <Suspense fallback={null}>
+          <RouteSwitch location={location} />
+        </Suspense>
       </motion.div>
     </AnimatePresence>
   );
@@ -233,6 +270,19 @@ function App() {
   useEffect(() => {
     loadPersistedAuth();
   }, [loadPersistedAuth]);
+
+  // Once the first screen is up and the app is idle, fetch the other pages'
+  // chunks in the background (see the lazy imports above).
+  useEffect(() => {
+    if (!authChecked) return;
+    const w = window as any;
+    if (typeof w.requestIdleCallback === "function") {
+      const id = w.requestIdleCallback(prefetchLazyPages, { timeout: 4000 });
+      return () => w.cancelIdleCallback?.(id);
+    }
+    const t = window.setTimeout(prefetchLazyPages, 2000);
+    return () => window.clearTimeout(t);
+  }, [authChecked]);
 
   // Little "ta-da" the moment the silently-updated app reopens — see
   // onUpdateInstalled's doc comment. Fires at most once per launch, and never

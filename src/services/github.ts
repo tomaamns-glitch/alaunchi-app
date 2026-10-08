@@ -29,6 +29,9 @@ export interface Modpack {
   /** Set on a "past" online instance (lib/online-history.ts) — why it's out of
    *  the network. Such a pack has no repoUrl: no updates, no instance chat/presence. */
   outOfNetwork?: OfflineReason;
+  /** Only for source === "custom": a duplicate nobody has renamed or re-imaged
+   *  yet (the Hub tile shows a ↺ badge). */
+  isCopy?: boolean;
 }
 
 /** Why an online instance became "past": you left it, its creator removed

@@ -1,16 +1,17 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { Shirt, Settings, User, Users, Globe, Server, ChevronLeft, ChevronDown, type LucideIcon } from "lucide-react";
+import { Shirt, Settings, User, Users, Globe, Server, ChevronLeft, ChevronDown, BookMarked, type LucideIcon } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-import { SkinManagerPanel } from "@/components/skin-manager-panel";
-import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
+// Loaded on demand (three.js) — see components/lazy-heavy.tsx.
+import { SkinManagerPanel, SkinViewerAnimated } from "@/components/lazy-heavy";
 import { usePlayerHeadUrl, usePlayerSkinUrl } from "@/hooks/use-player-head";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { FriendsPanel } from "@/components/friends-panel";
 import { ProfileMenuPanel } from "@/components/profile-menu-panel";
 import { OnlineInstancesPanel } from "@/components/online-instances-panel";
 import { ServersPanel } from "@/components/servers-panel";
+import { PersonalLibraryPanel } from "@/components/personal-library-panel";
 import { useSavedServers } from "@/lib/saved-servers";
 import { useInvites } from "@/hooks/use-invites";
 import { UserProfileMenuView } from "@/components/user-profile-menu-panel";
@@ -121,7 +122,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
             animate={{ clipPath: CLIP_OPEN, opacity: 1 }}
             exit={{ clipPath: collapsedClip, opacity: 0 }}
             transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-            className="absolute bottom-0 left-0 z-50 min-w-[23rem] rounded-[14px] bg-card/95 backdrop-blur-xl border border-white/10 shadow-2xl flex flex-col"
+            className="absolute bottom-0 left-0 z-50 min-w-[32rem] rounded-[14px] bg-card/95 backdrop-blur-xl border border-white/10 shadow-2xl flex flex-col"
           >
             <AnimatePresence mode="wait" initial={false}>
               {profileView === "menu" ? (
@@ -131,7 +132,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.12 }}
-                  className="flex gap-4 p-4"
+                  className="flex gap-6 p-6"
                 >
                   <CharacterColumn skinUrl={mySkinUrl} effect={decoration}>
                     <button
@@ -144,11 +145,12 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                     </button>
                   </CharacterColumn>
 
-                  <div className="flex-1 flex flex-col gap-1.5 pt-1">
+                  <div className="flex-1 flex flex-col gap-2 pt-1">
                     <MenuTile icon={User} label="Perfil" onClick={() => setProfileView("profile")} />
                     <MenuTile icon={Users} label="Amigos" badge={pendingRequests} onClick={() => setProfileView("friends")} />
                     <MenuTile icon={Globe} label="Instancias online" badge={inviteCount} onClick={() => setProfileView("online")} />
                     <MenuTile icon={Server} label="Servers" onClick={() => setProfileView("servers")} />
+                    <MenuTile icon={BookMarked} label="Biblioteca" onClick={() => setProfileView("library")} />
                     <MenuTile icon={Settings} label="Configuración" onClick={() => go("/settings")} />
                   </div>
                 </motion.div>
@@ -159,7 +161,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.12 }}
-                  className="flex gap-4 p-4"
+                  className="flex gap-6 p-6"
                 >
                   <CharacterColumn skinUrl={mySkinUrl} effect={decoration}>
                     <BackButton onClick={() => setProfileView("menu")} />
@@ -169,7 +171,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                     initial={{ opacity: 0, x: 24 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                    className="w-[21rem] h-[246px]"
+                    className="w-[28rem] h-[300px]"
                   >
                     {username && (
                       <FriendsPanel
@@ -192,7 +194,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.12 }}
-                  className="flex gap-4 p-4"
+                  className="flex gap-6 p-6"
                 >
                   <CharacterColumn skinUrl={mySkinUrl} effect={decoration}>
                     <BackButton onClick={() => setProfileView("menu")} />
@@ -201,7 +203,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                     initial={{ opacity: 0, x: 24 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                    className="w-[22rem] h-[246px]"
+                    className="w-[29rem] h-[300px]"
                   >
                     {username && <ProfileMenuPanel uuid={uuid} username={username} onNavigate={go} />}
                   </motion.div>
@@ -213,7 +215,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.12 }}
-                  className="flex gap-4 p-4"
+                  className="flex gap-6 p-6"
                 >
                   <CharacterColumn skinUrl={mySkinUrl} effect={decoration}>
                     <BackButton onClick={() => setProfileView("menu")} />
@@ -222,7 +224,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                     initial={{ opacity: 0, x: 24 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                    className="w-[22rem] h-[246px]"
+                    className="w-[29rem] h-[300px]"
                   >
                     <OnlineInstancesPanel onNavigate={go} />
                   </motion.div>
@@ -234,7 +236,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.12 }}
-                  className="flex gap-4 p-4"
+                  className="flex gap-6 p-6"
                 >
                   <CharacterColumn skinUrl={mySkinUrl} effect={decoration}>
                     <BackButton onClick={() => setProfileView("menu")} />
@@ -243,9 +245,30 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                     initial={{ opacity: 0, x: 24 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                    className="w-[22rem] h-[246px]"
+                    className="w-[29rem] h-[300px]"
                   >
                     <ServersPanel />
+                  </motion.div>
+                </motion.div>
+              ) : profileView === "library" ? (
+                <motion.div
+                  key="library"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="flex gap-6 p-6"
+                >
+                  <CharacterColumn skinUrl={mySkinUrl} effect={decoration}>
+                    <BackButton onClick={() => setProfileView("menu")} />
+                  </CharacterColumn>
+                  <motion.div
+                    initial={{ opacity: 0, x: 24 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                    className="w-[29rem] h-[300px]"
+                  >
+                    <PersonalLibraryPanel />
                   </motion.div>
                 </motion.div>
               ) : profileView === "user" && viewedUserUuid ? (
@@ -256,7 +279,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.12 }}
-                  className="p-4"
+                  className="p-6"
                 >
                   {username && (
                     <UserProfileMenuView
@@ -275,7 +298,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.12 }}
-                  className="p-4 max-h-[70vh] overflow-y-auto"
+                  className="p-6 max-h-[70vh] overflow-y-auto"
                 >
                   <SkinManagerPanel
                     uuid={uuid}
@@ -292,7 +315,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
               <button
                 type="button"
                 onClick={() => setProfileOpen(false)}
-                className="flex-1 min-w-0 flex items-center gap-3 px-4 py-2.5 text-left rounded-b-[14px]"
+                className="flex-1 min-w-0 flex items-center gap-3 px-6 py-3.5 text-left rounded-b-[14px]"
               >
                 <HeadAvatar headUrl={myHeadUrl} username={username} size={40}>
                   <Avatar className="h-10 w-10 rounded-lg border border-white/10">
@@ -306,8 +329,8 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
               </button>
               {/* Personalizar portals its Aplicar/descartar buttons in here while
                   previewing; the arrow only shows while this slot is empty. */}
-              <div ref={setPreviewSlot} className="peer absolute right-4 top-1/2 -translate-y-1/2 empty:pointer-events-none" />
-              <ChevronDown className="h-4 w-4 mr-4 text-gray-400 pointer-events-none peer-[:not(:empty)]:invisible" />
+              <div ref={setPreviewSlot} className="peer absolute right-6 top-1/2 -translate-y-1/2 empty:pointer-events-none" />
+              <ChevronDown className="h-4 w-4 mr-6 text-gray-400 pointer-events-none peer-[:not(:empty)]:invisible" />
             </div>
           </motion.div>
         )}
@@ -383,13 +406,13 @@ function CharacterColumn({
           <SkinViewerAnimated
             skinUrl={skinUrl}
             variant="auto-detect"
-            width={150}
-            height={200}
+            width={190}
+            height={254}
             effect={effect}
             className="cursor-grab active:cursor-grabbing"
           />
         ) : (
-          <div className="w-[150px] h-[200px]" />
+          <div className="w-[190px] h-[254px]" />
         )}
       </div>
       {children}
@@ -423,10 +446,10 @@ function MenuTile({ icon: Icon, label, badge, onClick }: MenuTileProps) {
       type="button"
       onClick={onClick}
       // Single line even if that widens the menu ("Instancias online").
-      className="group flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/5 text-sm font-medium text-gray-200 whitespace-nowrap hover:bg-white/10 hover:border-white/10 transition-colors"
+      className="group flex items-center gap-3 px-3 py-2.5 rounded-lg bg-white/[0.04] border border-white/5 text-[15px] font-medium text-gray-200 whitespace-nowrap hover:bg-white/10 hover:border-white/10 transition-colors"
     >
-      <span className="h-6 w-6 shrink-0 flex items-center justify-center rounded-md bg-accent/15 text-accent group-hover:bg-accent/25 transition-colors">
-        <Icon className="h-3.5 w-3.5" />
+      <span className="h-8 w-8 shrink-0 flex items-center justify-center rounded-md bg-accent/15 text-accent group-hover:bg-accent/25 transition-colors">
+        <Icon className="h-4 w-4" />
       </span>
       {label}
       {!!badge && badge > 0 && (
