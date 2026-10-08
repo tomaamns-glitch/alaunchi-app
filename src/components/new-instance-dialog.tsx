@@ -191,7 +191,12 @@ export function NewInstanceDialog({ open, onOpenChange, onCreated }: NewInstance
       }
       if (loaderType === "neoforge") {
         const versions = await listNeoforgeVersions(mcVersion);
-        return versions.map((v): VersionOption => ({ value: v.version, label: v.version }));
+        // NeoForge has no stability flag; unstable builds carry a "-beta"/"-alpha" suffix.
+        return versions.map((v): VersionOption => ({
+          value: v.version,
+          label: v.version,
+          badge: /beta|alpha/i.test(v.version) ? "Beta" : undefined,
+        }));
       }
       const versions = await listFabricVersions(mcVersion);
       return versions.map((v): VersionOption => ({
@@ -203,7 +208,15 @@ export function NewInstanceDialog({ open, onOpenChange, onCreated }: NewInstance
 
     load()
       .then((options) => {
-        if (!cancelled) setLoaderVersions(options);
+        if (cancelled) return;
+        setLoaderVersions(options);
+        // Preselect the most stable current build (lists are newest-first):
+        // Forge's recommended promotion, else the newest non-beta, else the newest.
+        const best =
+          options.find((o) => o.badge === "Recomendada") ??
+          options.find((o) => o.badge !== "Beta") ??
+          options[0];
+        setLoaderVersion(best?.value ?? null);
       })
       .catch(() => {
         if (!cancelled) toast.error(`No se pudo cargar la lista de versiones de ${LOADER_LABELS[loaderType]}.`);
@@ -327,7 +340,7 @@ export function NewInstanceDialog({ open, onOpenChange, onCreated }: NewInstance
               )}
             </button>
             <p className="text-[11px] text-muted-foreground">
-              Sin banner, se usa un degradado del color del icono al entrar en la instancia.
+              Sin banner, se usa el fondo animado con el color del icono al entrar en la instancia.
             </p>
             {banner && (
               <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setBanner(null)}>

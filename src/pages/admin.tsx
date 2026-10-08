@@ -16,7 +16,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ArrowLeft, ChevronRight, Package, Plus, Trash, Loader2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, Library, Package, Plus, Trash, Loader2 } from "lucide-react";
+import { isModLibraryOwner } from "@/services/mod-library";
 import { createModpack, deleteModpack, type NewModpackData } from "@/services/github";
 import { getMySource, uniqueModpackId } from "@/lib/sources";
 import { useIsAdmin } from "@/hooks/use-is-admin";
@@ -37,7 +38,7 @@ const emptyForm = (): NewModpackData => ({
 });
 
 export default function Admin() {
-  const { isAuthenticated, uuid, username } = useAuth();
+  const { isAuthenticated, uuid, username, email } = useAuth();
   const isAdmin = useIsAdmin();
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks } = useModpacks();
@@ -130,6 +131,11 @@ export default function Admin() {
                   {modpacks.length} instancia{modpacks.length === 1 ? "" : "s"} online en tu repositorio
                 </p>
               </div>
+              {isModLibraryOwner(email) && (
+                <Button variant="outline" className="shrink-0" onClick={() => setLocation("/admin/library")}>
+                  <Library className="mr-2 h-4 w-4" /> Biblioteca de mods
+                </Button>
+              )}
               <Button
                 className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold shrink-0"
                 onClick={() => setShowNewDialog(true)}

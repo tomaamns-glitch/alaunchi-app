@@ -11,6 +11,7 @@ import Login from "@/pages/login";
 import Home from "@/pages/home";
 import Admin from "@/pages/admin";
 import AdminModpack from "@/pages/admin-modpack";
+import AdminLibrary from "@/pages/admin-library";
 import Servers from "@/pages/servers";
 import Settings from "@/pages/settings";
 import Profile from "@/pages/profile";
@@ -211,6 +212,7 @@ function RouteSwitch({ location }: { location: string }) {
       <Route path="/" component={Home} />
       <Route path="/login" component={Login} />
       <Route path="/admin" component={Admin} />
+      <Route path="/admin/library" component={AdminLibrary} />
       <Route path="/admin/:id" component={AdminModpack} />
       <Route path="/servers" component={Servers} />
       <Route path="/settings" component={Settings} />

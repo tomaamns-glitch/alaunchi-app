@@ -1,9 +1,10 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { memo, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useLocation, useParams } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { InstanceSettingsDialog } from "@/components/instance-settings-dialog";
+import { ModLibraryDialog } from "@/components/mod-library-dialog";
 import { InstanceProgressChip } from "@/components/instance-progress-chip";
 import { useInstanceProgress } from "@/hooks/use-instance-progress";
 import { Button } from "@/components/ui/button";
@@ -11,11 +12,16 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isFavorite, toggleFavorite } from "@/services/favorites";
 import {
   ArrowLeft,
   ArrowUpDown,
   ArrowDown,
+  ArrowUp,
+  AlertTriangle,
+  Library,
   Check,
   X,
   Loader2,
@@ -42,6 +48,7 @@ import {
   Camera,
   Trash2,
   Square,
+  Link2,
 } from "lucide-react";
 import { SnapshotEntry, fetchSnapshot } from "@/services/github";
 import {
@@ -49,6 +56,7 @@ import {
   getLatestVersion,
   getProjectDetail,
   getProjectInfo,
+  getProjectsInfo,
   getRequiredDependencies,
   getVersionsByIds,
   listVersions,
@@ -131,6 +139,10 @@ import {
 } from "@/services/minemev";
 import { findPackSource } from "@/hooks/use-modpacks";
 import { getLastViewPath } from "@/lib/last-view";
+import SwellLight from "@/components/swell-light";
+import { useTheme } from "@/lib/theme";
+import { extractDominantColor, type HSL } from "@/lib/dominant-color";
+import { loadRecentUpdates, recordRecentUpdate, type RecentUpdates } from "@/lib/recent-updates";
 import { formatBytes, formatPlaytime } from "@/lib/format";
 import { toast } from "sonner";
 import { SiModrinth } from "react-icons/si";
@@ -180,6 +192,254 @@ interface ContentRow {
   mandatory: boolean;
 }
 
+interface InstalledContentRowProps {
+  path: string;
+  category: Category;
+  mandatory: boolean;
+  title: string;
+  match: ModrinthMatch | undefined;
+  update: ModrinthUpdate | undefined;
+  busy: boolean;
+  /** Titles of the installed mods that require this one, if any. */
+  dependentTitles: string[] | undefined;
+  /** Mount with the shared-layout ids from the start — the row the mod panel
+   *  was last opened from, so closing the panel animates back into it. */
+  sharedLayout: boolean;
+  /** Required dependencies of this mod that aren't installed. */
+  missingDeps: MissingDep[] | undefined;
+  onOpen: (path: string) => void;
+  onUpdate: (category: Category, path: string) => void;
+  onDelete: (category: Category, path: string) => void;
+  onInstallMissing: (deps: MissingDep[]) => Promise<void>;
+}
+
+interface MissingDep {
+  projectId: string;
+  title: string;
+  iconUrl: string | null;
+}
+
+/** Yellow warning next to a mod's name when some of its required dependencies
+ *  aren't installed. Opens on hover (like a tooltip) and on click; a Popover
+ *  rather than a Tooltip so the install buttons inside stay reachable — closing
+ *  is delayed a bit so the pointer can travel from the icon into the panel. */
+function MissingDepsWarning({
+  deps,
+  onInstall,
+}: {
+  deps: MissingDep[];
+  onInstall: (deps: MissingDep[]) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  // Once everything installs this whole warning unmounts; the flag only needs
+  // resetting when something couldn't be installed.
+  const [installing, setInstalling] = useState(false);
+  const closeTimer = useRef<number | undefined>(undefined);
+  const show = () => {
+    window.clearTimeout(closeTimer.current);
+    setOpen(true);
+  };
+  const hideSoon = () => {
+    window.clearTimeout(closeTimer.current);
+    closeTimer.current = window.setTimeout(() => setOpen(false), 150);
+  };
+  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }}
+          onPointerEnter={show}
+          onPointerLeave={hideSoon}
+          aria-label="Faltan dependencias"
+          className="h-5 w-5 flex items-center justify-center rounded text-yellow-400 hover:bg-yellow-400/15 shrink-0"
+        >
+          <AlertTriangle className="h-4 w-4" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="bottom"
+        align="start"
+        className="w-72 p-3"
+        onPointerEnter={show}
+        onPointerLeave={hideSoon}
+        onClick={(e) => e.stopPropagation()}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
+        <p className="text-xs font-semibold mb-2 flex items-center gap-1.5">
+          <AlertTriangle className="h-3.5 w-3.5 text-yellow-400" />
+          {deps.length === 1 ? "Le falta una dependencia:" : `Le faltan ${deps.length} dependencias:`}
+        </p>
+        <div className="flex flex-col gap-1.5 mb-3">
+          {deps.map((d) => (
+            <div key={d.projectId} className="flex items-center gap-2 min-w-0">
+              {d.iconUrl ? (
+                <img src={d.iconUrl} alt="" className="h-6 w-6 rounded shrink-0 object-cover bg-black/30" />
+              ) : (
+                <div className="h-6 w-6 rounded shrink-0 bg-black/30 flex items-center justify-center">
+                  <Package className="h-3.5 w-3.5 text-muted-foreground" />
+                </div>
+              )}
+              <span className="text-xs truncate">{d.title}</span>
+            </div>
+          ))}
+        </div>
+        <Button size="sm" className="w-full h-8 text-xs" disabled={installing}
+          onClick={async () => {
+            setInstalling(true);
+            try {
+              await onInstall(deps);
+            } finally {
+              setInstalling(false);
+            }
+          }}
+        >
+          {installing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Download className="mr-1.5 h-3.5 w-3.5" />}
+          {deps.length === 1 ? "Instalar" : "Instalar todas"}
+        </Button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** One row of the installed-content list. Memoized (with stable callbacks from
+ *  the page) so a 200-mod list doesn't re-render on every unrelated state change
+ *  of the page. The icon/title only become framer-motion `layoutId` elements
+ *  while hovered (or when `sharedLayout`): with every row carrying them, framer
+ *  measured hundreds of nodes on each mount/update and switching tabs froze the
+ *  UI for seconds. Hover is enough for the open-panel shared transition, since
+ *  the row is always hovered when clicked. */
+const InstalledContentRow = memo(function InstalledContentRow({
+  path,
+  category,
+  mandatory,
+  title,
+  match,
+  update,
+  busy,
+  dependentTitles,
+  sharedLayout,
+  missingDeps,
+  onOpen,
+  onUpdate,
+  onDelete,
+  onInstallMissing,
+}: InstalledContentRowProps) {
+  const [hovered, setHovered] = useState(false);
+  const shared = sharedLayout || hovered;
+  const CategoryIcon = CATEGORY_META[category].icon;
+  const isDependency = !!dependentTitles?.length;
+  return (
+    <div
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+      className={`flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full border-l-2 [content-visibility:auto] [contain-intrinsic-size:auto_66px] ${
+        isDependency ? "border-accent/50" : "border-transparent"
+      }`}
+    >
+      <div
+        onClick={() => match && onOpen(path)}
+        className={`flex items-center gap-3 min-w-0 flex-1 ${match ? "cursor-pointer" : ""}`}
+      >
+        {match?.iconUrl ? (
+          shared ? (
+            <motion.img
+              layoutId={`icon-${path}`}
+              src={match.iconUrl}
+              alt=""
+              className="h-11 w-11 rounded shrink-0 object-cover bg-black/30"
+            />
+          ) : (
+            <img
+              src={match.iconUrl}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className="h-11 w-11 rounded shrink-0 object-cover bg-black/30"
+            />
+          )
+        ) : match && shared ? (
+          <motion.div
+            layoutId={`icon-${path}`}
+            className="h-11 w-11 rounded shrink-0 bg-black/30 flex items-center justify-center"
+          >
+            <CategoryIcon className="h-5 w-5 text-muted-foreground" />
+          </motion.div>
+        ) : match ? (
+          <div className="h-11 w-11 rounded shrink-0 bg-black/30 flex items-center justify-center">
+            <CategoryIcon className="h-5 w-5 text-muted-foreground" />
+          </div>
+        ) : (
+          <div className="h-11 w-11 rounded shrink-0 bg-black/30 flex items-center justify-center">
+            <span className="text-xs font-bold text-muted-foreground">Ms</span>
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 min-w-0">
+            {match && shared ? (
+              <motion.p layoutId={`title-${path}`} className="text-gray-100 font-medium text-base truncate">
+                {match.title}
+              </motion.p>
+            ) : (
+              <p className="text-gray-100 font-medium text-base truncate">{title}</p>
+            )}
+            {!!missingDeps?.length && (
+              <MissingDepsWarning deps={missingDeps} onInstall={onInstallMissing} />
+            )}
+            {isDependency && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent shrink-0 max-w-[14rem] cursor-default">
+                    <Link2 className="h-3 w-3 shrink-0" />
+                    <span className="truncate">
+                      Requerido por{" "}
+                      {dependentTitles!.length === 1 ? dependentTitles![0] : `${dependentTitles!.length} mods`}
+                    </span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs">
+                  <p className="font-semibold mb-1">Lo necesitan:</p>
+                  <ul className="list-disc pl-4">
+                    {dependentTitles!.map((t, i) => (
+                      <li key={i}>{t}</li>
+                    ))}
+                  </ul>
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+          <p className="text-muted-foreground text-[11px] font-mono truncate select-text">{fileName(path)}</p>
+        </div>
+      </div>
+      {!mandatory && update && (
+        <button
+          onClick={() => onUpdate(category, path)}
+          disabled={busy}
+          title={`Actualizar a v${update.versionNumber}`}
+          className="h-7 w-7 flex items-center justify-center rounded-full text-accent hover:bg-accent/10 transition-colors shrink-0 disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+        </button>
+      )}
+      {!mandatory && (
+        <button
+          onClick={() => onDelete(category, path)}
+          disabled={busy}
+          title="Eliminar"
+          className="h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/20 hover:text-destructive transition-colors shrink-0 disabled:opacity-50"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      )}
+    </div>
+  );
+});
+
 /** A content file staged for writing, once classified/hashed/conflict-checked —
  *  either "write it now" (no conflict) or waiting on the user's choice in the
  *  version-conflict dialog. */
@@ -209,16 +469,55 @@ export default function ModpackDetail() {
   const playProgress = useInstanceProgress(pack?.id);
   useDynamicAccent(pack?.bannerUrl || pack?.imageUrl);
 
+  // Animated background (same SwellLight as the Hub's "Mis instancias"), tinted
+  // with the dominant color of the instance's icon — not the banner — so every
+  // instance gets its own. null until the color is known, so it never flashes
+  // the default blue first.
+  const theme = useTheme((s) => s.theme);
+  const [iconHsl, setIconHsl] = useState<HSL | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setIconHsl(null);
+    extractDominantColor(pack?.imageUrl).then((hsl) => {
+      if (!cancelled) setIconHsl(hsl ?? { h: 205, s: 90, l: 55 }); // --accent's default
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pack?.id, pack?.imageUrl]);
+  const swellColors = useMemo(() => {
+    if (!iconHsl) return null;
+    const { h, s, l } = iconHsl;
+    // Same idea as the Hub's light/dark pair: on a light background the light
+    // needs a darker tone and dark highlights to show; on dark, a mid tone with
+    // pale highlights. Lightness is clamped so very dark/pale icons still glow.
+    return theme === "light"
+      ? { color: `hsl(${h} ${s}% ${Math.min(l, 44)}%)`, glint: `hsl(${h} ${s}% 18%)` }
+      : { color: `hsl(${h} ${Math.max(s, 55)}% ${Math.min(Math.max(l, 45), 62)}%)`, glint: `hsl(${h} ${s}% 78%)` };
+  }, [iconHsl, theme]);
+
   const [loading, setLoading] = useState(false);
   const [content, setContent] = useState<Record<Category, SnapshotEntry[]> | null>(null);
   const [optionalContent, setOptionalContent] = useState<Record<Category, InstanceFile[]>>(EMPTY_CATEGORIES);
   const [modrinthMatches, setModrinthMatches] = useState<Map<string, ModrinthMatch>>(new Map());
   const [updates, setUpdates] = useState<Map<string, ModrinthUpdate>>(new Map());
-  // projectIds that are a required dependency of at least one other installed
-  // mod — drives the "Dependencia" badge on the installed list.
-  const [requiredByOthers, setRequiredByOthers] = useState<Set<string>>(new Set());
+  // For each installed mod (by path), the projectIds its current version
+  // requires — drives the "Requerido por…" badge, the delete warning and the
+  // orphaned-dependency cleanup offer on the installed list.
+  const [modRequires, setModRequires] = useState<Map<string, string[]>>(new Map());
+  // A pending delete of a mod other installed mods still require.
+  const [depDeleteConfirm, setDepDeleteConfirm] = useState<{ c: Category; path: string; dependents: string[] } | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
   const [showInstalledFirst, setShowInstalledFirst] = useState(false);
+  // Extra sort keys of the installed list, applied before the name order:
+  // dependencies to the top/bottom (mods only), and pending updates first with
+  // recently updated items sunk to the very end in the order they were updated.
+  const [dependencySort, setDependencySort] = useState<"off" | "first" | "last">("off");
+  const [updatesSort, setUpdatesSort] = useState(false);
+  const [recentUpdates, setRecentUpdates] = useState<RecentUpdates>({});
+  useEffect(() => {
+    setRecentUpdates(id ? loadRecentUpdates(id) : {});
+  }, [id]);
   const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
   const [totalPlaytimeMs, setTotalPlaytimeMs] = useState(0);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -286,6 +585,9 @@ export default function ModpackDetail() {
   // Mod detail view (opened by clicking a row's icon/name).
   const [selectedModPath, setSelectedModPath] = useState<string | null>(null);
   const [panelDirection, setPanelDirection] = useState(1);
+  // Row the mod panel was last opened from — keeps its shared-layout ids so
+  // closing the panel animates back into it (see InstalledContentRow).
+  const [lastOpenedPath, setLastOpenedPath] = useState<string | null>(null);
   const [modDetailTab, setModDetailTab] = useState<ModDetailTab>("description");
   const [modDetailLoading, setModDetailLoading] = useState(false);
   const [projectDetail, setProjectDetail] = useState<ModrinthProjectDetail | null>(null);
@@ -510,12 +812,23 @@ export default function ModpackDetail() {
     };
   }, [screenshotsOpen, id]);
 
+  // Mods opened from another mod's Dependencias tab, so "back" returns to the
+  // mod you came from instead of all the way to the list.
+  const [modHistory, setModHistory] = useState<string[]>([]);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const openMod = (path: string) => {
     setPanelDirection(1);
     setSelectedModPath(path);
+    setLastOpenedPath(path);
+    setModHistory([]);
   };
   const closeMod = () => {
     setPanelDirection(-1);
+    if (modHistory.length > 0) {
+      setSelectedModPath(modHistory[modHistory.length - 1]);
+      setModHistory(modHistory.slice(0, -1));
+      return;
+    }
     setSelectedModPath(null);
   };
 
@@ -865,6 +1178,7 @@ export default function ModpackDetail() {
         return next;
       });
       if (selectedModPath === path) setSelectedModPath(newPath);
+      if (!isFresh) setRecentUpdates(recordRecentUpdate(pack.id, matchInfo.projectId));
       toast.success(isFresh ? `${matchInfo.title} instalado.` : `Cambiado a v${version.versionNumber}.`);
       // Fire-and-forget — the mod just installed above updates its own UI
       // immediately; any dependencies it needs install in the background.
@@ -878,6 +1192,33 @@ export default function ModpackDetail() {
         return next;
       });
     }
+  };
+
+  /** Installs the latest compatible version of each given mod, one after another
+   *  (their own required dependencies follow via autoInstallDependencies). */
+  const installDependencies = async (deps: { projectId: string; title: string; iconUrl: string | null }[]) => {
+    if (!pack) return;
+    for (const dep of deps) {
+      const version = await getLatestVersion(dep.projectId, pack.loaderType, pack.minecraftVersion, "mods");
+      if (!version) {
+        toast.error(`${dep.title}: no hay versión compatible con este pack.`);
+        continue;
+      }
+      await handleInstallVersion("mods", `search:${dep.projectId}`, version, dep);
+    }
+  };
+
+  /** From a mod's Dependencias tab: open the dependency's own page — the real
+   *  installed row if it's installed, the not-installed (installable) view if not —
+   *  remembering where we came from for the back button. */
+  const openDependency = (dep: { projectId: string; title: string; iconUrl: string | null }) => {
+    const back = selectedModPath ? [...modHistory, selectedModPath] : modHistory;
+    const installedPath = installedModByProject.get(dep.projectId);
+    openModFromSearch(
+      { projectId: dep.projectId, title: dep.title, iconUrl: dep.iconUrl, description: "", downloads: 0, follows: 0 },
+      installedPath ? { path: installedPath, mandatory: false } : undefined
+    );
+    setModHistory(back); // after openMod, which resets it
   };
 
   const handleInstallFromSearch = async (hit: ModrinthSearchHit) => {
@@ -912,8 +1253,19 @@ export default function ModpackDetail() {
     openMod(`search:${hit.projectId}`);
   };
 
-  const handleDelete = async (c: Category, path: string) => {
+  const handleDelete = async (c: Category, path: string, opts: { skipDependencyCheck?: boolean } = {}) => {
     if (!pack) return;
+    if (c === "mods" && !opts.skipDependencyCheck) {
+      const dependents = dependentsOf(path);
+      if (dependents.length > 0) {
+        setDepDeleteConfirm({ c, path, dependents });
+        return;
+      }
+    }
+    // Snapshot before deleting: which of this mod's requirements nothing else
+    // needs anymore — offered for removal afterwards, never removed silently
+    // (the user may have installed a library on purpose).
+    const orphans = c === "mods" ? orphanedBy(path) : [];
     setBusyPaths((s) => new Set(s).add(path));
     try {
       await deleteInstanceFile(pack.id, path);
@@ -921,6 +1273,23 @@ export default function ModpackDetail() {
       setContent((prev) => (prev ? { ...prev, [c]: prev[c].filter((f) => f.path !== path) } : prev));
       if (selectedModPath === path) closeMod();
       toast.success(`${fileName(path)} eliminado.`);
+      if (orphans.length > 0) {
+        const names = orphans.map(titleFor).join(", ");
+        toast.info(
+          orphans.length === 1
+            ? `${names} ya no lo necesita ningún mod.`
+            : `${names} ya no los necesita ningún mod.`,
+          {
+            duration: 10000,
+            action: {
+              label: orphans.length === 1 ? "Quitar" : `Quitar (${orphans.length})`,
+              onClick: () => {
+                for (const o of orphans) void handleDelete("mods", o, { skipDependencyCheck: true });
+              },
+            },
+          }
+        );
+      }
     } catch (e: any) {
       toast.error(e?.message || "Error al eliminar el archivo.");
     } finally {
@@ -931,6 +1300,145 @@ export default function ModpackDetail() {
       });
     }
   };
+
+  const modPaths = useMemo(
+    () => [...(content?.mods ?? []).map((f) => f.path), ...optionalContent.mods.map((f) => f.path)],
+    [content, optionalContent]
+  );
+
+  // Batch-fetches every installed mod's current version (one request via
+  // getVersionsByIds instead of one listVersions() call each) to record what
+  // each installed mod requires — drives dependentsOf/orphanedBy below.
+  useEffect(() => {
+    if (!pack?.installed) {
+      setModRequires(new Map());
+      return;
+    }
+    let cancelled = false;
+    const pathByVersion = new Map<string, string>();
+    for (const path of modPaths) {
+      const versionId = modrinthMatches.get(path)?.versionId;
+      if (versionId) pathByVersion.set(versionId, path);
+    }
+    getVersionsByIds(Array.from(pathByVersion.keys())).then((versions) => {
+      if (cancelled) return;
+      const next = new Map<string, string[]>();
+      for (const v of versions) {
+        const path = pathByVersion.get(v.versionId);
+        if (!path) continue;
+        const ids = v.dependencies
+          .filter((d) => d.dependencyType === "required" && d.projectId)
+          .map((d) => d.projectId as string);
+        if (ids.length > 0) next.set(path, Array.from(new Set(ids)));
+      }
+      setModRequires(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [modPaths, modrinthMatches, pack?.installed]);
+
+  // Inverse of modRequires, computed once per change instead of per row:
+  // installed mod path → paths of the installed mods that require it.
+  const dependentsByPath = useMemo(() => {
+    const pathsByProject = new Map<string, string[]>();
+    for (const path of modPaths) {
+      const id = modrinthMatches.get(path)?.projectId;
+      if (id) pathsByProject.set(id, [...(pathsByProject.get(id) ?? []), path]);
+    }
+    const installed = new Set(modPaths);
+    const out = new Map<string, string[]>();
+    for (const [requirer, ids] of modRequires) {
+      if (!installed.has(requirer)) continue;
+      for (const id of ids) {
+        for (const target of pathsByProject.get(id) ?? []) {
+          if (target === requirer) continue;
+          const list = out.get(target) ?? [];
+          if (!list.includes(requirer)) out.set(target, [...list, requirer]);
+        }
+      }
+    }
+    return out;
+  }, [modPaths, modrinthMatches, modRequires]);
+
+  const dependentTitlesByPath = useMemo(() => {
+    const out = new Map<string, string[]>();
+    for (const [path, dependents] of dependentsByPath) {
+      out.set(
+        path,
+        dependents.map((d) => modrinthMatches.get(d)?.title ?? guessTitle(fileName(d)))
+      );
+    }
+    return out;
+  }, [dependentsByPath, modrinthMatches]);
+
+  // Installed mods by Modrinth projectId (first file wins if a project shows up twice).
+  const installedModByProject = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const path of modPaths) {
+      const id = modrinthMatches.get(path)?.projectId;
+      if (id && !out.has(id)) out.set(id, path);
+    }
+    return out;
+  }, [modPaths, modrinthMatches]);
+
+  // Required dependencies that no installed mod provides, per mod. Can't see a
+  // dependency shipped as a jar Modrinth doesn't recognise — such a mod would be
+  // flagged even though it's satisfied, the same limit as the rest of this list.
+  const missingIdsByPath = useMemo(() => {
+    const out = new Map<string, string[]>();
+    for (const [path, ids] of modRequires) {
+      if (!modPaths.includes(path)) continue;
+      const missing = ids.filter((id) => !installedModByProject.has(id));
+      if (missing.length > 0) out.set(path, missing);
+    }
+    return out;
+  }, [modRequires, modPaths, installedModByProject]);
+
+  const [depProjectInfo, setDepProjectInfo] = useState<Record<string, { title: string; iconUrl: string | null }>>({});
+  useEffect(() => {
+    const wanted = Array.from(new Set(Array.from(missingIdsByPath.values()).flat())).filter((id) => !depProjectInfo[id]);
+    if (wanted.length === 0) return;
+    let cancelled = false;
+    getProjectsInfo(wanted).then((info) => {
+      if (!cancelled && Object.keys(info).length > 0) setDepProjectInfo((prev) => ({ ...prev, ...info }));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missingIdsByPath]);
+
+  const missingDepsByPath = useMemo(() => {
+    const out = new Map<string, MissingDep[]>();
+    for (const [path, ids] of missingIdsByPath) {
+      out.set(
+        path,
+        ids.map((id) => ({
+          projectId: id,
+          title: depProjectInfo[id]?.title ?? "Dependencia desconocida",
+          iconUrl: depProjectInfo[id]?.iconUrl ?? null,
+        }))
+      );
+    }
+    return out;
+  }, [missingIdsByPath, depProjectInfo]);
+
+  // Stable callbacks for the memoized rows; they forward to the latest handlers
+  // (reassigned every render below), so rows never re-render just because the
+  // page re-created its handler closures.
+  const rowActionsRef = useRef<{
+    open: (path: string) => void;
+    update: (c: Category, path: string) => void;
+    remove: (c: Category, path: string) => void;
+    installMissing: (deps: MissingDep[]) => Promise<void>;
+  }>({ open: () => {}, update: () => {}, remove: () => {}, installMissing: async () => {} });
+  const onRowOpen = useCallback((path: string) => rowActionsRef.current.open(path), []);
+  const onRowUpdate = useCallback((c: Category, path: string) => rowActionsRef.current.update(c, path), []);
+  const onRowDelete = useCallback((c: Category, path: string) => rowActionsRef.current.remove(c, path), []);
+  const onRowInstallMissing = useCallback((deps: MissingDep[]) => rowActionsRef.current.installMissing(deps), []);
+
+  const dragCounterRef = useRef(0);
 
   if (!pack) {
     return (
@@ -957,34 +1465,53 @@ export default function ModpackDetail() {
 
   const titleFor = (path: string) => modrinthMatches.get(path)?.title ?? guessTitle(fileName(path));
 
-  // Batch-fetches every installed mod's current version (one request via
-  // getVersionsByIds instead of one listVersions() call each) to find which
-  // installed mods are required by another installed mod — drives the
-  // "Dependencia" badge above.
-  useEffect(() => {
-    if (!pack?.installed) {
-      setRequiredByOthers(new Set());
-      return;
-    }
-    let cancelled = false;
-    const versionIds = rowsFor("mods")
-      .map((r) => modrinthMatches.get(r.path)?.versionId)
-      .filter((v): v is string => !!v);
-    getVersionsByIds(versionIds).then((versions) => {
-      if (cancelled) return;
-      const required = new Set<string>();
-      for (const v of versions) {
-        for (const d of v.dependencies) {
-          if (d.dependencyType === "required" && d.projectId) required.add(d.projectId);
-        }
-      }
-      setRequiredByOthers(required);
-    });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modrinthMatches, content, optionalContent, pack?.installed]);
+  const hasPendingUpdate = (r: ContentRow) => !r.mandatory && updates.has(r.path);
+  const pendingUpdateCount = (c: Category) => rowsFor(c).filter(hasPendingUpdate).length;
+  /** When the row was updated from here in the last days (see lib/recent-updates), else undefined. */
+  const recentUpdateTime = (path: string): number | undefined => {
+    const projectId = modrinthMatches.get(path)?.projectId;
+    return projectId ? recentUpdates[projectId] : undefined;
+  };
+  /** "Actualizaciones" order: pending updates → the rest → recently updated,
+   *  the latter in update order (the most recent one last). 0 = tie. */
+  const compareByUpdates = (a: ContentRow, b: ContentRow): number => {
+    const ta = recentUpdateTime(a.path);
+    const tb = recentUpdateTime(b.path);
+    const group = (r: ContentRow, t: number | undefined) => (hasPendingUpdate(r) ? 0 : t !== undefined ? 2 : 1);
+    const diff = group(a, ta) - group(b, tb);
+    if (diff !== 0) return diff;
+    if (ta !== undefined && tb !== undefined) return ta - tb;
+    return 0;
+  };
+
+  /** Paths of the installed mods whose current version requires `path`'s project. */
+  const dependentsOf = (path: string): string[] => dependentsByPath.get(path) ?? [];
+
+  /** Optional mods required by `path` that no other installed mod requires —
+   *  i.e. what would be left orphaned if `path` were removed. Pack-shipped
+   *  (mandatory) files are never offered: they can't be removed anyway. */
+  const orphanedBy = (path: string): string[] => {
+    const required = modRequires.get(path);
+    if (!required?.length) return [];
+    return rowsFor("mods")
+      .filter((r) => !r.mandatory && r.path !== path)
+      .map((r) => r.path)
+      .filter((p) => {
+        const id = modrinthMatches.get(p)?.projectId;
+        return !!id && required.includes(id) && dependentsOf(p).every((d) => d === path);
+      });
+  };
+
+  rowActionsRef.current = {
+    open: openMod,
+    update: (c, path) => {
+      const update = updates.get(path);
+      const match = modrinthMatches.get(path);
+      if (update && match) void handleInstallVersion(c, path, update, match);
+    },
+    remove: (c, path) => void handleDelete(c, path),
+    installMissing: installDependencies,
+  };
 
   const effectiveCategory = categories.includes(activeCategory) ? activeCategory : categories[0];
   const selectedCategory = selectedModPath ? categoryOf(selectedModPath) ?? effectiveCategory : null;
@@ -1166,7 +1693,6 @@ export default function ModpackDetail() {
     if (choice === "use-new") await writeStagedContent(staged, existingPath);
   };
 
-  const dragCounterRef = useRef(0);
   const handlePageDragEnter = (e: React.DragEvent) => {
     if (!pack.installed) return;
     e.preventDefault();
@@ -1189,6 +1715,31 @@ export default function ModpackDetail() {
     if (files.length > 0) handleContentDrop(files);
   };
 
+  const swellLayer = (
+    <AnimatePresence>
+      {swellColors && (
+        <motion.div
+          key={`${pack.id}-${theme}`}
+          className="absolute inset-0"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: theme === "light" ? 0.6 : 0.9 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.6 }}
+        >
+          <SwellLight
+            color={swellColors.color}
+            glintColor={swellColors.glint}
+            contrast={2.2}
+            glint={0.3}
+            cursorSize={18}
+            cursorStrength={0.6}
+            trail={0.9}
+          />
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+
   return (
     <div
       className="min-h-full bg-background text-foreground relative"
@@ -1197,6 +1748,13 @@ export default function ModpackDetail() {
       onDragLeave={handlePageDragLeave}
       onDrop={handlePageDrop}
     >
+      {/* Sticky + negative margin: stays pinned to the viewport while the page
+          scrolls, without taking any space in the flow. Under everything below
+          (the content wrapper is z-10, the header group z-30 — opaque when there
+          is a banner, so the banner is untouched). */}
+      <div className="pointer-events-none sticky top-0 z-0 h-screen -mb-[100vh] overflow-hidden" aria-hidden>
+        {swellLayer}
+      </div>
       {dropActive && (
         <div className="fixed inset-0 z-50 pointer-events-none bg-accent/10 border-4 border-dashed border-accent/50 flex items-center justify-center">
           <div className="bg-card/90 rounded-lg px-6 py-4 flex items-center gap-3 text-white">
@@ -1205,20 +1763,23 @@ export default function ModpackDetail() {
           </div>
         </div>
       )}
-      <div ref={headerGroupRef} className="sticky top-0 z-30 bg-background">
-        <div className="relative h-32 md:h-40 bg-black/50 overflow-hidden">
-          {pack.bannerUrl ? (
+      {/* With a banner the header group is opaque. Without one there's no banner
+          box at all and the group is just frosted glass (no fill), so the page's
+          animated background runs on uninterrupted behind the header; the blur
+          only matters once the list scrolls under the sticky header. */}
+      <div
+        ref={headerGroupRef}
+        className={`sticky top-0 z-30 ${pack.bannerUrl ? "bg-background" : "backdrop-blur-xl"}`}
+      >
+        {pack.bannerUrl && (
+          <div className="relative h-32 md:h-40 overflow-hidden bg-black/50">
             <img src={pack.bannerUrl} alt={pack.name} className="w-full h-full object-cover" />
-          ) : (
-            // No banner → a wash of the icon's dominant colour (useDynamicAccent
-            // above has already retinted --accent from pack.imageUrl).
-            <div className="w-full h-full bg-gradient-to-br from-accent/45 via-accent/15 to-background" />
-          )}
-          <div className="absolute inset-0 bg-[linear-gradient(to_top,hsl(var(--background)/0.9)_0%,hsl(var(--background)/0.5)_18%,hsl(var(--background)/0.15)_40%,transparent_65%)]" />
-        </div>
+            <div className="absolute inset-0 bg-[linear-gradient(to_top,hsl(var(--background)/0.9)_0%,hsl(var(--background)/0.5)_18%,hsl(var(--background)/0.15)_40%,transparent_65%)]" />
+          </div>
+        )}
 
         <div className="max-w-5xl mx-auto w-full">
-        <div className="px-4 pb-2 -mt-16 relative z-10">
+        <div className={`px-4 pb-2 relative z-10 ${pack.bannerUrl ? "-mt-16" : "pt-4"}`}>
           <div
             className={`flex items-center justify-between gap-4 mr-auto bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 ${
               !selectedModPath && !searchMode ? "max-w-2xl" : "max-w-full"
@@ -1534,7 +2095,7 @@ export default function ModpackDetail() {
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto w-full">
+      <div className="relative z-10 max-w-5xl mx-auto w-full">
         <div className="px-4 pt-3 pb-8">
           <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4">
             {/* No overflow-hidden here: it would become the nearest "scrolling" ancestor for
@@ -1718,19 +2279,57 @@ export default function ModpackDetail() {
                     </div>
                   ) : (
                     <div className="flex flex-col gap-1.5">
-                      {dependencies.map((dep) => (
-                        <div key={dep.projectId} className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full">
-                          {dep.iconUrl ? (
-                            <img src={dep.iconUrl} alt="" className="h-8 w-8 rounded shrink-0 object-cover bg-black/30" />
-                          ) : (
-                            <div className="h-8 w-8 rounded shrink-0 bg-black/30 flex items-center justify-center">
-                              <Package className="h-4 w-4 text-muted-foreground" />
-                            </div>
-                          )}
-                          <p className="text-gray-100 font-medium text-sm truncate flex-1 min-w-0">{dep.title}</p>
-                          <Badge variant="outline" className="text-[10px] shrink-0">Obligatoria</Badge>
-                        </div>
-                      ))}
+                      {dependencies.map((dep) => {
+                        const installed = installedModByProject.has(dep.projectId);
+                        const busy = busyPaths.has(`search:${dep.projectId}`);
+                        return (
+                          <div
+                            key={dep.projectId}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => openDependency(dep)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                openDependency(dep);
+                              }
+                            }}
+                            className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full cursor-pointer hover:bg-white/5 transition-colors"
+                          >
+                            {dep.iconUrl ? (
+                              <img src={dep.iconUrl} alt="" className="h-8 w-8 rounded shrink-0 object-cover bg-black/30" />
+                            ) : (
+                              <div className="h-8 w-8 rounded shrink-0 bg-black/30 flex items-center justify-center">
+                                <Package className="h-4 w-4 text-muted-foreground" />
+                              </div>
+                            )}
+                            <p className="text-gray-100 font-medium text-sm truncate flex-1 min-w-0">{dep.title}</p>
+                            <Badge variant="outline" className="text-[10px] shrink-0">Obligatoria</Badge>
+                            {installed ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] text-accent shrink-0">
+                                <Check className="h-3.5 w-3.5" /> Instalada
+                              </span>
+                            ) : pack.installed ? (
+                              <Button
+                                size="sm"
+                                className="h-7 text-xs shrink-0"
+                                disabled={busy}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void installDependencies([dep]);
+                                }}
+                              >
+                                {busy ? (
+                                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Download className="mr-1 h-3.5 w-3.5" />
+                                )}
+                                Instalar
+                              </Button>
+                            ) : null}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </TabsContent>
@@ -1856,6 +2455,18 @@ export default function ModpackDetail() {
                           >
                             <SiModrinth className="h-3.5 w-3.5" />
                             {`Instalar ${CATEGORY_META[effectiveCategory].label}`}
+                          </Button>
+                        )}
+                        {!emotesOpen && !schematicsOpen && !screenshotsOpen && effectiveCategory === "mods" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setLibraryOpen(true)}
+                            title="Biblioteca de mods del grupo"
+                            className="gap-1.5 font-bold"
+                          >
+                            <Library className="h-3.5 w-3.5" />
+                            Biblioteca
                           </Button>
                         )}
                       </div>
@@ -2227,13 +2838,59 @@ export default function ModpackDetail() {
                           sortRowStuck ? "" : "rounded-t-md"
                         }`}
                       >
-                        <button
-                          onClick={() => setSortAsc((v) => !v)}
-                          className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-muted-foreground hover:text-white transition-colors"
-                        >
-                          Nombre
-                          <ArrowUpDown className="h-3 w-3" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => setSortAsc((v) => !v)}
+                            className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-muted-foreground hover:text-white transition-colors"
+                          >
+                            Nombre
+                            <ArrowUpDown className="h-3 w-3" />
+                          </button>
+                          {c === "mods" && (
+                            <button
+                              onClick={() =>
+                                setDependencySort((v) => (v === "off" ? "first" : v === "first" ? "last" : "off"))
+                              }
+                              title={
+                                dependencySort === "off"
+                                  ? "Llevar las dependencias arriba"
+                                  : dependencySort === "first"
+                                  ? "Llevar las dependencias abajo"
+                                  : "Quitar orden por dependencias"
+                              }
+                              className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition-colors ${
+                                dependencySort !== "off"
+                                  ? "bg-accent/15 text-accent border border-accent/30"
+                                  : "text-muted-foreground hover:text-white"
+                              }`}
+                            >
+                              <Link2 className="h-3.5 w-3.5" />
+                              Dependencias
+                              {dependencySort === "first" ? (
+                                <ArrowUp className="h-3 w-3" />
+                              ) : dependencySort === "last" ? (
+                                <ArrowDown className="h-3 w-3" />
+                              ) : null}
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setUpdatesSort((v) => !v)}
+                            title="Pendientes de actualizar primero; las actualizadas recientemente, al final"
+                            className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition-colors ${
+                              updatesSort
+                                ? "bg-accent/15 text-accent border border-accent/30"
+                                : "text-muted-foreground hover:text-white"
+                            }`}
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                            Actualizaciones
+                            {pendingUpdateCount(c) > 0 && (
+                              <span className="rounded-full bg-accent text-accent-foreground px-1.5 text-[10px] leading-4">
+                                {pendingUpdateCount(c)}
+                              </span>
+                            )}
+                          </button>
+                        </div>
                         <button
                           onClick={() => setShowInstalledFirst((v) => !v)}
                           className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition-colors ${
@@ -2248,87 +2905,44 @@ export default function ModpackDetail() {
                       </div>
                       <div className="flex flex-col gap-1.5 p-3 pt-1.5">
                         {rowsFor(c)
+                          .map((row) => ({ row, title: titleFor(row.path) }))
                           .sort((a, b) => {
+                            if (updatesSort) {
+                              const diff = compareByUpdates(a.row, b.row);
+                              if (diff !== 0) return diff;
+                            }
+                            if (c === "mods" && dependencySort !== "off") {
+                              const isDep = (r: ContentRow) => (dependentsOf(r.path).length > 0 ? 1 : 0);
+                              const diff = isDep(b.row) - isDep(a.row);
+                              if (diff !== 0) return dependencySort === "first" ? diff : -diff;
+                            }
                             if (showInstalledFirst) {
                               const rank = (r: ContentRow) => (r.mandatory ? 2 : updates.has(r.path) ? 0 : 1);
-                              const rankDiff = rank(a) - rank(b);
+                              const rankDiff = rank(a.row) - rank(b.row);
                               if (rankDiff !== 0) return rankDiff;
                             }
-                            const cmp = titleFor(a.path).localeCompare(titleFor(b.path));
+                            const cmp = a.title.localeCompare(b.title);
                             return sortAsc ? cmp : -cmp;
                           })
-                          .map((row) => {
-                            const match = modrinthMatches.get(row.path);
-                            const update = updates.get(row.path);
-                            const busy = busyPaths.has(row.path);
-                            const CategoryIcon = CATEGORY_META[c].icon;
-                            return (
-                              <div
-                                key={row.path}
-                                className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full"
-                              >
-                                <div
-                                  onClick={() => match && openMod(row.path)}
-                                  className={`flex items-center gap-3 min-w-0 flex-1 ${match ? "cursor-pointer" : ""}`}
-                                >
-                                  {match?.iconUrl ? (
-                                    <motion.img
-                                      layoutId={`icon-${row.path}`}
-                                      src={match.iconUrl}
-                                      alt=""
-                                      className="h-11 w-11 rounded shrink-0 object-cover bg-black/30"
-                                    />
-                                  ) : match ? (
-                                    <motion.div
-                                      layoutId={`icon-${row.path}`}
-                                      className="h-11 w-11 rounded shrink-0 bg-black/30 flex items-center justify-center"
-                                    >
-                                      <CategoryIcon className="h-5 w-5 text-muted-foreground" />
-                                    </motion.div>
-                                  ) : (
-                                    <div className="h-11 w-11 rounded shrink-0 bg-black/30 flex items-center justify-center">
-                                      <span className="text-xs font-bold text-muted-foreground">Ms</span>
-                                    </div>
-                                  )}
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-1.5 min-w-0">
-                                      {match ? (
-                                        <motion.p layoutId={`title-${row.path}`} className="text-gray-100 font-medium text-base truncate">
-                                          {match.title}
-                                        </motion.p>
-                                      ) : (
-                                        <p className="text-gray-100 font-medium text-base truncate">{titleFor(row.path)}</p>
-                                      )}
-                                      {c === "mods" && match && requiredByOthers.has(match.projectId) && (
-                                        <Badge variant="outline" className="text-[10px] shrink-0">Dependencia</Badge>
-                                      )}
-                                    </div>
-                                    <p className="text-muted-foreground text-[11px] font-mono truncate select-text">{fileName(row.path)}</p>
-                                  </div>
-                                </div>
-                                {!row.mandatory && update && (
-                                  <button
-                                    onClick={() => match && handleInstallVersion(c, row.path, update, match)}
-                                    disabled={busy}
-                                    title={`Actualizar a v${update.versionNumber}`}
-                                    className="h-7 w-7 flex items-center justify-center rounded-full text-accent hover:bg-accent/10 transition-colors shrink-0 disabled:opacity-50"
-                                  >
-                                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                                  </button>
-                                )}
-                                {!row.mandatory && (
-                                  <button
-                                    onClick={() => handleDelete(c, row.path)}
-                                    disabled={busy}
-                                    title="Eliminar"
-                                    className="h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/20 hover:text-destructive transition-colors shrink-0 disabled:opacity-50"
-                                  >
-                                    <X className="h-4 w-4" />
-                                  </button>
-                                )}
-                              </div>
-                            );
-                          })}
+                          .map(({ row, title }) => (
+                            <InstalledContentRow
+                              key={row.path}
+                              path={row.path}
+                              category={c}
+                              mandatory={row.mandatory}
+                              title={title}
+                              match={modrinthMatches.get(row.path)}
+                              update={updates.get(row.path)}
+                              busy={busyPaths.has(row.path)}
+                              dependentTitles={c === "mods" ? dependentTitlesByPath.get(row.path) : undefined}
+                              missingDeps={c === "mods" ? missingDepsByPath.get(row.path) : undefined}
+                              onInstallMissing={onRowInstallMissing}
+                              sharedLayout={row.path === lastOpenedPath}
+                              onOpen={onRowOpen}
+                              onUpdate={onRowUpdate}
+                              onDelete={onRowDelete}
+                            />
+                          ))}
                       </div>
                     </div>
                   </TabsContent>
@@ -2341,6 +2955,63 @@ export default function ModpackDetail() {
           </div>
         </div>
       </div>
+
+      {pack.installed && (
+        <ModLibraryDialog
+          open={libraryOpen}
+          onOpenChange={setLibraryOpen}
+          pack={pack}
+          installedMods={[
+            ...(content?.mods ?? []).map((f) => ({ path: f.path, sha1: f.sha1, mandatory: f.required !== false })),
+            ...optionalContent.mods.map((f) => ({ path: f.path, sha1: f.sha1, mandatory: false })),
+          ]}
+          onInstalled={(file, replacedPath) =>
+            setOptionalContent((prev) => ({
+              ...prev,
+              mods: [...prev.mods.filter((f) => f.path !== file.path && f.path !== replacedPath), file],
+            }))
+          }
+        />
+      )}
+
+      <AlertDialog open={!!depDeleteConfirm} onOpenChange={(open) => !open && setDepDeleteConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              ¿Quitar {depDeleteConfirm ? titleFor(depDeleteConfirm.path) : ""}?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  {depDeleteConfirm && depDeleteConfirm.dependents.length === 1
+                    ? "Este mod lo necesita:"
+                    : "Este mod lo necesitan:"}
+                </p>
+                <ul className="list-disc pl-5 text-foreground">
+                  {depDeleteConfirm?.dependents.map((d) => (
+                    <li key={d}>{titleFor(d)}</li>
+                  ))}
+                </ul>
+                <p>Si lo quitas, probablemente el juego no arranque.</p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (!depDeleteConfirm) return;
+                const { c, path } = depDeleteConfirm;
+                setDepDeleteConfirm(null);
+                void handleDelete(c, path, { skipDependencyCheck: true });
+              }}
+            >
+              Quitar igualmente
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={!!selectedEmote} onOpenChange={(open) => !open && setSelectedEmote(null)}>
         <DialogContent className="bg-card border-white/10 text-foreground sm:max-w-md">

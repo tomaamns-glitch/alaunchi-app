@@ -38,7 +38,10 @@ export function VersionCombobox({
   const selected = options.find((o) => o.value === value);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    // `modal`: this picker lives inside a Dialog, whose scroll lock swallows
+    // wheel events on anything portaled outside it — without this the list
+    // couldn't be scrolled past its first screenful of versions.
+    <Popover open={open} onOpenChange={setOpen} modal>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
