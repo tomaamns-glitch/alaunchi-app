@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { format, formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
@@ -19,7 +19,11 @@ import {
   Shirt,
   Camera,
   Server as ServerIcon,
+  Check,
 } from "lucide-react";
+import { useLocation } from "wouter";
+import { LoaderIcon } from "@/components/loader-icon";
+import { installFromRecipe } from "@/lib/instance-recipe";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import {
@@ -27,6 +31,7 @@ import {
   subscribeMessages,
   sendMessage,
   type ChatMessage,
+  type SharedInstance,
 } from "@/services/chat";
 import { subscribePlayingStatus, type UserActivity } from "@/services/user-activity";
 import { listInstanceFiles, listEmotes, listSchematics, listScreenshots, downloadInstanceFile } from "@/services/electron";
@@ -40,11 +45,12 @@ import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { ChatContactRail } from "@/components/chat-contact-rail";
-import { ChatContentPicker } from "@/components/chat-content-picker";
+import { ChatContentPicker } from "@/components/lazy-heavy";
 import { ChatServerPicker, SharedServerCard } from "@/components/chat-server-share";
 import { useSavedServers } from "@/lib/saved-servers";
 import { ChatModeSelector } from "@/components/chat-mode-selector";
 import type { ContentCategory, SharedContent } from "@/services/content-share";
+import { addToGallery, usePersonalLibrary } from "@/services/personal-library";
 import { cn } from "@/lib/utils";
 // Re-exported for existing imports (chat-content-picker.tsx) — the type now
 // lives in a shared module since PresenceButton/ChatContactRail need it too.
@@ -154,6 +160,15 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
   }, [myUuid]);
   const [railExpanded, setRailExpanded] = useState(true);
   const [installedHashes, setInstalledHashes] = useState<Record<string, Set<string>>>({});
+  // Screenshots shared in chat go to the gallery (Cuenta → Biblioteca), not to
+  // an instance — "already saved" is checked against it.
+  const gallery = usePersonalLibrary((st) => st.gallery);
+  const galleryLoaded = usePersonalLibrary((st) => st.loaded);
+  useEffect(() => {
+    if (!galleryLoaded) usePersonalLibrary.getState().refresh().catch(() => {});
+  }, [galleryLoaded]);
+  const galleryHashes = useMemo(() => new Set(gallery.map((g) => g.sha1)), [gallery]);
+
   const [installedSkinHashes, setInstalledSkinHashes] = useState<Set<string>>(new Set());
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   // "Keep the view glued to the latest message." True on every open and on
@@ -476,14 +491,19 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                             {tagPack.name}
                           </span>
                         )}
-                        {m.server ? (
+                        {m.instance ? (
+                          <SharedInstanceCard instance={m.instance} fromMe={isMe} />
+                        ) : m.server ? (
                           <SharedServerCard server={m.server} />
                         ) : m.content ? (
                           <SharedContentCard
                             content={m.content}
                             carouselInstanceId={m.carouselInstanceId}
+                            senderUsername={m.senderUsername}
                             installed={
-                              m.content.category === "skins"
+                              m.content.category === "screenshots"
+                                ? galleryHashes.has(m.content.sha1)
+                                : m.content.category === "skins"
                                 ? installedSkinHashes.has(m.content.sha1)
                                 : (m.content.modpackId ? installedHashes[m.content.modpackId]?.has(m.content.sha1) : false) ?? false
                             }
@@ -622,13 +642,85 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
   );
 }
 
+/** A private instance someone shared: one click recreates it here from its
+ *  recipe (same as installing it from their public profile). */
+function SharedInstanceCard({ instance, fromMe }: { instance: SharedInstance; fromMe: boolean }) {
+  const [, setLocation] = useLocation();
+  const [state, setState] = useState<"idle" | "installing" | "done">("idle");
+  const recipe = instance.recipe ? Object.values(instance.recipe) : [];
+
+  const install = async () => {
+    setState("installing");
+    try {
+      const r = await installFromRecipe(instance.name, {
+        minecraftVersion: instance.minecraftVersion,
+        loaderType: instance.loaderType,
+        recipe,
+      });
+      await useCustomInstances.getState().loadInstances();
+      setState("done");
+      toast.success(
+        `${instance.name} creada — ${r.installedCount} de ${recipe.length} elemento${recipe.length === 1 ? "" : "s"} instalados.`,
+        { action: { label: "Abrir", onClick: () => setLocation(`/modpack/${r.instanceId}`) } }
+      );
+    } catch (e: any) {
+      setState("idle");
+      toast.error(e?.message || "No se pudo crear la instancia.");
+    }
+  };
+
+  return (
+    <div className="max-w-[85%] flex items-center gap-2.5 rounded-2xl px-3 py-2.5 bg-white/10 shadow-sm">
+      {instance.iconDataUrl ? (
+        <img src={instance.iconDataUrl} alt="" className="h-10 w-10 rounded-md shrink-0 object-cover bg-black/30" />
+      ) : (
+        <div className="h-10 w-10 rounded-md shrink-0 bg-accent/20 text-accent font-bold flex items-center justify-center">
+          {instance.name.charAt(0).toUpperCase()}
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="text-sm text-gray-100 truncate font-medium">{instance.name}</p>
+        <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+          Instancia · {instance.minecraftVersion} · <LoaderIcon loader={instance.loaderType} className="h-3 w-3" />
+          <span className="capitalize">{instance.loaderType}</span>
+        </p>
+        <p className="text-[10px] text-muted-foreground">
+          {recipe.length} elemento{recipe.length === 1 ? "" : "s"}
+          {instance.unresolvedCount > 0 && ` · ${instance.unresolvedCount} no incluidos`}
+        </p>
+      </div>
+      {!fromMe && (
+        <motion.button
+          whileHover={state === "idle" ? { scale: 1.05 } : undefined}
+          whileTap={state === "idle" ? { scale: 0.95 } : undefined}
+          type="button"
+          onClick={install}
+          disabled={state !== "idle"}
+          className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-bold bg-accent hover:bg-accent/90 text-accent-foreground disabled:opacity-60 transition-colors"
+        >
+          {state === "installing" ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : state === "done" ? (
+            <Check className="h-3 w-3" />
+          ) : (
+            <Download className="h-3 w-3" />
+          )}
+          {state === "installing" ? "Instalando…" : state === "done" ? "Instalada" : "Instalar"}
+        </motion.button>
+      )}
+    </div>
+  );
+}
+
 function SharedContentCard({
   content,
   carouselInstanceId,
+  senderUsername,
   installed,
   onInstalled,
 }: {
   content: SharedContent;
+  senderUsername: string;
   /** The message's mode tag (chat.ts' ChatMessage.carouselInstanceId), not
    *  content.modpackId — the message's *mode* decides whether this is a
    *  direct install or needs compatibility detection, not just whichever id
@@ -651,7 +743,7 @@ function SharedContentCard({
   // have — the agreed degradation rule) falls through to compatibility
   // detection below instead of a modpackId-only guess.
   const directPack =
-    content.category !== "skins" && carouselInstanceId
+    content.category !== "skins" && content.category !== "screenshots" && carouselInstanceId
       ? catalogModpacks.find((p) => p.id === carouselInstanceId && p.installed) ??
         customInstances.find((p) => p.id === carouselInstanceId)
       : undefined;
@@ -678,6 +770,22 @@ function SharedContentCard({
   };
 
   const handleClick = async () => {
+    if (content.category === "screenshots") {
+      setInstalling(true);
+      try {
+        const { alreadySaved } = await addToGallery(
+          { kind: "url", url: content.downloadUrl, sha1: content.sha1 },
+          content.fileName,
+          { kind: "chat", username: senderUsername }
+        );
+        toast.success(alreadySaved ? "Ya estaba en tu galería." : "Guardada en tu galería.");
+      } catch (e: any) {
+        toast.error(e?.message || "No se pudo guardar la imagen.");
+      } finally {
+        setInstalling(false);
+      }
+      return;
+    }
     if (content.category === "skins") {
       setInstalling(true);
       try {
@@ -708,7 +816,8 @@ function SharedContentCard({
     }
   };
 
-  const isOneClick = content.category === "skins" || !!directPack;
+  const isScreenshot = content.category === "screenshots";
+  const isOneClick = content.category === "skins" || isScreenshot || !!directPack;
 
   return (
     <div className="max-w-[85%] flex items-center gap-2.5 rounded-2xl px-3 py-2.5 bg-white/10 shadow-sm">
@@ -747,7 +856,15 @@ function SharedContentCard({
           ) : (
             <Download className="h-3 w-3" />
           )}
-          {isOneClick ? (installed ? "Volver a descargar" : "Descargar") : "Instalar"}
+          {isScreenshot
+            ? installed
+              ? "En tu galería"
+              : "Guardar en galería"
+            : isOneClick
+            ? installed
+              ? "Volver a descargar"
+              : "Descargar"
+            : "Instalar"}
         </motion.button>
         <AnimatePresence>
           {showPicker && (

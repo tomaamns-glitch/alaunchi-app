@@ -52,6 +52,7 @@ export function ServersPanel() {
           </Button>
         )}
       </div>
+      <div className="h-px shrink-0 bg-white/10" />
 
       <AnimatePresence initial={false}>
         {adding && <NewServerForm onClose={() => setAdding(false)} />}

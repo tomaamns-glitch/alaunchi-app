@@ -1,6 +1,7 @@
 import { ref, set, update, push, onValue, runTransaction, serverTimestamp, off, type Unsubscribe } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 import type { SharedContent } from "./content-share";
+import type { RecipeEntry } from "./public-profile";
 
 export interface ChatMessage {
   senderUuid: string;
@@ -10,6 +11,8 @@ export interface ChatMessage {
   content?: SharedContent;
   /** A Minecraft server address shared from Cuenta → Servers. */
   server?: SharedServer;
+  /** One of the sender's private instances, as a recipe to recreate it. */
+  instance?: SharedInstance;
   /** Set when sent from the chat's "carousel instance" mode instead of
    *  "general" — the id of that catalog modpack. Absent = general mode
    *  (covers every message sent before this field existed too). The sender
@@ -21,6 +24,21 @@ export interface ChatMessage {
 export interface SharedServer {
   name: string;
   ip: string;
+}
+
+/** A private instance shared over chat — the same "recipe" a public profile
+ *  offers (lib/instance-recipe.ts): loader + Minecraft version + every file
+ *  Modrinth could identify, which the recipient redownloads from Modrinth. */
+export interface SharedInstance {
+  name: string;
+  minecraftVersion: string;
+  loaderType: "vanilla" | "forge" | "neoforge" | "fabric";
+  /** RTDB drops empty arrays, so a vanilla/empty instance arrives without it. */
+  recipe?: RecipeEntry[];
+  /** Files that didn't resolve to Modrinth and so don't travel. */
+  unresolvedCount: number;
+  /** Small data URL of the instance's picture, when it has one. */
+  iconDataUrl?: string;
 }
 
 export interface ChatIndexEntry {
@@ -102,7 +120,7 @@ async function pushMessageAndUpdateIndex(
   myUsername: string,
   otherUuid: string,
   otherUsername: string,
-  body: { text: string; content?: SharedContent; server?: SharedServer; carouselInstanceId?: string },
+  body: { text: string; content?: SharedContent; server?: SharedServer; instance?: SharedInstance; carouselInstanceId?: string },
   indexPreview: string
 ): Promise<void> {
   const conversationId = getConversationId(myUuid, otherUuid);
@@ -114,6 +132,7 @@ async function pushMessageAndUpdateIndex(
     text: body.text,
     ...(body.content ? { content: body.content } : {}),
     ...(body.server ? { server: { name: body.server.name, ip: body.server.ip } } : {}),
+    ...(body.instance ? { instance: body.instance } : {}),
     ...(body.carouselInstanceId ? { carouselInstanceId: body.carouselInstanceId } : {}),
     timestamp: serverTimestamp(),
   });
@@ -187,6 +206,16 @@ export async function sendSharedServer(
   carouselInstanceId?: string
 ): Promise<void> {
   await pushMessageAndUpdateIndex(myUuid, myUsername, otherUuid, otherUsername, { text: "", server, carouselInstanceId }, `🌐 ${server.name}`);
+}
+
+export async function sendSharedInstance(
+  myUuid: string,
+  myUsername: string,
+  otherUuid: string,
+  otherUsername: string,
+  instance: SharedInstance
+): Promise<void> {
+  await pushMessageAndUpdateIndex(myUuid, myUsername, otherUuid, otherUsername, { text: "", instance }, `📦 ${instance.name}`);
 }
 
 /** Clears unread count for one conversation — call when the user opens it. */

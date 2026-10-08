@@ -250,6 +250,58 @@ function hashFileSha1(filePath) {
   });
 }
 
+// ── Caches for the content listings (rendimiento) ──────────────────────────
+// mc:list-instance-files / schematics / emotes / screenshots and gallery:list
+// used to re-hash EVERY file (and re-decode every screenshot) on every call —
+// opening a 200-mod instance re-read hundreds of MB each time, and several
+// views call these listings. A file whose size and mtime haven't changed has
+// the same bytes, so its sha1 / thumbnail are reused; any change (or a file
+// replaced at the same path) recomputes. Bounded, oldest entries dropped first.
+const SHA1_CACHE_MAX = 20000;
+const sha1Cache = new Map(); // absPath -> { size, mtimeMs, sha1 }
+async function cachedSha1(filePath, stat) {
+  const st = stat || (await fs.stat(filePath));
+  const hit = sha1Cache.get(filePath);
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.sha1;
+  const sha1 = await hashFileSha1(filePath);
+  sha1Cache.delete(filePath);
+  sha1Cache.set(filePath, { size: st.size, mtimeMs: st.mtimeMs, sha1 });
+  if (sha1Cache.size > SHA1_CACHE_MAX) sha1Cache.delete(sha1Cache.keys().next().value);
+  return sha1;
+}
+
+const THUMB_CACHE_MAX = 600;
+const thumbCache = new Map(); // `${absPath}|${width}` -> { size, mtimeMs, dataUrl }
+/** Resized PNG data URL of an image file. nativeImage decoding is synchronous
+ *  (it blocks this process while it runs), so a cached thumbnail matters. */
+async function cachedThumbnail(filePath, width, stat) {
+  const st = stat || (await fs.stat(filePath));
+  const key = `${filePath}|${width}`;
+  const hit = thumbCache.get(key);
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.dataUrl;
+  const dataUrl = nativeImage.createFromPath(filePath).resize({ width }).toDataURL();
+  thumbCache.delete(key);
+  thumbCache.set(key, { size: st.size, mtimeMs: st.mtimeMs, dataUrl });
+  if (thumbCache.size > THUMB_CACHE_MAX) thumbCache.delete(thumbCache.keys().next().value);
+  return dataUrl;
+}
+
+/** Like Promise.all(items.map(fn)) — same order of results — but at most
+ *  `limit` running at once (hashing a cold 200-mod folder in parallel without
+ *  flooding the disk). */
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 // Per-hash in-flight dedup so concurrent workers wanting the same hash share one download.
 const inFlightObjects = new Map();
 
@@ -354,6 +406,10 @@ function waitForGameWindow(modpackId, pid, logFile) {
       return false;
     }
   };
+  // The log check is a cheap file read; the window check spawns PowerShell, which
+  // competes for CPU with the game while it's loading — so that one only runs on
+  // every other tick (every 3 s instead of 1.5 s).
+  let ticks = 0;
   const tick = async () => {
     const r = runningInstances.get(modpackId);
     if (!r || r.pid !== pid || r.state !== "starting") return clearInterval(timer);
@@ -361,7 +417,7 @@ function waitForGameWindow(modpackId, pid, logFile) {
     busy = true;
     try {
       let ready = Date.now() > deadline || (await logShowsWindow());
-      if (!ready && process.platform === "win32") ready = await processHasWindow(pid);
+      if (!ready && process.platform === "win32" && ticks++ % 2 === 0) ready = await processHasWindow(pid);
       if (ready) {
         clearInterval(timer);
         setRunningState(modpackId, pid, "running");
@@ -923,9 +979,16 @@ function createWindow() {
   // quitting — the game keeps running detached either way, but quitting also
   // kills the playtime watcher and the presence websocket, so a session played
   // with the launcher closed would go untracked. Only an explicit quit (tray
-  // menu, or the auto-updater's quitAndInstall) actually exits.
+  // menu, or the auto-updater's quitAndInstall) actually exits — unless the
+  // player turned off "Seguir en segundo plano" (settings.json closeToTray:
+  // false), in which case closing the window quits the whole launcher.
   win.on("close", (event) => {
     if (isQuitting) return;
+    if (!closeToTray) {
+      isQuitting = true;
+      app.quit();
+      return;
+    }
     event.preventDefault();
     win.hide();
     // Renderer's cue to refresh "when did they last use the launcher" (chat
@@ -939,6 +1002,12 @@ function createWindow() {
 
 let isQuitting = false;
 let tray = null;
+// Cached copy of settings.json's closeToTray (default on): the window's
+// "close" handler has to decide synchronously, so it can't read the file.
+let closeToTray = true;
+function applyCloseToTraySetting(settings) {
+  closeToTray = settings?.closeToTray !== false;
+}
 
 app.on("before-quit", () => {
   isQuitting = true;
@@ -973,6 +1042,9 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.error("[startup] No se pudieron crear las carpetas de datos:", e);
   }
+  try {
+    applyCloseToTraySetting(JSON.parse(await fs.readFile(path.join(APP_DATA_DIR, "settings.json"), "utf8")));
+  } catch {}
   try {
     reconcileDanglingPlaytimeSessions();
   } catch (e) {
@@ -1581,6 +1653,41 @@ ipcMain.handle("instances:create", async (_, { name, loaderType, minecraftVersio
   return meta;
 });
 
+// Duplicates a private instance: the whole folder (mods, configs, saves,
+// resource packs, options…) under a new id, with its own name. Per-instance
+// history (playtime, the in-progress session marker, where it was imported
+// from) belongs to the original and doesn't carry over. Refused while the
+// instance is running — Windows keeps files like saves/*/session.lock open.
+ipcMain.handle("instances:duplicate", async (_, { id, name, markAsCopy }) => {
+  assertSafeInstanceId(id);
+  const cleanName = String(name || "").trim().slice(0, 64);
+  if (!cleanName) throw new Error("El nombre no puede estar vacío.");
+  const srcDir = path.join(CUSTOM_INSTANCES_DIR, id);
+  if (!fsSync.existsSync(path.join(srcDir, "alaunchi-meta.json"))) throw new Error("Solo se pueden duplicar instancias privadas.");
+  if (runningInstances.has(id)) throw new Error("Cierra el juego antes de duplicar esta instancia.");
+
+  const newId = await generateInstanceId(cleanName);
+  const destDir = path.join(CUSTOM_INSTANCES_DIR, newId);
+  try {
+    await fs.cp(srcDir, destDir, { recursive: true, errorOnExist: true, force: false });
+    const meta = JSON.parse(await fs.readFile(path.join(destDir, "alaunchi-meta.json"), "utf8"));
+    delete meta.totalPlaytimeMs;
+    delete meta.activeSession;
+    delete meta.importedFrom;
+    // "Untouched copy" marker (the Hub shows a ↺ on it): only when the copy kept
+    // the suggested "… - copia" name; dropped as soon as its name or images
+    // change (instances:update-settings). Never inherited from a copied copy.
+    delete meta.duplicatedFrom;
+    if (markAsCopy) meta.duplicatedFrom = { id, at: Date.now() };
+    const next = { ...meta, id: newId, name: cleanName, installedAt: Date.now(), source: "custom" };
+    await fs.writeFile(path.join(destDir, "alaunchi-meta.json"), JSON.stringify(next, null, 2));
+    return next;
+  } catch (e) {
+    await fs.rm(destDir, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
+});
+
 // ─── IMPORTAR DESDE CURSEFORGE ───────────────────────────────────────────────
 // CurseForge keeps each instance in <root>/minecraft/Instances/<folder> with a
 // minecraftinstance.json describing it (game version, exact modloader build,
@@ -1939,6 +2046,8 @@ ipcMain.handle("instances:update-settings", async (_, { id, name, iconDataUrl, b
   const cleanName = typeof name === "string" ? name.trim().slice(0, 64) : undefined;
 
   if (meta.source === "custom") {
+    // Renamed or re-imaged → no longer an untouched copy (see instances:duplicate).
+    if ((cleanName && cleanName !== meta.name) || icon !== undefined || banner !== undefined) delete meta.duplicatedFrom;
     if (cleanName) meta.name = cleanName;
     if (icon !== undefined) meta.iconDataUrl = icon || undefined;
     if (banner !== undefined) meta.bannerDataUrl = banner || undefined;
@@ -2502,7 +2611,7 @@ const CONTENT_DIRS = ["mods", "shaderpacks", "resourcepacks"];
 
 ipcMain.handle("mc:list-instance-files", async (_, { modpackId }) => {
   const instanceDir = instanceDirFor(modpackId);
-  const out = [];
+  const files = [];
   for (const dir of CONTENT_DIRS) {
     const full = path.join(instanceDir, dir);
     let entries;
@@ -2512,16 +2621,19 @@ ipcMain.handle("mc:list-instance-files", async (_, { modpackId }) => {
       continue;
     }
     for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      const filePath = path.join(full, entry.name);
-      try {
-        const stat = await fs.stat(filePath);
-        const sha1 = await hashFileSha1(filePath).catch(() => null);
-        out.push({ path: `${dir}/${entry.name}`, size: stat.size, sha1 });
-      } catch {}
+      if (entry.isFile()) files.push({ rel: `${dir}/${entry.name}`, abs: path.join(full, entry.name) });
     }
   }
-  return out;
+  const listed = await mapLimit(files, 4, async (f) => {
+    try {
+      const stat = await fs.stat(f.abs);
+      const sha1 = await cachedSha1(f.abs, stat).catch(() => null);
+      return { path: f.rel, size: stat.size, sha1 };
+    } catch {
+      return null;
+    }
+  });
+  return listed.filter(Boolean);
 });
 
 // Structure files (Litematica exports to schematics/, WorldEdit/FAWE to
@@ -2577,7 +2689,7 @@ async function walkSchematicDir(absDir, relPrefix, source, out) {
     try {
       const absPath = path.join(absDir, entry.name);
       const stat = await fs.stat(absPath);
-      const sha1 = await hashFileSha1(absPath).catch(() => null);
+      const sha1 = await cachedSha1(absPath, stat).catch(() => null);
       out.push({ path: relPath, size: stat.size, source, sha1 });
     } catch {}
   }
@@ -4534,6 +4646,7 @@ ipcMain.handle("fs:read-settings", async () => {
 
 ipcMain.handle("fs:write-settings", async (_, settings) => {
   await fs.writeFile(path.join(APP_DATA_DIR, "settings.json"), JSON.stringify(settings, null, 2));
+  applyCloseToTraySetting(settings);
   return { success: true };
 });
 
@@ -4645,7 +4758,7 @@ ipcMain.handle("mc:list-emotes", async (_, { modpackId }) => {
     } catch (e) {
       console.warn(`[Emotes] No se pudo leer ${entry.name}:`, e.message);
     }
-    const sha1 = await hashFileSha1(filePath).catch(() => null);
+    const sha1 = await cachedSha1(filePath).catch(() => null);
     results.push({
       fileName: entry.name,
       displayName: entry.name.replace(/\.emotecraft$/i, "").trim(),
@@ -4673,22 +4786,222 @@ ipcMain.handle("mc:list-screenshots", async (_, { modpackId }) => {
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".png")) continue;
     const filePath = path.join(screenshotsDir, entry.name);
-    let size = 0;
+    let stat;
     try {
-      size = (await fs.stat(filePath)).size;
+      stat = await fs.stat(filePath);
     } catch {
       continue;
     }
     let thumbnailDataUrl = null;
     try {
-      thumbnailDataUrl = nativeImage.createFromPath(filePath).resize({ width: 220 }).toDataURL();
+      thumbnailDataUrl = await cachedThumbnail(filePath, 220, stat);
     } catch (e) {
       console.warn(`[Screenshots] No se pudo generar miniatura de ${entry.name}:`, e.message);
     }
-    const sha1 = await hashFileSha1(filePath).catch(() => null);
-    results.push({ fileName: entry.name, size, sha1, thumbnailDataUrl });
+    const sha1 = await cachedSha1(filePath, stat).catch(() => null);
+    results.push({ fileName: entry.name, size: stat.size, sha1, thumbnailDataUrl });
   }
   return results;
+});
+
+// ============================================================
+// Biblioteca personal (Cuenta → Biblioteca): content the player saved as a
+// favorite (a COPY of the file — mods, shaders, resource packs, emotes,
+// schematics) plus their image gallery (own screenshots, or ones friends sent
+// over chat). Local to this PC, under APP_DATA_DIR/library:
+//   content.json + content/<id>/<file>     gallery.json + gallery/<id>.png
+// Ids are generated here and file names are reduced to a bare, safe name, so
+// nothing the renderer (or a chat message) sends can steer a write elsewhere.
+// ============================================================
+const LIBRARY_DIR = path.join(APP_DATA_DIR, "library");
+const LIBRARY_CONTENT_DIR = path.join(LIBRARY_DIR, "content");
+const LIBRARY_CONTENT_INDEX = path.join(LIBRARY_DIR, "content.json");
+const GALLERY_DIR = path.join(LIBRARY_DIR, "gallery");
+const GALLERY_INDEX = path.join(LIBRARY_DIR, "gallery.json");
+const LIBRARY_CATEGORIES = ["mods", "shaderpacks", "resourcepacks", "emotes", "schematics"];
+const LIBRARY_ID_RE = /^[a-f0-9-]{36}$/;
+
+async function readJsonArray(file) {
+  try {
+    const data = JSON.parse(await fs.readFile(file, "utf8"));
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+async function writeJsonArray(file, list) {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify(list, null, 2));
+}
+
+function safeFileName(name, fallback) {
+  const base = path.basename(String(name || "")).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/[. ]+$/, "").slice(0, 150);
+  return base || fallback;
+}
+function assertLibraryId(id) {
+  if (typeof id !== "string" || !LIBRARY_ID_RE.test(id)) throw new Error("Id de biblioteca no válido.");
+}
+
+/** Copies a file out of an instance, or downloads it (https only, sha1-checked when
+ *  given) into `dest`. Returns the sha1 of what ended up there. */
+async function fetchLibrarySource(source, dest) {
+  await fs.mkdir(path.dirname(dest), { recursive: true });
+  if (source?.kind === "instance") {
+    await fs.copyFile(safeJoin(instanceDirFor(source.modpackId), source.path), dest);
+  } else if (source?.kind === "url") {
+    if (typeof source.url !== "string" || !source.url.startsWith("https://")) throw new Error("URL no válida.");
+    const tmp = `${dest}.tmp.${process.pid}`;
+    try {
+      await downloadFile(source.url, tmp, null);
+      await fs.rename(tmp, dest);
+    } catch (e) {
+      await fs.unlink(tmp).catch(() => {});
+      throw e;
+    }
+  } else {
+    throw new Error("Origen no válido.");
+  }
+  const sha1 = await hashFileSha1(dest);
+  if (source.kind === "url" && source.sha1 && source.sha1 !== sha1) {
+    await fs.unlink(dest).catch(() => {});
+    throw new Error("El archivo descargado no coincide (hash distinto).");
+  }
+  return sha1;
+}
+
+ipcMain.handle("library:list-content", async () => readJsonArray(LIBRARY_CONTENT_INDEX));
+
+// meta: { category, displayName, iconUrl?, modrinthProjectId?, schematicSource?, sourceName? }
+ipcMain.handle("library:add-content", async (_, { meta, fileName, source }) => {
+  if (!LIBRARY_CATEGORIES.includes(meta?.category)) throw new Error("Tipo de contenido no válido.");
+  const list = await readJsonArray(LIBRARY_CONTENT_INDEX);
+  const id = crypto.randomUUID();
+  const name = safeFileName(fileName, "archivo");
+  const dir = path.join(LIBRARY_CONTENT_DIR, id);
+  let sha1;
+  try {
+    sha1 = await fetchLibrarySource(source, path.join(dir, name));
+  } catch (e) {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
+  const dup = list.find((e) => e.sha1 === sha1 && e.category === meta.category);
+  if (dup) {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    return { entry: dup, alreadySaved: true };
+  }
+  const entry = {
+    id,
+    category: meta.category,
+    fileName: name,
+    displayName: String(meta.displayName || name).slice(0, 200),
+    iconUrl: typeof meta.iconUrl === "string" ? meta.iconUrl : null,
+    sha1,
+    size: (await fs.stat(path.join(dir, name))).size,
+    addedAt: Date.now(),
+    ...(meta.modrinthProjectId ? { modrinthProjectId: String(meta.modrinthProjectId) } : {}),
+    ...(meta.schematicSource === "worldedit" || meta.schematicSource === "litematica" ? { schematicSource: meta.schematicSource } : {}),
+    ...(meta.sourceName ? { sourceName: String(meta.sourceName).slice(0, 200) } : {}),
+  };
+  list.push(entry);
+  await writeJsonArray(LIBRARY_CONTENT_INDEX, list);
+  return { entry, alreadySaved: false };
+});
+
+ipcMain.handle("library:remove-content", async (_, { id }) => {
+  assertLibraryId(id);
+  const list = await readJsonArray(LIBRARY_CONTENT_INDEX);
+  await writeJsonArray(LIBRARY_CONTENT_INDEX, list.filter((e) => e.id !== id));
+  await fs.rm(path.join(LIBRARY_CONTENT_DIR, id), { recursive: true, force: true }).catch(() => {});
+  return { success: true };
+});
+
+/** Copies a saved item into an instance; the destination folder comes from its
+ *  category (and, for schematics, which mod they're for). */
+ipcMain.handle("library:install-content", async (_, { id, modpackId }) => {
+  assertLibraryId(id);
+  const entry = (await readJsonArray(LIBRARY_CONTENT_INDEX)).find((e) => e.id === id);
+  if (!entry) throw new Error("Ese contenido ya no está en tu biblioteca.");
+  const folder =
+    entry.category === "schematics"
+      ? entry.schematicSource === "worldedit"
+        ? "config/worldedit/schematics"
+        : "schematics"
+      : entry.category;
+  const target = safeJoin(instanceDirFor(modpackId), `${folder}/${entry.fileName}`);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.copyFile(path.join(LIBRARY_CONTENT_DIR, id, entry.fileName), target);
+  return { path: `${folder}/${entry.fileName}`, size: entry.size, sha1: entry.sha1 };
+});
+
+ipcMain.handle("gallery:list", async () => {
+  const list = await readJsonArray(GALLERY_INDEX);
+  return Promise.all(
+    list.map(async (e) => {
+      let thumbnailDataUrl = null;
+      try {
+        thumbnailDataUrl = await cachedThumbnail(path.join(GALLERY_DIR, `${e.id}.png`), 220);
+      } catch {}
+      return { ...e, thumbnailDataUrl };
+    })
+  );
+});
+
+// from: { kind: "instance", name } | { kind: "chat", username }
+ipcMain.handle("gallery:add", async (_, { source, fileName, from }) => {
+  const list = await readJsonArray(GALLERY_INDEX);
+  const id = crypto.randomUUID();
+  const dest = path.join(GALLERY_DIR, `${id}.png`);
+  const sha1 = await fetchLibrarySource(source, dest);
+  const dup = list.find((e) => e.sha1 === sha1);
+  if (dup) {
+    await fs.unlink(dest).catch(() => {});
+    return { entry: dup, alreadySaved: true };
+  }
+  const entry = {
+    id,
+    fileName: safeFileName(fileName, `${id}.png`),
+    sha1,
+    size: (await fs.stat(dest)).size,
+    addedAt: Date.now(),
+    from:
+      from?.kind === "chat"
+        ? { kind: "chat", username: String(from.username || "").slice(0, 40) }
+        : { kind: "instance", name: String(from?.name || "").slice(0, 200) },
+  };
+  list.push(entry);
+  await writeJsonArray(GALLERY_INDEX, list);
+  return { entry, alreadySaved: false };
+});
+
+ipcMain.handle("gallery:read", async (_, { id }) => {
+  assertLibraryId(id);
+  return (await fs.readFile(path.join(GALLERY_DIR, `${id}.png`))).toString("base64");
+});
+
+ipcMain.handle("gallery:remove", async (_, { id }) => {
+  assertLibraryId(id);
+  const list = await readJsonArray(GALLERY_INDEX);
+  await writeJsonArray(GALLERY_INDEX, list.filter((e) => e.id !== id));
+  await fs.unlink(path.join(GALLERY_DIR, `${id}.png`)).catch(() => {});
+  return { success: true };
+});
+
+ipcMain.handle("gallery:show-file", async (_, { id }) => {
+  if (id) {
+    assertLibraryId(id);
+    shell.showItemInFolder(path.join(GALLERY_DIR, `${id}.png`));
+  } else {
+    await fs.mkdir(GALLERY_DIR, { recursive: true });
+    await shell.openPath(GALLERY_DIR);
+  }
+  return { success: true };
+});
+
+// Instance screenshots → "Abrir carpeta": the file selected in Explorer.
+ipcMain.handle("mc:show-instance-file", async (_, { modpackId, path: relPath }) => {
+  shell.showItemInFolder(safeJoin(instanceDirFor(modpackId), relPath));
+  return { success: true };
 });
 
 ipcMain.handle("github:fetch-modpacks", async (_, { repoUrl }) => {

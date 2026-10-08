@@ -151,6 +151,16 @@ export async function createInstance(input: CreateInstanceInput): Promise<Record
   return eAPI.createInstance(input);
 }
 
+/** Copies a private instance (all its files) under a new name. Returns the new meta. */
+export async function duplicateInstance(id: string, name: string, markAsCopy: boolean): Promise<Record<string, any>> {
+  if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
+  try {
+    return await eAPI.duplicateInstance({ id, name, markAsCopy });
+  } catch (e: any) {
+    throw new Error(e?.message?.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") || "No se pudo duplicar la instancia.");
+  }
+}
+
 /** Removes a locally-created instance. Refuses (in main.js) if the instance
  *  isn't source:"custom", so this can never touch a GitHub pack. With
  *  `keepFiles`, only the alaunchi-meta.json marker is removed — the instance

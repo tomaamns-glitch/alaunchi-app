@@ -5,6 +5,11 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { InstanceSettingsDialog } from "@/components/instance-settings-dialog";
 import { ModLibraryDialog } from "@/components/mod-library-dialog";
+import { FlipList } from "@/components/flip-list";
+import { ShareImageDialog, type ShareableImage } from "@/components/share-image-dialog";
+import { ShareInstanceDialog } from "@/components/share-instance-dialog";
+import { DuplicateInstanceDialog } from "@/components/duplicate-instance-dialog";
+import { addToGallery, showInstanceFile } from "@/services/personal-library";
 import {
   fetchLibraryMod,
   identifyLibraryFiles,
@@ -52,6 +57,9 @@ import {
   MoreVertical,
   Settings2,
   FolderOpen,
+  Send,
+  Share2,
+  Copy,
   Smile,
   Box,
   Globe,
@@ -152,6 +160,8 @@ import {
 import { findPackSource } from "@/hooks/use-modpacks";
 import { getLastViewPath } from "@/lib/last-view";
 import SwellLight from "@/components/swell-light";
+import { StaticGlow } from "@/components/static-glow";
+import { useAnimatedBackground } from "@/lib/animated-background";
 import { useTheme } from "@/lib/theme";
 import { extractDominantColor, type HSL } from "@/lib/dominant-color";
 import { loadRecentUpdates, recordRecentUpdate, type RecentUpdates } from "@/lib/recent-updates";
@@ -348,6 +358,7 @@ const InstalledContentRow = memo(function InstalledContentRow({
   const isDependency = !!dependentTitles?.length;
   return (
     <div
+      data-flip-key={path}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
       className={`flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full border-l-2 [content-visibility:auto] [contain-intrinsic-size:auto_66px] ${
@@ -479,6 +490,20 @@ export default function ModpackDetail() {
   const { busy: playBusy, running: playRunning, runState: playRunState, toggle: playToggle } = useLaunchModpack(pack);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const playProgress = useInstanceProgress(pack?.id);
+  // Width of the Play button while idle — when it turns into the (wider) progress
+  // chip, the header card widens by the difference, so the chip grows to the
+  // right instead of pushing everything left (the card's right edge would
+  // otherwise stay put). Only possible while the page has room on the right.
+  const [playButtonW, setPlayButtonW] = useState(0);
+  // Callback ref + ResizeObserver: measured only when the button's size changes
+  // (label JUGAR ↔ ACTUALIZAR Y JUGAR), never on every render of this page. It
+  // unmounts while the chip shows, so the last idle width is what's kept.
+  const playButtonRef = useCallback((node: HTMLButtonElement | null) => {
+    if (!node) return;
+    const ro = new ResizeObserver(() => setPlayButtonW(node.offsetWidth));
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, []);
   useDynamicAccent(pack?.bannerUrl || pack?.imageUrl);
 
   // Animated background (same SwellLight as the Hub's "Mis instancias"), tinted
@@ -486,6 +511,7 @@ export default function ModpackDetail() {
   // instance gets its own. null until the color is known, so it never flashes
   // the default blue first.
   const theme = useTheme((s) => s.theme);
+  const animatedBackground = useAnimatedBackground((s) => s.enabled);
   const [iconHsl, setIconHsl] = useState<HSL | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -828,6 +854,9 @@ export default function ModpackDetail() {
   // mod you came from instead of all the way to the list.
   const [modHistory, setModHistory] = useState<string[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [shareImage, setShareImage] = useState<ShareableImage | null>(null);
+  const [sharingInstance, setSharingInstance] = useState(false);
+  const [duplicatingInstance, setDuplicatingInstance] = useState(false);
   const openMod = (path: string) => {
     setPanelDirection(1);
     setSelectedModPath(path);
@@ -1759,15 +1788,19 @@ export default function ModpackDetail() {
           exit={{ opacity: 0 }}
           transition={{ duration: 0.6 }}
         >
-          <SwellLight
-            color={swellColors.color}
-            glintColor={swellColors.glint}
-            contrast={2.2}
-            glint={0.3}
-            cursorSize={18}
-            cursorStrength={0.6}
-            trail={0.9}
-          />
+          {animatedBackground ? (
+            <SwellLight
+              color={swellColors.color}
+              glintColor={swellColors.glint}
+              contrast={2.2}
+              glint={0.3}
+              cursorSize={18}
+              cursorStrength={0.6}
+              trail={0.9}
+            />
+          ) : (
+            <StaticGlow color={swellColors.color} />
+          )}
         </motion.div>
       )}
     </AnimatePresence>
@@ -1814,9 +1847,17 @@ export default function ModpackDetail() {
         <div className="max-w-5xl mx-auto w-full">
         <div className={`px-4 pb-2 relative z-10 ${pack.bannerUrl ? "-mt-16" : "pt-4"}`}>
           <div
-            className={`flex items-center justify-between gap-4 mr-auto bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 ${
-              !selectedModPath && !searchMode ? "max-w-2xl" : "max-w-full"
+            className={`flex items-center justify-between gap-4 mr-auto bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 transition-[max-width] duration-300 ease-out ${
+              !selectedModPath && !searchMode ? "" : "max-w-full"
             }`}
+            style={
+              !selectedModPath && !searchMode
+                ? {
+                    // 42rem = the old max-w-2xl; the chip is w-60 (240px).
+                    maxWidth: playProgress.active && playButtonW ? `calc(42rem + ${Math.max(0, 240 - playButtonW)}px)` : "42rem",
+                  }
+                : undefined
+            }
           >
             {selectedModPath && selectedMatch ? (
                 <motion.div
@@ -1988,13 +2029,16 @@ export default function ModpackDetail() {
               </div>
             )}
             {!selectedModPath && !searchMode && pack.installed && (
-              <div className="flex items-center gap-2 shrink-0">
+              // items-start, not center: the Play column has the playtime under
+              // the button, and centering against the whole column left the ⋮
+              // lower than the button itself. Both are h-9, so tops line up.
+              <div className="flex items-start gap-1.5 shrink-0">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="shrink-0 text-gray-400 hover:text-white"
+                      className="shrink-0 rounded-md border-white/15 bg-white/5 text-gray-300 hover:bg-white/10 hover:border-white/25 hover:text-white data-[state=open]:bg-white/10 data-[state=open]:border-white/25 data-[state=open]:text-white"
                       aria-label="Más opciones"
                     >
                       <MoreVertical className="h-4 w-4" />
@@ -2017,6 +2061,18 @@ export default function ModpackDetail() {
                       <FolderOpen className="mr-2 h-4 w-4" />
                       Abrir carpeta
                     </DropdownMenuItem>
+                    {pack.source === "custom" && (
+                      <DropdownMenuItem onSelect={() => setTimeout(() => setSharingInstance(true), 0)}>
+                        <Share2 className="mr-2 h-4 w-4" />
+                        Compartir
+                      </DropdownMenuItem>
+                    )}
+                    {pack.source === "custom" && (
+                      <DropdownMenuItem onSelect={() => setTimeout(() => setDuplicatingInstance(true), 0)}>
+                        <Copy className="mr-2 h-4 w-4" />
+                        Duplicar
+                      </DropdownMenuItem>
+                    )}
                     {pack.source === "custom" && (
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
@@ -2044,6 +2100,7 @@ export default function ModpackDetail() {
                     />
                   ) : (
                   <Button
+                    ref={playButtonRef}
                     onClick={playToggle}
                     disabled={playBusy}
                     className={`shrink-0 border-transparent font-bold gap-1.5 ${
@@ -2401,7 +2458,7 @@ export default function ModpackDetail() {
                   <div
                     ref={tabsRowRef}
                     style={{ top: headerH }}
-                    className={`sticky z-20 flex items-center justify-between gap-2 flex-wrap mb-4 bg-gray-500/10 backdrop-blur-md border border-white/10 p-3 ${
+                    className={`sticky z-20 flex flex-col gap-3 mb-4 bg-gray-500/10 backdrop-blur-md border border-white/10 p-3 ${
                       tabsStuck && sortRowStuck
                         ? "rounded-none"
                         : tabsStuck
@@ -2411,6 +2468,56 @@ export default function ModpackDetail() {
                         : "rounded-md"
                     }`}
                   >
+                    {/* Top level: the instance's content vs. its screenshots —
+                        screenshots used to sit among the content tabs. */}
+                    {pack.installed && (
+                      <div className="flex items-center gap-1 p-1 rounded-lg bg-card/50 border border-white/5 self-start">
+                        {([
+                          { id: "content", label: "Contenido", icon: Package },
+                          { id: "screenshots", label: "Capturas", icon: Camera },
+                        ] as const).map(({ id: sectionId, label, icon: SectionIcon }) => {
+                          const active = sectionId === "screenshots" ? screenshotsOpen : !screenshotsOpen;
+                          return (
+                            <button
+                              key={sectionId}
+                              type="button"
+                              onClick={() => {
+                                if (sectionId === "screenshots") {
+                                  setEmotesOpen(false);
+                                  setSchematicsOpen(false);
+                                  setScreenshotsOpen(true);
+                                } else {
+                                  setScreenshotsOpen(false);
+                                }
+                              }}
+                              className={`relative inline-flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-semibold transition-colors ${
+                                active ? "text-accent-foreground" : "text-muted-foreground hover:text-foreground"
+                              }`}
+                            >
+                              {active && (
+                                <motion.span
+                                  layoutId="section-pill"
+                                  transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                                  className="absolute inset-0 rounded-md bg-accent shadow"
+                                />
+                              )}
+                              <SectionIcon className="relative h-4 w-4" />
+                              <span className="relative">{label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <AnimatePresence initial={false}>
+                    {!screenshotsOpen && (
+                    <motion.div
+                      key="category-row"
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2, ease: "easeOut" }}
+                      className="flex items-center justify-between gap-2 flex-wrap"
+                    >
                     <TabsList className="bg-card/50 border border-white/5">
                       {categories.map((c) => {
                         const Icon = CATEGORY_META[c].icon;
@@ -2423,11 +2530,18 @@ export default function ModpackDetail() {
                               setSchematicsOpen(false);
                               setScreenshotsOpen(false);
                             }}
-                            className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground gap-1.5"
+                            className="relative data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:text-accent-foreground gap-1.5"
                           >
-                            <Icon className="h-3.5 w-3.5" />
-                            {CATEGORY_META[c].label}
-                            <span className="opacity-60">({rowsFor(c).length})</span>
+                            {c === effectiveCategory && !emotesOpen && !schematicsOpen && (
+                              <motion.span
+                                layoutId="category-pill"
+                                transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                                className="absolute inset-0 rounded-md bg-accent shadow"
+                              />
+                            )}
+                            <Icon className="relative h-3.5 w-3.5" />
+                            <span className="relative">{CATEGORY_META[c].label}</span>
+                            <span className="relative opacity-60">({rowsFor(c).length})</span>
                           </TabsTrigger>
                         );
                       })}
@@ -2439,14 +2553,19 @@ export default function ModpackDetail() {
                             setScreenshotsOpen(false);
                             setEmotesOpen(true);
                           }}
-                          className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium gap-1.5 transition-all ${
-                            emotesOpen
-                              ? "bg-accent text-accent-foreground shadow"
-                              : "text-muted-foreground hover:text-foreground"
+                          className={`relative inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium gap-1.5 transition-colors ${
+                            emotesOpen ? "text-accent-foreground" : "text-muted-foreground hover:text-foreground"
                           }`}
                         >
-                          <Smile className="h-3.5 w-3.5" />
-                          Emotes
+                          {emotesOpen && (
+                            <motion.span
+                              layoutId="category-pill"
+                              transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                              className="absolute inset-0 rounded-md bg-accent shadow"
+                            />
+                          )}
+                          <Smile className="relative h-3.5 w-3.5" />
+                          <span className="relative">Emotes</span>
                         </button>
                       )}
                       {(litematicaInstalled || schematics.length > 0) && (
@@ -2457,32 +2576,19 @@ export default function ModpackDetail() {
                             setScreenshotsOpen(false);
                             setSchematicsOpen(true);
                           }}
-                          className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium gap-1.5 transition-all ${
-                            schematicsOpen
-                              ? "bg-accent text-accent-foreground shadow"
-                              : "text-muted-foreground hover:text-foreground"
+                          className={`relative inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium gap-1.5 transition-colors ${
+                            schematicsOpen ? "text-accent-foreground" : "text-muted-foreground hover:text-foreground"
                           }`}
                         >
-                          <Box className="h-3.5 w-3.5" />
-                          Esquemas
-                        </button>
-                      )}
-                      {pack.installed && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEmotesOpen(false);
-                            setSchematicsOpen(false);
-                            setScreenshotsOpen(true);
-                          }}
-                          className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium gap-1.5 transition-all ${
-                            screenshotsOpen
-                              ? "bg-accent text-accent-foreground shadow"
-                              : "text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          <Camera className="h-3.5 w-3.5" />
-                          Capturas
+                          {schematicsOpen && (
+                            <motion.span
+                              layoutId="category-pill"
+                              transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                              className="absolute inset-0 rounded-md bg-accent shadow"
+                            />
+                          )}
+                          <Box className="relative h-3.5 w-3.5" />
+                          <span className="relative">Esquemas</span>
                         </button>
                       )}
                     </TabsList>
@@ -2500,18 +2606,21 @@ export default function ModpackDetail() {
                         )}
                         {!emotesOpen && !schematicsOpen && !screenshotsOpen && effectiveCategory === "mods" && (
                           <Button
-                            size="sm"
+                            size="icon"
                             variant="outline"
                             onClick={() => setLibraryOpen(true)}
                             title="Biblioteca de mods del grupo"
-                            className="gap-1.5 font-bold"
+                            aria-label="Biblioteca de mods del grupo"
+                            className="h-8 w-8"
                           >
-                            <Library className="h-3.5 w-3.5" />
-                            Biblioteca
+                            <Library className="h-4 w-4" />
                           </Button>
                         )}
                       </div>
                     )}
+                    </motion.div>
+                    )}
+                    </AnimatePresence>
                   </div>
                 )}
 
@@ -2658,7 +2767,14 @@ export default function ModpackDetail() {
                     </>
                     );
                   })()
-                ) : emotesOpen ? (
+                ) : (
+                <motion.div
+                  key={screenshotsOpen ? "screenshots" : emotesOpen ? "emotes" : schematicsOpen ? "schematics" : effectiveCategory}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2, ease: "easeOut" }}
+                >
+                {emotesOpen ? (
                   emotesLoading ? (
                     <div className="flex items-center justify-center py-16 text-muted-foreground">
                       <Loader2 className="h-5 w-5 animate-spin mr-2" /> Cargando emotes...
@@ -2837,9 +2953,56 @@ export default function ModpackDetail() {
                   ) : (
                     <div className="grid grid-cols-4 gap-3">
                       {screenshots.map((shot) => (
+                        <div key={shot.fileName} className="group relative">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              onClick={(e) => e.stopPropagation()}
+                              className="absolute top-3 right-3 z-10 h-7 w-7 flex items-center justify-center rounded-md bg-black/60 text-white opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100 hover:bg-black/80 transition-opacity"
+                              aria-label="Opciones de la captura"
+                            >
+                              <MoreVertical className="h-4 w-4" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => void showInstanceFile(id!, `screenshots/${shot.fileName}`)}>
+                              <FolderOpen className="mr-2 h-4 w-4" /> Abrir carpeta
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={!shot.sha1}
+                              onClick={() =>
+                                setShareImage({
+                                  fileName: shot.fileName,
+                                  sha1: shot.sha1!,
+                                  size: shot.size,
+                                  thumbnailDataUrl: shot.thumbnailDataUrl,
+                                  readBase64: () => readInstanceFile(id!, `screenshots/${shot.fileName}`),
+                                })
+                              }
+                            >
+                              <Send className="mr-2 h-4 w-4" /> Compartir imagen
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={async () => {
+                                try {
+                                  const { alreadySaved } = await addToGallery(
+                                    { kind: "instance", modpackId: id!, path: `screenshots/${shot.fileName}` },
+                                    shot.fileName,
+                                    { kind: "instance", name: pack.name }
+                                  );
+                                  toast.success(alreadySaved ? "Ya estaba en tu galería." : "Añadida a tu galería.");
+                                } catch (e: any) {
+                                  toast.error(e?.message || "No se pudo añadir a la galería.");
+                                }
+                              }}
+                            >
+                              <ImageIcon className="mr-2 h-4 w-4" /> Agregar a la galería
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                         <button
                           type="button"
-                          key={shot.fileName}
                           onClick={async () => {
                             setLightboxImage({ src: shot.thumbnailDataUrl ?? "", title: shot.fileName });
                             setLightboxLoading(true);
@@ -2852,7 +3015,7 @@ export default function ModpackDetail() {
                               setLightboxLoading(false);
                             }
                           }}
-                          className="flex flex-col items-center gap-2 p-2 rounded-md bg-gray-500/10 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-colors"
+                          className="w-full flex flex-col items-center gap-2 p-2 rounded-md bg-gray-500/10 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-colors"
                         >
                           <div className="h-24 w-full rounded bg-black/30 overflow-hidden flex items-center justify-center shrink-0">
                             {shot.thumbnailDataUrl ? (
@@ -2865,6 +3028,7 @@ export default function ModpackDetail() {
                             {shot.fileName}
                           </span>
                         </button>
+                        </div>
                       ))}
                     </div>
                   )
@@ -2875,14 +3039,14 @@ export default function ModpackDetail() {
                       <div
                         ref={sortRowElRef}
                         style={{ top: headerH + tabsH }}
-                        className={`sticky z-10 flex items-center justify-between px-3 py-2 bg-gray-500/10 backdrop-blur-md border-b border-white/10 ${
+                        className={`sticky z-10 flex items-center justify-between px-3 py-2.5 min-h-[3.5rem] bg-gray-500/10 backdrop-blur-md border-b border-white/10 ${
                           sortRowStuck ? "" : "rounded-t-md"
                         }`}
                       >
                         <div className="flex items-center gap-1">
                           <button
                             onClick={() => setSortAsc((v) => !v)}
-                            className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-muted-foreground hover:text-white transition-colors"
+                            className="h-9 flex items-center gap-1.5 px-4 text-xs font-semibold rounded-md border border-transparent text-muted-foreground hover:text-white transition-colors"
                           >
                             Nombre
                             <ArrowUpDown className="h-3 w-3" />
@@ -2899,28 +3063,30 @@ export default function ModpackDetail() {
                                   ? "Llevar las dependencias abajo"
                                   : "Quitar orden por dependencias"
                               }
-                              className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition-colors ${
+                              className={`h-9 flex items-center gap-1.5 px-4 text-xs font-semibold rounded-md border transition-colors ${
                                 dependencySort !== "off"
-                                  ? "bg-accent/15 text-accent border border-accent/30"
-                                  : "text-muted-foreground hover:text-white"
+                                  ? "bg-accent/15 text-accent border-accent/30"
+                                  : "border-transparent text-muted-foreground hover:text-white"
                               }`}
                             >
                               <Link2 className="h-3.5 w-3.5" />
                               Dependencias
-                              {dependencySort === "first" ? (
-                                <ArrowUp className="h-3 w-3" />
-                              ) : dependencySort === "last" ? (
-                                <ArrowDown className="h-3 w-3" />
-                              ) : null}
+                              <span className="w-3 flex justify-center">
+                                {dependencySort === "first" ? (
+                                  <ArrowUp className="h-3 w-3" />
+                                ) : dependencySort === "last" ? (
+                                  <ArrowDown className="h-3 w-3" />
+                                ) : null}
+                              </span>
                             </button>
                           )}
                           <button
                             onClick={() => setUpdatesSort((v) => !v)}
                             title="Pendientes de actualizar primero; las actualizadas recientemente, al final"
-                            className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition-colors ${
+                            className={`h-9 flex items-center gap-1.5 px-4 text-xs font-semibold rounded-md border transition-colors ${
                               updatesSort
-                                ? "bg-accent/15 text-accent border border-accent/30"
-                                : "text-muted-foreground hover:text-white"
+                                ? "bg-accent/15 text-accent border-accent/30"
+                                : "border-transparent text-muted-foreground hover:text-white"
                             }`}
                           >
                             <RefreshCw className="h-3.5 w-3.5" />
@@ -2934,18 +3100,18 @@ export default function ModpackDetail() {
                         </div>
                         <button
                           onClick={() => setShowInstalledFirst((v) => !v)}
-                          className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition-colors ${
+                          className={`h-9 flex items-center gap-1.5 px-4 text-xs font-semibold rounded-md border transition-colors ${
                             showInstalledFirst
-                              ? "bg-accent/15 text-accent border border-accent/30"
-                              : "text-muted-foreground hover:text-white"
+                              ? "bg-accent/15 text-accent border-accent/30"
+                              : "border-transparent text-muted-foreground hover:text-white"
                           }`}
                         >
                           <CheckSquare className="h-3.5 w-3.5" />
                           Instalados
                         </button>
                       </div>
-                      <div className="flex flex-col gap-1.5 p-3 pt-1.5">
-                        {rowsFor(c)
+                      {(() => {
+                        const sorted = rowsFor(c)
                           .map((row) => ({ row, title: titleFor(row.path) }))
                           .sort((a, b) => {
                             if (updatesSort) {
@@ -2964,8 +3130,10 @@ export default function ModpackDetail() {
                             }
                             const cmp = a.title.localeCompare(b.title);
                             return sortAsc ? cmp : -cmp;
-                          })
-                          .map(({ row, title }) => (
+                          });
+                        return (
+                      <FlipList orderKey={sorted.map((r) => r.row.path).join("|")} className="flex flex-col gap-1.5 p-3 pt-1.5">
+                        {sorted.map(({ row, title }) => (
                             <InstalledContentRow
                               key={row.path}
                               path={row.path}
@@ -2984,10 +3152,14 @@ export default function ModpackDetail() {
                               onDelete={onRowDelete}
                             />
                           ))}
-                      </div>
+                      </FlipList>
+                        );
+                      })()}
                     </div>
                   </TabsContent>
                 ))
+                )}
+                </motion.div>
                 )}
               </Tabs>
             )}
@@ -2996,6 +3168,10 @@ export default function ModpackDetail() {
           </div>
         </div>
       </div>
+
+      <ShareImageDialog image={shareImage} onOpenChange={(o) => !o && setShareImage(null)} />
+      <ShareInstanceDialog instance={sharingInstance ? pack : null} onOpenChange={(o) => !o && setSharingInstance(false)} />
+      <DuplicateInstanceDialog instance={duplicatingInstance ? pack : null} onOpenChange={(o) => !o && setDuplicatingInstance(false)} />
 
       {pack.installed && (
         <ModLibraryDialog

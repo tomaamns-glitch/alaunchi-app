@@ -16,6 +16,8 @@ import { HubSidebar, type HubView } from "@/components/hub-sidebar";
 import { InstanceTile } from "@/components/hub-tile";
 import { Button } from "@/components/ui/button";
 import SwellLight from "@/components/swell-light";
+import { StaticGlow } from "@/components/static-glow";
+import { useAnimatedBackground } from "@/lib/animated-background";
 import { CurseForgeImportDialog, CurseForgeLogo } from "@/components/curseforge-import-dialog";
 import { ModrinthModpacksDialog } from "@/components/modrinth-modpacks-dialog";
 import { ModrinthGlyph } from "@/components/admin-modrinth-browser";
@@ -33,6 +35,7 @@ const TILE_MAX = 340;
 
 export default function Hub() {
   const theme = useTheme((s) => s.theme);
+  const animatedBackground = useAnimatedBackground((s) => s.enabled);
   const [curseForgeOpen, setCurseForgeOpen] = useState(false);
   const [modrinthOpen, setModrinthOpen] = useState(false);
   const { isAuthenticated, username, uuid } = useAuth();
@@ -163,18 +166,22 @@ export default function Hub() {
         style={{ opacity: theme === "light" ? 0.6 : 0.9 }}
         aria-hidden
       >
-        <SwellLight
-          key={theme}
-          color={theme === "light" ? "hsl(208 92% 44%)" : "#259DF4"}
-          glintColor={theme === "light" ? "#0b2f5c" : "#7fc4ff"}
-          // Mostly dark: only the crests of the swell light up, highlights
-          // stay faint, and the cursor leaves a small, short trail.
-          contrast={2.2}
-          glint={0.3}
-          cursorSize={18}
-          cursorStrength={0.6}
-          trail={0.9}
-        />
+        {animatedBackground ? (
+          <SwellLight
+            key={theme}
+            color={theme === "light" ? "hsl(208 92% 44%)" : "#259DF4"}
+            glintColor={theme === "light" ? "#0b2f5c" : "#7fc4ff"}
+            // Mostly dark: only the crests of the swell light up, highlights
+            // stay faint, and the cursor leaves a small, short trail.
+            contrast={2.2}
+            glint={0.3}
+            cursorSize={18}
+            cursorStrength={0.6}
+            trail={0.9}
+          />
+        ) : (
+          <StaticGlow color={theme === "light" ? "hsl(208 92% 44%)" : "#259DF4"} />
+        )}
       </div>
       <div className="relative z-10 flex-1 flex flex-col min-h-0 px-6 pt-6 pb-4 gap-6">
         {/* Same floating glass-card treatment as the Perfil header — rounded-xl,

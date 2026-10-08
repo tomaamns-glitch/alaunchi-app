@@ -29,8 +29,8 @@ interface ChatContactRailProps {
 /** Left-hand sidebar of the chat window — existing conversations, collapsible
  *  down to just head icons, plus a picker to start a new one. In carousel
  *  mode that picker offers whoever's played the selected instance; in general
- *  mode (no single instance in view) it offers friends you haven't started a
- *  conversation with yet instead. Right-click a contact to close (unpin — it
+ *  mode (no single instance in view) it offers your friends instead — in both,
+ *  minus whoever already has a conversation showing in the rail. Right-click a contact to close (unpin — it
  *  disappears here and from the bubble tray, but reopening from elsewhere
  *  brings its history right back) or delete (hides history for you only). */
 export function ChatContactRail({
@@ -108,10 +108,14 @@ export function ChatContactRail({
     .sort(([, a], [, b]) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0));
 
   const friendEntries = useMemo(() => toPresenceEntries(friends, activity), [friends, activity]);
+  // "Nuevo chat" offers everyone whose conversation isn't already in the list
+  // above — NOT just people you've never talked to: someone with old history
+  // whose conversation you closed (it's still in chatIndex) must show up here
+  // too, or there'd be no way to reopen it from the picker.
   const roster =
     mode.type === "carousel"
-      ? sortAllPresence(presence).filter(([uuid]) => uuid !== myUuid && !chatIndex[uuid] && uuid !== selectedUuid)
-      : sortAllPresence(friendEntries).filter(([uuid]) => !chatIndex[uuid] && uuid !== selectedUuid);
+      ? sortAllPresence(presence).filter(([uuid]) => uuid !== myUuid && !visibleUuids.has(uuid))
+      : sortAllPresence(friendEntries).filter(([uuid]) => !visibleUuids.has(uuid));
 
   const handleCloseConversation = (uuid: string) => {
     closeChat(uuid);
