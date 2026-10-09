@@ -118,7 +118,7 @@ export function ProfileEditDialog({
     setUploading(true);
     try {
       const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-      const url = await uploadBanner(uuid, base64, "image/jpeg");
+      const url = await uploadBanner(uuid, base64);
       await applyBanner(url, true);
       setCropSrc(null);
       toast.success("Banner actualizado.");

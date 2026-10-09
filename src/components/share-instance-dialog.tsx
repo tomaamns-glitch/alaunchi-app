@@ -6,6 +6,7 @@ import { LoaderIcon } from "@/components/loader-icon";
 import { useAuth } from "@/hooks/use-auth";
 import { buildInstanceRecipe } from "@/lib/instance-recipe";
 import { sendSharedInstance, type SharedInstance } from "@/services/chat";
+import { assertImageAllowed } from "@/services/image-moderation";
 import type { RecipeEntry } from "@/services/public-profile";
 
 // A custom instance's picture is a data URL kept in its meta; past this size it
@@ -55,6 +56,13 @@ export function ShareInstanceDialog({
     const loaderType = (["vanilla", "forge", "neoforge", "fabric"].includes(instance.loaderType)
       ? instance.loaderType
       : "vanilla") as SharedInstance["loaderType"];
+    const icon = instance.imageUrl && instance.imageUrl.length <= MAX_ICON_CHARS ? instance.imageUrl : undefined;
+    // The icon travels inside the chat message, so it never hits Storage —
+    // check it here. A rejected icon blocks the send with the reason, rather
+    // than silently dropping it.
+    if (icon?.startsWith("data:image/")) {
+      await assertImageAllowed(icon.slice(icon.indexOf(",") + 1));
+    }
     // No undefined values: RTDB rejects them.
     const shared: SharedInstance = {
       name: instance.name,
@@ -62,7 +70,7 @@ export function ShareInstanceDialog({
       loaderType,
       unresolvedCount: recipe.unresolvedCount,
       ...(recipe.recipe.length > 0 ? { recipe: recipe.recipe } : {}),
-      ...(instance.imageUrl && instance.imageUrl.length <= MAX_ICON_CHARS ? { iconDataUrl: instance.imageUrl } : {}),
+      ...(icon ? { iconDataUrl: icon } : {}),
     };
     await sendSharedInstance(myUuid, myUsername, uuid, username, shared);
     toast.success(`${instance.name} compartida con ${username}.`);

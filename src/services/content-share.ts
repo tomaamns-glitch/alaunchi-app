@@ -1,6 +1,7 @@
 import { ref as dbRef, get, set } from "firebase/database";
 import { ref as storageRef, uploadString, getDownloadURL } from "firebase/storage";
 import { rtdb, storage } from "@/lib/firebase";
+import { isImageBase64, uploadModeratedSharedImage } from "@/services/image-moderation";
 
 export type ContentCategory =
   | "mods"
@@ -53,6 +54,10 @@ export interface SharedContent {
  * before never re-uploads it. Returns a URL any recipient can download it from.
  */
 export async function uploadSharedContent(fileBase64: string, sha1: string): Promise<string> {
+  // Images (screenshots, skins) are seen by the recipient, so they go through
+  // moderation — the function handles the dedupe registry itself.
+  if (isImageBase64(fileBase64)) return uploadModeratedSharedImage(fileBase64, sha1);
+
   const registryRef = dbRef(rtdb, `contentObjects/${sha1}`);
   const existing = await get(registryRef);
   if (existing.exists()) {

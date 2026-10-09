@@ -44,7 +44,7 @@ export function ImageUrlField({
     setUploading(true);
     try {
       const base64 = await fileToBase64(file);
-      onChange(await uploadBanner(uuid, base64, file.type || "image/png"));
+      onChange(await uploadBanner(uuid, base64));
       toast.success("Imagen subida.");
     } catch (e: any) {
       toast.error(e?.message || "No se pudo subir la imagen.");
