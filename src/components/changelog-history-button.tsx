@@ -51,7 +51,8 @@ export function ChangelogHistoryButton({ modpackId }: ChangelogHistoryButtonProp
         <PopoverTrigger asChild>
           <button
             type="button"
-            className="flex items-center justify-center h-9 w-9 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors text-gray-200"
+            // 38px square — same height as the account/players/Contenido buttons.
+            className="flex items-center justify-center h-[38px] w-[38px] shrink-0 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors text-gray-200"
             aria-label="Actualizaciones anteriores"
           >
             <MessageSquareText className="h-4 w-4" />
