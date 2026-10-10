@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Switch } from "@/components/ui/switch";
 import { isFavorite, toggleFavorite } from "@/services/favorites";
 import {
   ArrowLeft,
@@ -48,7 +49,6 @@ import {
   Sparkles,
   Image as ImageIcon,
   FileQuestion,
-  CheckSquare,
   FileText,
   List,
   Download,
@@ -129,6 +129,8 @@ import {
   classifyDroppedFile,
   writeInstanceFile,
   deleteInstance as deleteInstanceIpc,
+  setModEnabled,
+  DISABLED_SUFFIX,
   type InstanceFile,
   type EmoteFile,
   type SchematicFile,
@@ -214,6 +216,11 @@ interface ContentRow {
   path: string;
   size: number;
   mandatory: boolean;
+  /** Turned off by the player (on disk as "<path>.disabled"; `path` stays the
+   *  enabled name so every map keyed by path keeps working). */
+  disabled: boolean;
+  /** An optional pack file that isn't on disk. */
+  notInstalled: boolean;
 }
 
 interface InstalledContentRowProps {
@@ -231,6 +238,14 @@ interface InstalledContentRowProps {
   sharedLayout: boolean;
   /** Required dependencies of this mod that aren't installed. */
   missingDeps: MissingDep[] | undefined;
+  /** Shows the on/off switch (optional mods of an unlocked instance). */
+  canToggle: boolean;
+  /** Set when the switch is shown but can't be turned off — why not. */
+  toggleLockedReason: string | undefined;
+  /** Optional pack file not on disk (unpicked optional group / deleted). */
+  notInstalled: boolean;
+  disabled: boolean;
+  onToggle: (path: string, enabled: boolean) => void;
   onOpen: (path: string) => void;
   onUpdate: (category: Category, path: string) => void;
   onDelete: (category: Category, path: string) => void;
@@ -349,6 +364,11 @@ const InstalledContentRow = memo(function InstalledContentRow({
   dependentTitles,
   sharedLayout,
   missingDeps,
+  canToggle,
+  toggleLockedReason,
+  notInstalled,
+  disabled,
+  onToggle,
   onOpen,
   onUpdate,
   onDelete,
@@ -369,7 +389,9 @@ const InstalledContentRow = memo(function InstalledContentRow({
     >
       <div
         onClick={() => match && onOpen(path)}
-        className={`flex items-center gap-3 min-w-0 flex-1 ${match ? "cursor-pointer" : ""}`}
+        className={`flex items-center gap-3 min-w-0 flex-1 transition-opacity ${match ? "cursor-pointer" : ""} ${
+          disabled || notInstalled ? "opacity-45 grayscale" : ""
+        }`}
       >
         {match?.iconUrl ? (
           shared ? (
@@ -413,7 +435,12 @@ const InstalledContentRow = memo(function InstalledContentRow({
             ) : (
               <p className="text-gray-100 font-medium text-base truncate">{title}</p>
             )}
-            {!!missingDeps?.length && (
+            {(disabled || notInstalled) && (
+              <span className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-medium text-muted-foreground shrink-0">
+                {notInstalled ? "No instalado" : "Desactivado"}
+              </span>
+            )}
+            {!disabled && !notInstalled && !!missingDeps?.length && (
               <MissingDepsWarning deps={missingDeps} onInstall={onInstallMissing} />
             )}
             {isDependency && (
@@ -441,7 +468,24 @@ const InstalledContentRow = memo(function InstalledContentRow({
           <p className="text-muted-foreground text-[11px] font-mono truncate select-text">{fileName(path)}</p>
         </div>
       </div>
-      {!mandatory && update && (
+      {canToggle && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="shrink-0 flex items-center">
+              <Switch
+                checked={!disabled}
+                disabled={busy || !!toggleLockedReason}
+                onCheckedChange={(on) => onToggle(path, on)}
+                aria-label={disabled ? "Activar mod" : "Desactivar mod"}
+              />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-xs">
+            {toggleLockedReason ?? (disabled ? "Activar mod" : "Desactivar mod (no se carga al jugar)")}
+          </TooltipContent>
+        </Tooltip>
+      )}
+      {!mandatory && !notInstalled && update && (
         <button
           onClick={() => onUpdate(category, path)}
           disabled={busy}
@@ -451,7 +495,7 @@ const InstalledContentRow = memo(function InstalledContentRow({
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
         </button>
       )}
-      {!mandatory && (
+      {!mandatory && !notInstalled && (
         <button
           onClick={() => onDelete(category, path)}
           disabled={busy}
@@ -539,6 +583,20 @@ export default function ModpackDetail() {
   const [loading, setLoading] = useState(false);
   const [content, setContent] = useState<Record<Category, SnapshotEntry[]> | null>(null);
   const [optionalContent, setOptionalContent] = useState<Record<Category, InstanceFile[]>>(EMPTY_CATEGORIES);
+  // Mods the player turned off, by their enabled path ("mods/foo.jar") — on
+  // disk they're "mods/foo.jar.disabled" (see diskPath below).
+  const [disabledMods, setDisabledMods] = useState<Set<string>>(new Set());
+  // Optional pack files missing from disk (unpicked optional group / deleted).
+  const [notInstalled, setNotInstalled] = useState<Set<string>>(new Set());
+  /** Where a listed file actually is on disk. */
+  const diskPath = (path: string) => (disabledMods.has(path) ? `${path}${DISABLED_SUFFIX}` : path);
+  const forgetDisabled = (...paths: (string | undefined)[]) =>
+    setDisabledMods((prev) => {
+      if (!paths.some((p) => p && prev.has(p))) return prev;
+      const next = new Set(prev);
+      for (const p of paths) if (p) next.delete(p);
+      return next;
+    });
   const [modrinthMatches, setModrinthMatches] = useState<Map<string, ModrinthMatch>>(new Map());
   const [updates, setUpdates] = useState<Map<string, ModrinthUpdate>>(new Map());
   // For each installed mod (by path), the projectIds its current version
@@ -548,7 +606,6 @@ export default function ModpackDetail() {
   // A pending delete of a mod other installed mods still require.
   const [depDeleteConfirm, setDepDeleteConfirm] = useState<{ c: Category; path: string; dependents: string[] } | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
-  const [showInstalledFirst, setShowInstalledFirst] = useState(false);
   // Extra sort keys of the installed list, applied before the name order:
   // dependencies to the top/bottom (mods only), and pending updates first with
   // recently updated items sunk to the very end in the order they were updated.
@@ -574,7 +631,7 @@ export default function ModpackDetail() {
   } | null>(null);
 
   // Sticky header stack: banner+header (top), category tabs + install button
-  // (sticks right under the top layer), and the Nombre/Instalados sort row
+  // (sticks right under the top layer), and the Nombre/Actualizaciones sort row
   // (sticks right under that). Heights are measured live — the banner is
   // responsive and the header card's text can wrap to more than one line.
   const [headerH, setHeaderH] = useState(0);
@@ -920,6 +977,8 @@ export default function ModpackDetail() {
     setModrinthMatches(new Map());
     setUpdates(new Map());
     setOptionalContent(EMPTY_CATEGORIES);
+    setDisabledMods(new Set());
+    setNotInstalled(new Set());
     setSelectedModPath(null);
     setEmotesOpen(false);
     setEmotes([]);
@@ -940,10 +999,28 @@ export default function ModpackDetail() {
 
       let optionalFiles: InstanceFile[] = [];
       if (pack?.installed) {
-        const [localFiles, schematicFiles] = await Promise.all([listInstanceFiles(id), listSchematics(id)]);
+        const [rawLocalFiles, schematicFiles] = await Promise.all([listInstanceFiles(id), listSchematics(id)]);
+        // Disabled mods are listed under their enabled name, so a pack's own
+        // optional mod that's switched off still lines up with its manifest
+        // entry instead of showing twice.
+        const disabled = new Set<string>();
+        const localFiles = rawLocalFiles.map((f) => {
+          if (!f.path.startsWith("mods/") || !f.path.endsWith(DISABLED_SUFFIX)) return f;
+          const enabledPath = f.path.slice(0, -DISABLED_SUFFIX.length);
+          disabled.add(enabledPath);
+          return { ...f, path: enabledPath };
+        });
         const mandatoryPaths = new Set(manifestFiles.map((f) => f.path));
         optionalFiles = localFiles.filter((f) => !mandatoryPaths.has(f.path));
+        // Pack files that aren't on disk: an optional group the player didn't
+        // pick, or an optional file they deleted.
+        const onDisk = new Set(localFiles.map((f) => f.path));
+        const missing = new Set(
+          manifestFiles.filter((f) => f.required === false && categoryOf(f.path) && !onDisk.has(f.path)).map((f) => f.path)
+        );
         if (cancelled) return;
+        setNotInstalled(missing);
+        setDisabledMods(disabled);
         setOptionalContent(categorize(optionalFiles));
         setSchematics(schematicFiles);
       }
@@ -1229,7 +1306,23 @@ export default function ModpackDetail() {
           [c]: [...prev[c], { path: newPath, size: version.size, sha1: version.sha1 }],
         }));
       } else {
-        await updateInstanceFile(pack.id, path, newPath, version.url, version.sha1);
+        // A disabled mod stays disabled after updating it.
+        const wasDisabled = disabledMods.has(path);
+        await updateInstanceFile(
+          pack.id,
+          diskPath(path),
+          wasDisabled ? `${newPath}${DISABLED_SUFFIX}` : newPath,
+          version.url,
+          version.sha1
+        );
+        if (wasDisabled && newPath !== path) {
+          setDisabledMods((prev) => {
+            const next = new Set(prev);
+            next.delete(path);
+            next.add(newPath);
+            return next;
+          });
+        }
         setOptionalContent((prev) =>
           prev[c].some((f) => f.path === path)
             ? { ...prev, [c]: prev[c].map((f) => (f.path === path ? { path: newPath, size: version.size, sha1: version.sha1 } : f)) }
@@ -1344,7 +1437,8 @@ export default function ModpackDetail() {
     const orphans = c === "mods" ? orphanedBy(path) : [];
     setBusyPaths((s) => new Set(s).add(path));
     try {
-      await deleteInstanceFile(pack.id, path);
+      await deleteInstanceFile(pack.id, diskPath(path));
+      forgetDisabled(path);
       setOptionalContent((prev) => ({ ...prev, [c]: prev[c].filter((f) => f.path !== path) }));
       setContent((prev) => (prev ? { ...prev, [c]: prev[c].filter((f) => f.path !== path) } : prev));
       if (selectedModPath === path) closeMod();
@@ -1504,11 +1598,13 @@ export default function ModpackDetail() {
   // (reassigned every render below), so rows never re-render just because the
   // page re-created its handler closures.
   const rowActionsRef = useRef<{
+    toggle: (path: string, enabled: boolean) => void;
     open: (path: string) => void;
     update: (c: Category, path: string) => void;
     remove: (c: Category, path: string) => void;
     installMissing: (deps: MissingDep[]) => Promise<void>;
-  }>({ open: () => {}, update: () => {}, remove: () => {}, installMissing: async () => {} });
+  }>({ toggle: () => {}, open: () => {}, update: () => {}, remove: () => {}, installMissing: async () => {} });
+  const onRowToggle = useCallback((path: string, enabled: boolean) => rowActionsRef.current.toggle(path, enabled), []);
   const onRowOpen = useCallback((path: string) => rowActionsRef.current.open(path), []);
   const onRowUpdate = useCallback((c: Category, path: string) => rowActionsRef.current.update(c, path), []);
   const onRowDelete = useCallback((c: Category, path: string) => rowActionsRef.current.remove(c, path), []);
@@ -1535,8 +1631,24 @@ export default function ModpackDetail() {
     : (Object.keys(CATEGORY_META) as Category[]).filter((c) => (content?.[c]?.length ?? 0) > 0);
 
   const rowsFor = (c: Category): ContentRow[] => [
-    ...(content?.[c] ?? []).map((f): ContentRow => ({ path: f.path, size: f.size, mandatory: f.required !== false })),
-    ...optionalContent[c].map((f): ContentRow => ({ path: f.path, size: f.size, mandatory: false })),
+    ...(content?.[c] ?? []).map(
+      (f): ContentRow => ({
+        path: f.path,
+        size: f.size,
+        mandatory: f.required !== false,
+        disabled: disabledMods.has(f.path),
+        notInstalled: notInstalled.has(f.path),
+      })
+    ),
+    ...optionalContent[c].map(
+      (f): ContentRow => ({
+        path: f.path,
+        size: f.size,
+        mandatory: false,
+        disabled: disabledMods.has(f.path),
+        notInstalled: false,
+      })
+    ),
   ];
 
   const titleFor = (path: string) => modrinthMatches.get(path)?.title ?? guessTitle(fileName(path));
@@ -1578,7 +1690,63 @@ export default function ModpackDetail() {
       });
   };
 
+  /** Private instances: a mod that enabled mods require can't be switched off
+   *  (they'd fail to load) — turn those off first. Online instances keep the
+   *  warn-and-allow behavior below; their must-haves are the admin's
+   *  mandatory files, which have no switch at all. */
+  const toggleLockedReason = (row: ContentRow): string | undefined => {
+    if (pack.source !== "custom" || row.disabled) return undefined;
+    const needing = dependentsOf(row.path).filter((d) => !disabledMods.has(d));
+    if (needing.length === 0) return undefined;
+    const names = needing.map(titleFor);
+    return `No se puede desactivar: lo necesita${names.length > 1 ? "n" : ""} ${names.join(", ")}. Desactiva antes ${
+      names.length > 1 ? "esos mods" : "ese mod"
+    }.`;
+  };
+
+  const handleToggleMod = async (path: string, enabled: boolean) => {
+    if (!enabled) {
+      const row = rowsFor("mods").find((r) => r.path === path);
+      const locked = row && toggleLockedReason(row);
+      if (locked) {
+        toast.error(locked);
+        return;
+      }
+    }
+    setBusyPaths((s) => new Set(s).add(path));
+    try {
+      await setModEnabled(pack.id, path, enabled);
+      setDisabledMods((prev) => {
+        const next = new Set(prev);
+        if (enabled) next.delete(path);
+        else next.add(path);
+        return next;
+      });
+      if (!enabled) {
+        // Turning off something other enabled mods need: allowed (maybe on
+        // purpose), but say what will likely break.
+        const needing = dependentsOf(path).filter((d) => !disabledMods.has(d));
+        if (needing.length > 0) {
+          const names = needing.map(titleFor).join(", ");
+          toast.warning(`${titleFor(path)} desactivado. Lo necesita${needing.length > 1 ? "n" : ""} ${names}: puede que el juego no arranque.`, {
+            duration: 8000,
+            action: { label: "Reactivar", onClick: () => void handleToggleMod(path, true) },
+          });
+        }
+      }
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudo cambiar el mod.");
+    } finally {
+      setBusyPaths((s) => {
+        const next = new Set(s);
+        next.delete(path);
+        return next;
+      });
+    }
+  };
+
   rowActionsRef.current = {
+    toggle: (path, enabled) => void handleToggleMod(path, enabled),
     open: openMod,
     update: (c, path) => {
       const update = updates.get(path);
@@ -1639,8 +1807,9 @@ export default function ModpackDetail() {
     try {
       await writeInstanceFile(pack.id, staged.targetPath, staged.write);
       if (existingPath && existingPath !== staged.targetPath) {
-        await deleteInstanceFile(pack.id, existingPath);
+        await deleteInstanceFile(pack.id, diskPath(existingPath));
       }
+      forgetDisabled(existingPath, staged.targetPath);
       setOptionalContent((prev) => ({
         ...prev,
         [staged.category]: [
@@ -3136,17 +3305,6 @@ export default function ModpackDetail() {
                             )}
                           </button>
                         </div>
-                        <button
-                          onClick={() => setShowInstalledFirst((v) => !v)}
-                          className={`h-9 flex items-center gap-1.5 px-4 text-xs font-semibold rounded-md border transition-colors ${
-                            showInstalledFirst
-                              ? "bg-accent/15 text-accent border-accent/30"
-                              : "border-transparent text-muted-foreground hover:text-white"
-                          }`}
-                        >
-                          <CheckSquare className="h-3.5 w-3.5" />
-                          Instalados
-                        </button>
                       </div>
                       {(() => {
                         const sorted = rowsFor(c)
@@ -3160,11 +3318,6 @@ export default function ModpackDetail() {
                               const isDep = (r: ContentRow) => (dependentsOf(r.path).length > 0 ? 1 : 0);
                               const diff = isDep(b.row) - isDep(a.row);
                               if (diff !== 0) return dependencySort === "first" ? diff : -diff;
-                            }
-                            if (showInstalledFirst) {
-                              const rank = (r: ContentRow) => (r.mandatory ? 2 : updates.has(r.path) ? 0 : 1);
-                              const rankDiff = rank(a.row) - rank(b.row);
-                              if (rankDiff !== 0) return rankDiff;
                             }
                             const cmp = a.title.localeCompare(b.title);
                             return sortAsc ? cmp : -cmp;
@@ -3183,6 +3336,11 @@ export default function ModpackDetail() {
                               busy={busyPaths.has(row.path)}
                               dependentTitles={c === "mods" ? dependentTitlesByPath.get(row.path) : undefined}
                               missingDeps={c === "mods" && !contentLocked ? missingDepsByPath.get(row.path) : undefined}
+                              canToggle={c === "mods" && !row.mandatory && !row.notInstalled && !contentLocked && /\.jar$/i.test(row.path)}
+                              notInstalled={row.notInstalled}
+                              toggleLockedReason={c === "mods" ? toggleLockedReason(row) : undefined}
+                              disabled={row.disabled}
+                              onToggle={onRowToggle}
                               onInstallMissing={onRowInstallMissing}
                               sharedLayout={row.path === lastOpenedPath}
                               onOpen={onRowOpen}
@@ -3222,8 +3380,9 @@ export default function ModpackDetail() {
           ]}
           onInstall={async (mod, build, replacePath) => {
             const newPath = `mods/${build.fileName}`;
-            if (replacePath) await updateInstanceFile(pack.id, replacePath, newPath, build.downloadUrl, build.sha1);
+            if (replacePath) await updateInstanceFile(pack.id, diskPath(replacePath), newPath, build.downloadUrl, build.sha1);
             else await downloadInstanceFile(pack.id, newPath, build.downloadUrl, build.sha1);
+            forgetDisabled(replacePath);
             const file = { path: newPath, size: build.size, sha1: build.sha1 };
             setOptionalContent((prev) => ({
               ...prev,

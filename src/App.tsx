@@ -53,6 +53,8 @@ function prefetchLazyPages() {
   prefetchHeavyChunks();
 }
 import { Titlebar } from "@/components/titlebar";
+import { OnboardingTour } from "@/components/onboarding-tour";
+import { OptionalGroupsDialog } from "@/components/optional-groups-dialog";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { getLastViewPath, setLastView } from "@/lib/last-view";
 import { useAuth } from "@/hooks/use-auth";
@@ -101,6 +103,17 @@ function StartupView() {
   }, [uuid]);
   const previousLocation = useRef(location);
 
+  // Only once the startup view has been restored — otherwise the initial "/"
+  // gets saved first and the restore below would always read back "home"
+  // (and a first-ever launch would never land on the Hub). Must stay ABOVE
+  // the restore effect: effects run in order within a commit, and with it
+  // below, the restore flipped `restored` and this one then saved the
+  // still-initial "/" in that same commit — so every first launch ended up
+  // on the carousel after logging in.
+  useEffect(() => {
+    if (restored.current) setLastView(location);
+  }, [location, authChecked]);
+
   useEffect(() => {
     if (restored.current || !authChecked) return;
     restored.current = true;
@@ -108,13 +121,6 @@ function StartupView() {
       setLocation("/hub", { replace: true });
     }
   }, [authChecked, location, setLocation]);
-
-  // Only once the startup view has been restored — otherwise the initial "/"
-  // gets saved first and the restore above would always read back "home"
-  // (and a first-ever launch would never land on the Hub).
-  useEffect(() => {
-    if (restored.current) setLastView(location);
-  }, [location, authChecked]);
 
   // A chat panel/presence popup lives in global state (useChatHeads/
   // useHeaderOverlay), not tied to whichever page mounted it — without this,
@@ -318,6 +324,8 @@ function App() {
           <div className="h-screen flex flex-col overflow-hidden">
             <StartupView />
             <Titlebar />
+            <OnboardingTour />
+            <OptionalGroupsDialog />
             <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
               <ErrorBoundary>
                 {authChecked ? <Router /> : <AppSplash />}

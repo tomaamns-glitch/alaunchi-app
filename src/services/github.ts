@@ -93,8 +93,10 @@ export interface SnapshotManifest {
   /** Every past publish's own changelog, oldest first — skips publishes that left
    *  the changelog blank. Powers the "ver actualizaciones anteriores" button. */
   changelogHistory?: ChangelogEntry[];
-  /** Groupings of optional content (name/description + which files). Not consumed
-   *  anywhere yet — data model laid down ahead of the feature that will use it. */
+  /** Groupings of optional content (name/description + which files). Grouped
+   *  files only install if the player picks the group on first install
+   *  (components/optional-groups-dialog.tsx); ungrouped optional files install
+   *  as always. The choice is kept per instance by mc:install-snapshot. */
   optionalGroups?: OptionalGroup[];
 }
 

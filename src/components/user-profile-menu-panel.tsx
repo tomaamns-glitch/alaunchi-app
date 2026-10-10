@@ -452,7 +452,7 @@ function UninstalledOnlineRow({ pack }: { pack: Modpack }) {
   const handleInstall = async () => {
     setInstalling(true);
     try {
-      await installOnlineInstance(pack);
+      if (!(await installOnlineInstance(pack))) return; // cancelled in the groups picker
       setDone(true);
       toast.success(`${pack.name} instalado correctamente.`);
     } catch (e: any) {

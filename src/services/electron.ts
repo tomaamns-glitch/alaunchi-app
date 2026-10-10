@@ -16,15 +16,24 @@ export interface LaunchOptions {
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Which optional groups (manifest.optionalGroups) a player chose on first
+ *  install. `all` = "experiencia completa", including groups added later. */
+export interface OptionalGroupChoice {
+  all: boolean;
+  selected: string[];
+}
+
 export async function installSnapshot(
   modpackId: string,
   manifest: SnapshotManifest,
   baseUrl: string,
   modpack?: Record<string, any>,
-  token?: string
+  token?: string,
+  /** Only on first install; later updates reuse the saved choice. */
+  optionalGroupChoice?: OptionalGroupChoice
 ): Promise<{ totalFiles: number }> {
   if (isElectron) {
-    return eAPI.installSnapshot({ modpackId, manifest, baseUrl, modpack, token });
+    return eAPI.installSnapshot({ modpackId, manifest, baseUrl, modpack, token, optionalGroupChoice });
   }
   await delay(500);
   return { totalFiles: manifest.files.length };
@@ -82,6 +91,14 @@ export async function listInstanceFiles(modpackId: string): Promise<InstanceFile
 
 export async function deleteInstanceFile(modpackId: string, path: string): Promise<void> {
   if (isElectron) await eAPI.deleteInstanceFile({ modpackId, path });
+}
+
+/** Disabled mods live on disk as "<name>.jar.disabled" (see mc:set-mod-enabled). */
+export const DISABLED_SUFFIX = ".disabled";
+
+/** Turns a mod on or off. `path` is always the enabled name ("mods/foo.jar"). */
+export async function setModEnabled(modpackId: string, path: string, enabled: boolean): Promise<void> {
+  if (isElectron) await eAPI.setModEnabled({ modpackId, path, enabled });
 }
 
 export async function updateInstanceFile(

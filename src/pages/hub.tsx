@@ -269,7 +269,7 @@ export default function Hub() {
               >
                 <CurseForgeLogo className="mr-1.5 h-4 w-4 text-[#F16436]" /> CurseForge
               </Button>
-              <Button size="sm" onClick={() => setDialogOpen(true)}>
+              <Button size="sm" data-tour="hub-new-instance" onClick={() => setDialogOpen(true)}>
                 <Plus className="mr-1.5 h-3.5 w-3.5" /> Nueva instancia
               </Button>
             </div>
@@ -277,7 +277,7 @@ export default function Hub() {
         </div>
 
         <div className="flex-1 flex min-h-0">
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-y-auto" data-tour="hub-instances">
           {instances.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-3 py-24 text-center text-muted-foreground">
               <p>Aún no tienes instancias.</p>

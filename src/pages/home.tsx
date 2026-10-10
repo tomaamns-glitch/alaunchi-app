@@ -18,7 +18,8 @@ import {
   Square,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { installSnapshot, launchMinecraft, onClosedToTray } from "@/services/electron";
+import { installSnapshot, launchMinecraft, onClosedToTray, type OptionalGroupChoice } from "@/services/electron";
+import { askOptionalGroups } from "@/components/optional-groups-dialog";
 import { markOnline } from "@/services/presence";
 import { markPlayingInstance } from "@/services/user-activity";
 import { touchUserDirectory } from "@/services/chat";
@@ -226,6 +227,15 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
       const manifest = cached ?? (await fetchSnapshot(repoUrl, pack.id, token || undefined));
       if (!manifest) throw new Error("No hay manifiesto publicado para este modpack todavía.");
 
+      // First install: pick the optional groups (no dialog if the pack has
+      // none). Updates reuse the choice saved in the instance's meta.
+      let groupChoice: OptionalGroupChoice | undefined;
+      if (mode === "installing") {
+        const choice = await askOptionalGroups(manifest, pack.name);
+        if (choice === null) return null;
+        groupChoice = choice;
+      }
+
       if (mode === "updating") setStageLabel("Descargando...");
 
       const baseUrl = snapshotBaseUrl(repoUrl, manifest);
@@ -233,7 +243,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
         name: pack.name,
         minecraftVersion: pack.minecraftVersion,
         loaderType: pack.loaderType,
-      }, token || undefined);
+      }, token || undefined, groupChoice);
       updateModpackStatus(pack.id, {
         installed: true,
         installedVersion: manifest.version,
@@ -248,7 +258,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
 
   const handleInstall = async () => {
     try {
-      await installFromSnapshot("installing");
+      if (!(await installFromSnapshot("installing"))) return; // cancelled in the groups picker
       toast.success(`${pack.name} instalado correctamente.`);
     } catch (e: any) {
       toast.error(e?.message || "Error al instalar.");
@@ -260,7 +270,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
 
   const handleUpdateOnly = async () => {
     try {
-      const manifest = await installFromSnapshot("updating");
+      const manifest = (await installFromSnapshot("updating"))!; // updates never ask, so never null
       toast.success(`${pack.name} actualizado a v${manifest.version}.`);
     } catch (e: any) {
       toast.error(e?.message || "Error al actualizar.");
@@ -275,7 +285,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
     setInstancePending(pack.id, true);
     try {
       if (pack.updateAvailable) {
-        const manifest = await installFromSnapshot("updating");
+        const manifest = (await installFromSnapshot("updating"))!; // updates never ask, so never null
         toast.success(`${pack.name} actualizado a v${manifest.version}.`);
       }
       setStatus("launching");

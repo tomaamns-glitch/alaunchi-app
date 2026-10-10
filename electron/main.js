@@ -966,11 +966,10 @@ function createWindow() {
   ipcMain.on("window-close", () => win.close());
   ipcMain.handle("window:is-maximized", () => win.isMaximized());
   ipcMain.handle("app:get-version", () => app.getVersion());
-  ipcMain.on("app:focus-window", () => {
-    if (win.isDestroyed()) return;
-    win.show();
-    win.focus();
-  });
+  // bringToFront, not a bare focus(): Windows only flashes the taskbar button
+  // when a background window asks for focus (e.g. after the Microsoft login
+  // finishes in the browser).
+  ipcMain.on("app:focus-window", () => bringToFront(win));
 
   const sendMaximizedState = () => {
     if (!win.isDestroyed()) win.webContents.send("window-maximized-change", win.isMaximized());
@@ -2384,7 +2383,16 @@ function validateManifest(manifest) {
   }
 }
 
-ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manifest, baseUrl, token }) => {
+/** { all, selected: groupIds } from the renderer or a saved meta, or null if
+ *  it isn't a valid choice. `all` = "experiencia completa": every group, also
+ *  ones the admin creates later. */
+function normalizeGroupChoice(choice) {
+  if (!choice || typeof choice !== "object") return null;
+  const selected = Array.isArray(choice.selected) ? choice.selected.filter((id) => typeof id === "string") : [];
+  return { all: choice.all === true, selected };
+}
+
+ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manifest, baseUrl, token, optionalGroupChoice }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   acquireModpackOp(modpackId, "installing");
   try {
@@ -2421,14 +2429,34 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
   const metaPath = path.join(instanceDir, "alaunchi-meta.json");
   let oldFiles = [];
   let removedOptionalPaths = new Set();
+  let savedGroupChoice = null;
   try {
     const oldMeta = JSON.parse(await fs.readFile(metaPath, "utf8"));
     if (oldMeta.snapshot?.files) oldFiles = oldMeta.snapshot.files;
     if (Array.isArray(oldMeta.removedOptionalPaths)) removedOptionalPaths = new Set(oldMeta.removedOptionalPaths);
+    savedGroupChoice = normalizeGroupChoice(oldMeta.optionalGroupChoice);
   } catch {}
 
   const oldByPath = new Map(oldFiles.filter((f) => f && typeof f.path === "string").map((f) => [f.path, f]));
   const newByPath = new Map(manifest.files.map((f) => [f.path, f]));
+
+  // Optional groups (admin → Contenido adicional): their files only install if
+  // the player picked the group on first install. The choice is kept in meta
+  // and re-applied on every update, so files the admin later adds to a group
+  // the player didn't pick stay out too. No choice at all (instances installed
+  // before groups existed) = everything, as before.
+  const groupChoice = normalizeGroupChoice(optionalGroupChoice) ?? savedGroupChoice ?? { all: true, selected: [] };
+  const skippedGroupPaths = new Set();
+  if (!groupChoice.all && Array.isArray(manifest.optionalGroups)) {
+    const selected = new Set(groupChoice.selected);
+    const wanted = new Set();
+    for (const g of manifest.optionalGroups) {
+      if (!g || !Array.isArray(g.paths)) continue;
+      for (const p of g.paths) (selected.has(g.id) ? wanted : skippedGroupPaths).add(p);
+    }
+    // A file in several groups installs if any of them was picked.
+    for (const p of wanted) skippedGroupPaths.delete(p);
+  }
 
   const total = manifest.files.length;
   let done = 0;
@@ -2449,7 +2477,14 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
   const pending = []; // [{ entry, destPath }]
   const emptyFiles = []; // [{ entry, destPath }]
   for (const f of manifest.files) {
-    const destPath = safeJoin(instanceDir, f.path);
+    let destPath = safeJoin(instanceDir, f.path);
+    // An optional mod the player disabled (foo.jar → foo.jar.disabled, see
+    // mc:set-mod-enabled) counts as present: check/update it under the
+    // disabled name instead of downloading an enabled copy next to it.
+    if (f.required === false && /\.jar$/i.test(f.path)) {
+      const disabledPath = `${destPath}${DISABLED_SUFFIX}`;
+      if (await fs.stat(disabledPath).then(() => true, () => false)) destPath = disabledPath;
+    }
     try {
       const stat = await fs.stat(destPath);
       if (stat.size === f.size && (f.size === 0 || (await hashFile(destPath)) === f.hash)) {
@@ -2461,6 +2496,12 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
     // The user deliberately deleted this optional file — don't restore it, unless
     // the admin has since made it mandatory again in this manifest.
     if (f.required === false && removedOptionalPaths.has(f.path)) {
+      done++;
+      sendProgress();
+      continue;
+    }
+    // Part of an optional group the player didn't pick.
+    if (f.required === false && skippedGroupPaths.has(f.path)) {
       done++;
       sendProgress();
       continue;
@@ -2576,6 +2617,8 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
       try {
         const fullPath = safeJoin(instanceDir, p);
         await fs.unlink(fullPath).catch(() => {});
+        // …and its disabled copy, if the player had turned it off.
+        await fs.unlink(`${fullPath}${DISABLED_SUFFIX}`).catch(() => {});
       } catch {}
     }
   }
@@ -2597,6 +2640,9 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
     installedAt: new Date().toISOString(),
     snapshot: manifest,
     removedOptionalPaths: Array.from(removedOptionalPaths).filter((p) => newByPath.has(p)),
+    // Only written when the player actually chose (a previous choice is kept
+    // by the ...previousMeta spread above).
+    ...(normalizeGroupChoice(optionalGroupChoice) ? { optionalGroupChoice: groupChoice } : {}),
   };
   await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
 
@@ -2737,10 +2783,30 @@ ipcMain.handle("mc:delete-instance-file", async (_, { modpackId, path: relPath }
   try {
     const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
     const removed = new Set(Array.isArray(meta.removedOptionalPaths) ? meta.removedOptionalPaths : []);
-    removed.add(relPath);
+    // A disabled mod is recorded under its real name — that's the path the
+    // manifest (and the install-snapshot skip check) knows it by.
+    removed.add(relPath.endsWith(DISABLED_SUFFIX) ? relPath.slice(0, -DISABLED_SUFFIX.length) : relPath);
     meta.removedOptionalPaths = Array.from(removed);
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
   } catch {}
+  return { success: true };
+});
+
+// CurseForge-style mod toggle: a disabled mod is the same jar renamed to
+// "foo.jar.disabled", which no mod loader picks up. Only mods — shaders and
+// resource packs are switched on and off inside the game.
+const DISABLED_SUFFIX = ".disabled";
+
+ipcMain.handle("mc:set-mod-enabled", async (_, { modpackId, path: relPath, enabled }) => {
+  if (!/^mods\/[^/]+\.jar$/i.test(relPath)) throw new Error("Solo se pueden desactivar mods (.jar).");
+  const instanceDir = instanceDirFor(modpackId);
+  const enabledPath = safeJoin(instanceDir, relPath);
+  const disabledPath = `${enabledPath}${DISABLED_SUFFIX}`;
+  const [from, to] = enabled ? [disabledPath, enabledPath] : [enabledPath, disabledPath];
+  if (await fs.stat(to).then(() => true, () => false)) {
+    throw new Error(enabled ? "Ya hay un mod activo con ese nombre." : "Ya hay una copia desactivada de ese mod.");
+  }
+  await fs.rename(from, to);
   return { success: true };
 });
 
@@ -4281,7 +4347,9 @@ ipcMain.handle("ms:device-code-auth", async (_, args) => {
             console.error("[MS Auth] Device code error:", p.error, p.error_description);
             return reject(new Error(p.error_description || p.error));
           }
-          openExternalSafe(p.verification_uri);
+          // The browser is opened from the login screen's button instead, once
+          // the code is already in the clipboard — opening it here sent people
+          // to Microsoft's page before they'd even seen the code.
           resolve({ userCode: p.user_code, verificationUri: p.verification_uri, expiresIn: p.expires_in, interval: p.interval, deviceCode: p.device_code });
         } catch (e) { reject(e); }
       });

@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   installSnapshot: (args) => ipcRenderer.invoke("mc:install-snapshot", args),
   listInstanceFiles: (args) => ipcRenderer.invoke("mc:list-instance-files", args),
   deleteInstanceFile: (args) => ipcRenderer.invoke("mc:delete-instance-file", args),
+  setModEnabled: (args) => ipcRenderer.invoke("mc:set-mod-enabled", args),
   updateInstanceFile: (args) => ipcRenderer.invoke("mc:update-instance-file", args),
   downloadInstanceFile: (args) => ipcRenderer.invoke("mc:download-instance-file", args),
   readInstanceFile: (args) => ipcRenderer.invoke("mc:read-instance-file", args),

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { ArrowLeft, Library, Loader2, Package, Plus } from "lucide-react";
+import { Library, Loader2, Package, Plus } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { LoaderIcon } from "@/components/loader-icon";
@@ -61,15 +61,8 @@ export default function AdminLibrary() {
         <div className="flex flex-col gap-5 px-6 pt-6 pb-6 max-w-5xl mx-auto w-full">
           <div className="relative shrink-0 rounded-xl border border-white/10 bg-card/40 p-5 overflow-hidden">
             <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
+            {/* "Volver" lives in the titlebar, same as every other page. */}
             <div className="relative flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setLocation("/admin")}
-                className="h-9 w-9 shrink-0 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-                aria-label="Volver"
-              >
-                <ArrowLeft className="h-5 w-5" />
-              </button>
               <div className="min-w-0 flex-1">
                 <h1 className="text-xl font-bold leading-tight">Biblioteca de mods</h1>
                 <p className="text-xs text-muted-foreground">
