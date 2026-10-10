@@ -456,9 +456,31 @@ export function OnboardingTour() {
     if (active) current?.enter?.();
   }, [active, step, current]);
 
+  // Measured live: each step's card mounts after the previous one leaves
+  // (AnimatePresence mode="wait") and a sample can make it much taller — a
+  // one-off measurement kept the previous card's height and placed the new
+  // one partly below the window.
+  const [cardEl, setCardEl] = useState<HTMLDivElement | null>(null);
+  const setCardNode = (node: HTMLDivElement | null) => {
+    cardRef.current = node;
+    setCardEl(node);
+  };
   useLayoutEffect(() => {
-    if (cardRef.current) setCardHeight(cardRef.current.offsetHeight);
-  });
+    if (!cardEl) return;
+    setCardHeight(cardEl.offsetHeight);
+    const ro = new ResizeObserver(() => setCardHeight(cardEl.offsetHeight));
+    ro.observe(cardEl);
+    return () => ro.disconnect();
+  }, [cardEl]);
+
+  // Re-place on window resize too.
+  const [, setViewportTick] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const onResize = () => setViewportTick((t) => t + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [active]);
 
   const finish = () => {
     if (uuid) markTourDone(uuid);
@@ -483,19 +505,25 @@ export function OnboardingTour() {
   if (!active || !onHub || !current) return null;
 
   // Card goes under the spotlight if it fits, otherwise above; centered when
-  // the step has no target (or it isn't on screen).
+  // the step has no target (or it isn't on screen). Whatever the case it's
+  // kept fully inside the window (under the titlebar, 16px from the bottom).
   const vw = window.innerWidth;
   const vh = window.innerHeight;
+  const minTop = TITLEBAR_HEIGHT + 8;
+  const maxTop = Math.max(minTop, vh - cardHeight - 16);
+  const clampTop = (t: number) => Math.min(Math.max(t, minTop), maxTop);
   let cardStyle: React.CSSProperties;
   if (rect) {
     const left = Math.min(Math.max(rect.left + rect.width / 2 - CARD_WIDTH / 2, 16), vw - CARD_WIDTH - 16);
     const below = rect.top + rect.height + PAD + 12;
     const above = rect.top - PAD - 12 - cardHeight;
-    const top = below + cardHeight <= vh - 16 ? below : Math.max(above, TITLEBAR_HEIGHT + 8);
-    cardStyle = { top, left, width: CARD_WIDTH };
+    const top = below + cardHeight <= vh - 16 ? below : above >= minTop ? above : clampTop(below);
+    cardStyle = { top: clampTop(top), left, width: CARD_WIDTH };
   } else {
-    cardStyle = { top: Math.max(vh / 2 - cardHeight / 2, TITLEBAR_HEIGHT + 8), left: vw / 2 - CARD_WIDTH / 2, width: CARD_WIDTH };
+    cardStyle = { top: clampTop(vh / 2 - cardHeight / 2), left: vw / 2 - CARD_WIDTH / 2, width: CARD_WIDTH };
   }
+  // Even taller than the window (tiny window): scroll inside the card.
+  cardStyle.maxHeight = vh - minTop - 16;
 
   const ChapterIcon = current.chapter.icon;
   // Progress as one segment per chapter (filled as you go), not a step count.
@@ -528,17 +556,17 @@ export function OnboardingTour() {
       <AnimatePresence mode="wait">
         <motion.div
           key={step}
-          ref={cardRef}
+          ref={setCardNode}
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.18 }}
-          className="absolute pointer-events-auto rounded-xl border border-white/10 bg-card/95 backdrop-blur-md shadow-2xl overflow-hidden"
+          className="absolute pointer-events-auto rounded-xl border border-white/10 bg-card/95 backdrop-blur-md shadow-2xl overflow-hidden flex flex-col"
           style={cardStyle}
           role="dialog"
           aria-label={current.title}
         >
-          <div className="p-5">
+          <div className="p-5 min-h-0 overflow-y-auto">
             <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-accent mb-1.5">
               <ChapterIcon className="h-3.5 w-3.5" />
               {current.chapter.label}
@@ -548,7 +576,7 @@ export function OnboardingTour() {
             {current.sample}
           </div>
 
-          <div className="flex items-center gap-3 px-5 py-3 border-t border-white/5 bg-black/20">
+          <div className="shrink-0 flex items-center gap-3 px-5 py-3 border-t border-white/5 bg-black/20">
             {currentChapterIndex >= 0 ? (
               <div className="flex gap-1" aria-hidden>
                 {chapters.map((c, i) => (

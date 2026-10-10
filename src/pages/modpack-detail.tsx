@@ -2093,9 +2093,9 @@ export default function ModpackDetail() {
         )}
 
         <div className="max-w-5xl mx-auto w-full">
-        <div className={`px-4 pb-2 relative z-10 ${pack.bannerUrl ? "-mt-16" : "pt-4"}`}>
+        <div className={`px-4 pb-2 relative z-10 flex items-stretch gap-3 ${pack.bannerUrl ? "-mt-16" : "pt-4"}`}>
           <div
-            className={`flex items-center justify-between gap-4 mr-auto bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 transition-[max-width] duration-300 ease-out ${
+            className={`w-full flex items-center justify-between gap-4 mr-auto bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 transition-[max-width] duration-300 ease-out ${
               !selectedModPath && !searchMode ? "" : "max-w-full"
             }`}
             style={
@@ -2281,29 +2281,6 @@ export default function ModpackDetail() {
               // the button, and centering against the whole column left the ⋮
               // lower than the button itself. Both are h-9, so tops line up.
               <div className="flex items-start gap-1.5 shrink-0">
-                {hasExtras && (
-                  <div className="h-9 mr-1.5 flex items-center gap-2 pl-3 pr-1 rounded-md border border-white/10 bg-black/40 backdrop-blur">
-                    <Layers className="h-4 w-4 text-accent shrink-0" />
-                    <span className="text-xs font-semibold text-gray-100 whitespace-nowrap">Contenido adicional</span>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        setEmotesOpen(false);
-                        setSchematicsOpen(false);
-                        setScreenshotsOpen(false);
-                        setExtrasOpen((v) => !v);
-                      }}
-                      className={`h-7 px-3 text-xs font-bold ${
-                        extrasOpen
-                          ? "bg-white/10 text-white hover:bg-white/15"
-                          : "bg-accent/15 text-accent hover:bg-accent/25"
-                      }`}
-                    >
-                      {extrasOpen ? "Cerrar" : "Ver"}
-                    </Button>
-                  </div>
-                )}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -2460,6 +2437,38 @@ export default function ModpackDetail() {
               </div>
             )}
           </div>
+          {/* Contenido adicional: its own card in the free space right of the
+              pack header (only on the pack's main view, like the Play group). */}
+          {hasExtras && !selectedModPath && !searchMode && extraGroups && (
+            <div className="hidden md:flex flex-1 min-w-0 items-center gap-3 bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4">
+              <div className="h-11 w-11 shrink-0 rounded-md bg-accent/15 text-accent flex items-center justify-center">
+                <Layers className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-white truncate">Contenido adicional</p>
+                <p className="text-[11px] text-muted-foreground truncate">
+                  {extraGroups.groups.length + extraGroups.selectable.length} grupo
+                  {extraGroups.groups.length + extraGroups.selectable.length === 1 ? " opcional" : "s opcionales"}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setEmotesOpen(false);
+                  setSchematicsOpen(false);
+                  setScreenshotsOpen(false);
+                  setExtrasOpen((v) => !v);
+                }}
+                className={`h-9 px-4 shrink-0 text-xs font-bold border ${
+                  extrasOpen
+                    ? "border-white/15 bg-white/10 text-white hover:bg-white/15"
+                    : "border-accent/30 bg-accent/15 text-accent hover:bg-accent/25"
+                }`}
+              >
+                {extrasOpen ? "Cerrar" : "Ver"}
+              </Button>
+            </div>
+          )}
         </div>
         </div>
       </div>
