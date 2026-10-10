@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useLocation, useRoute } from "wouter";
-import { ArrowLeft, GalleryHorizontal, Home, KeyRound, Minus, Server, Square, Copy, X } from "lucide-react";
-import { isElectron } from "@/services/electron";
+import { ArrowLeft, Download, GalleryHorizontal, Home, KeyRound, Loader2, Minus, Server, Square, Copy, X } from "lucide-react";
+import { toast } from "sonner";
+import { getAppUpdateState, installAppUpdate, isElectron, onAppUpdateReady } from "@/services/electron";
 import { getLastViewPath } from "@/lib/last-view";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { useCarouselModpacks, useModpacks } from "@/hooks/use-modpacks";
@@ -12,6 +13,65 @@ const api = (window as any).electronAPI;
 
 const dragStyle = { WebkitAppRegion: "drag" } as React.CSSProperties;
 const noDragStyle = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
+
+/** "Nueva actualización" + Instalar, once a new ALaunchi version finished
+ *  downloading in the background while the launcher is open. Without the
+ *  click it still installs on the next full quit (or idle in the tray). */
+function AppUpdateBanner() {
+  const [version, setVersion] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+  const [installing, setInstalling] = useState(false);
+
+  useEffect(() => {
+    getAppUpdateState()
+      .then((s) => {
+        if (s.ready) {
+          setReady(true);
+          setVersion(s.version);
+        }
+      })
+      .catch(() => {});
+    return onAppUpdateReady((info) => {
+      setReady(true);
+      setVersion(info.version);
+    });
+  }, []);
+
+  if (!ready) return null;
+
+  const install = async () => {
+    setInstalling(true);
+    const result = await installAppUpdate().catch(() => ({ ok: false, reason: "No se pudo iniciar la instalación." }));
+    if (!result.ok) {
+      toast.error(result.reason || "No se pudo iniciar la instalación.");
+      setInstalling(false);
+    }
+    // ok: the launcher closes and reopens on its own — nothing else to do.
+  };
+
+  return (
+    <>
+      <div className="h-full flex items-center gap-2 px-3">
+        <span className="relative flex h-2 w-2">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-60" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
+        </span>
+        <span className="text-[11px] font-semibold text-gray-100 whitespace-nowrap">Nueva actualización</span>
+        {version && <span className="text-[10px] font-mono text-muted-foreground">v{version}</span>}
+        <button
+          type="button"
+          onClick={install}
+          disabled={installing}
+          className="h-6 px-2.5 flex items-center gap-1 rounded bg-accent text-accent-foreground text-[11px] font-bold hover:bg-accent/90 transition-colors disabled:opacity-70"
+        >
+          {installing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+          {installing ? "Instalando…" : "Instalar"}
+        </button>
+      </div>
+      <div className="w-px h-4 bg-white/10" />
+    </>
+  );
+}
 
 export function Titlebar() {
   const [maximized, setMaximized] = useState(false);
@@ -89,6 +149,7 @@ export function Titlebar() {
           </span>
         </div>
         <div style={noDragStyle} className="flex items-center h-full">
+          <AppUpdateBanner />
           {/* SERVER: always in dev builds (it's being reworked), creators only in releases. */}
           {(isAdmin || import.meta.env.DEV) && (
             <>

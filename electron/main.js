@@ -1103,6 +1103,7 @@ app.whenReady().then(async () => {
 
   let launched = false;
   let updateDownloaded = false;
+  let downloadedVersion = null;
   let updateWatchdog = null;
   const proceedToMain = () => {
     if (launched) return;
@@ -1196,6 +1197,7 @@ app.whenReady().then(async () => {
   autoUpdater.on("update-downloaded", (info) => {
     console.info(`[AutoUpdate] Descargada ${info?.version}.`);
     updateDownloaded = true;
+    downloadedVersion = info?.version ?? null;
     try { fsSync.writeFileSync(UPDATE_READY_FLAG, String(Date.now())); } catch {}
     if (!launched) {
       // A moment for the splash to say it's installing (and that the
@@ -1205,10 +1207,31 @@ app.whenReady().then(async () => {
     } else {
       // Downloaded in the background while the launcher is already open — the
       // player may be mid-session, so don't yank it out from under them. Install
-      // on the next real quit, or sooner if the launcher is idle in the tray.
+      // on the next real quit, sooner if the launcher is idle in the tray, or
+      // right away from the titlebar's "Instalar" button (app:install-update).
       autoUpdater.autoInstallOnAppQuit = true;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("app-update-ready", { version: downloadedVersion });
+      }
       installUpdateIfIdle();
     }
+  });
+
+  // Titlebar "Nueva actualización" banner: asks on mount (it may have loaded
+  // after the update finished downloading) and installs on demand.
+  ipcMain.handle("app:get-update-state", () => ({
+    ready: updateDownloaded && launched,
+    version: downloadedVersion,
+  }));
+  ipcMain.handle("app:install-update", () => {
+    if (!updateDownloaded) return { ok: false, reason: "No hay ninguna actualización descargada." };
+    if (runningInstances.size > 0) return { ok: false, reason: "Cierra Minecraft antes de actualizar ALaunchi." };
+    if (activeModpackOps.size > 0) {
+      return { ok: false, reason: "Espera a que termine la instalación o actualización en curso." };
+    }
+    // A beat so the renderer's response arrives before the windows go away.
+    setTimeout(installNow, 150);
+    return { ok: true };
   });
   autoUpdater.on("update-not-available", proceedToMain);
   autoUpdater.on("error", (err) => {
@@ -1223,8 +1246,9 @@ app.whenReady().then(async () => {
 
   // The update check above only runs on a cold start, but closing the window
   // just sends the launcher to the tray — many players never fully quit it, so
-  // they'd never see a new version. Check again every few hours while it runs.
-  const BACKGROUND_CHECK_MS = 3 * 60 * 60 * 1000;
+  // they'd never see a new version. Check again every half hour while it runs —
+  // a finished download shows the titlebar's "Nueva actualización" banner.
+  const BACKGROUND_CHECK_MS = 30 * 60 * 1000;
   setInterval(() => {
     if (!launched || updateDownloaded) return;
     autoUpdater.checkForUpdates().catch((err) => console.warn("[AutoUpdate] Comprobación en segundo plano falló:", err?.message));
