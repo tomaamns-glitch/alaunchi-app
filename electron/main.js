@@ -3797,25 +3797,37 @@ function mavenCoordToPath(coord) {
   return `${groupPath}/${artifact}/${version}/${filename}`;
 }
 
+// A processor that "succeeds" with bad input can leave a .jar that is just an empty zip
+// (22 bytes) — it exists, but the game crashes. Treat tiny jars as missing.
+function isUsableLaunchFile(p) {
+  try {
+    const st = fsSync.statSync(p);
+    return !p.endsWith(".jar") || st.size > 1024;
+  } catch {
+    return false;
+  }
+}
+
 async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, clientJarPath, libsDir, sendStatus) {
   // v4 cache key: also stores a manifest of processor output paths so we can detect
   // incomplete processor runs (processors that failed silently leave the profile cached
   // but the output JARs missing — game then crashes with NoClassDefFoundError).
-  const cacheKey = `${loaderType}-${loaderVersion}-v4`;
+  // v5: invalidates installs patched with a stale shared fdata-BINPATCH (see below).
+  const cacheKey = `${loaderType}-${loaderVersion}-v5`;
   const profileCachePath = path.join(CACHE_DIR, `${cacheKey}-profile.json`);
   const outputsCachePath = path.join(CACHE_DIR, `${cacheKey}-outputs.json`);
 
   if (fsSync.existsSync(profileCachePath) && fsSync.existsSync(outputsCachePath)) {
     try {
       const expectedOutputs = JSON.parse(await fs.readFile(outputsCachePath, "utf8"));
-      const allExist = expectedOutputs.every((p) => fsSync.existsSync(p));
+      const allExist = expectedOutputs.every(isUsableLaunchFile);
       if (allExist) {
         console.log(`[${loaderType}] Usando perfil cacheado (${expectedOutputs.length} outputs verificados)`);
         const profile = JSON.parse(await fs.readFile(profileCachePath, "utf8"));
         return { profile, installLibsDir: libsDir };
       }
       // At least one processor output is missing — nuke the cache and re-run.
-      const missing = expectedOutputs.filter((p) => !fsSync.existsSync(p));
+      const missing = expectedOutputs.filter((p) => !isUsableLaunchFile(p));
       console.warn(`[${loaderType}] Cache inválido — ${missing.length} output(s) faltan, re-ejecutando procesadores:`);
       missing.forEach((p) => console.warn("  MISSING:", p));
       await Promise.all([
@@ -3975,10 +3987,11 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
       resolvedData[key] = p;
       expectedOutputPaths.add(p);
     } else if (raw.startsWith("/")) {
-      const extractPath = path.join(CACHE_DIR, `fdata-${key}`);
-      if (!fsSync.existsSync(extractPath)) {
-        try { await fs.writeFile(extractPath, readZipEntry(installerPath, raw.slice(1))); } catch {}
-      }
+      // Per-installer name and always re-extracted: a shared "fdata-BINPATCH" used to be reused
+      // across loaders/versions, so Forge 1.20.1 got NeoForge 1.21.1's patches and BinaryPatcher
+      // wrote an empty forge-*-client.jar (StackOverflowError in ItemStack at launch).
+      const extractPath = path.join(CACHE_DIR, `fdata-${loaderType}-${loaderVersion}-${key}`);
+      try { await fs.writeFile(extractPath, readZipEntry(installerPath, raw.slice(1))); } catch {}
       resolvedData[key] = extractPath;
     } else {
       resolvedData[key] = raw;
@@ -4045,7 +4058,7 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
     }
   }
 
-  const missingLaunchFiles = requiredLaunchFiles.filter((p) => !fsSync.existsSync(p));
+  const missingLaunchFiles = requiredLaunchFiles.filter((p) => !isUsableLaunchFile(p));
   if (missingLaunchFiles.length > 0) {
     console.error(`[${loaderType}] ${missingLaunchFiles.length} archivo(s) de classpath FALTAN tras la instalación:`);
     missingLaunchFiles.slice(0, 10).forEach((p) => console.error("  MISSING:", p));
