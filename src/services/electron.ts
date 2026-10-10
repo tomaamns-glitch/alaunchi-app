@@ -21,6 +21,8 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export interface OptionalGroupChoice {
   all: boolean;
   selected: string[];
+  /** Selectable groups: groupId → the option picked (exactly one each). */
+  options: Record<string, string>;
 }
 
 export async function installSnapshot(

@@ -41,6 +41,7 @@ import {
   ArrowDown,
   ArrowUp,
   AlertTriangle,
+  Layers,
   Library,
   Check,
   X,
@@ -72,7 +73,9 @@ import {
   Square,
   Link2,
 } from "lucide-react";
-import { SnapshotEntry, fetchSnapshot } from "@/services/github";
+import { SnapshotEntry, fetchSnapshot, snapshotBaseUrl, type SnapshotManifest } from "@/services/github";
+import { OptionalContentView } from "@/components/optional-content-view";
+import { splitOptionalGroups } from "@/components/optional-groups-dialog";
 import {
   identifyModrinthFiles,
   getLatestVersion,
@@ -131,6 +134,8 @@ import {
   deleteInstance as deleteInstanceIpc,
   setModEnabled,
   DISABLED_SUFFIX,
+  installSnapshot,
+  type OptionalGroupChoice,
   type InstanceFile,
   type EmoteFile,
   type SchematicFile,
@@ -161,7 +166,7 @@ import {
   type MinemevPostDetail,
   type MinemevFile,
 } from "@/services/minemev";
-import { findPackSource } from "@/hooks/use-modpacks";
+import { findPackSource, requirePackSource } from "@/hooks/use-modpacks";
 import { getLastViewPath } from "@/lib/last-view";
 import SwellLight from "@/components/swell-light";
 import { StaticGlow } from "@/components/static-glow";
@@ -588,6 +593,15 @@ export default function ModpackDetail() {
   const [disabledMods, setDisabledMods] = useState<Set<string>>(new Set());
   // Optional pack files missing from disk (unpicked optional group / deleted).
   const [notInstalled, setNotInstalled] = useState<Set<string>>(new Set());
+  // "Contenido adicional" screen: the live manifest (its optional groups),
+  // what's on disk, and the group choice saved in the instance's meta.
+  const [extrasOpen, setExtrasOpen] = useState(false);
+  const [packManifest, setPackManifest] = useState<SnapshotManifest | null>(null);
+  const [localPaths, setLocalPaths] = useState<Set<string>>(new Set());
+  const [savedGroupChoice, setSavedGroupChoice] = useState<OptionalGroupChoice | null>(null);
+  // Bumped to re-run the content load (after applying a new group choice).
+  const [contentReloadKey, setContentReloadKey] = useState(0);
+  useEffect(() => setExtrasOpen(false), [id]);
   /** Where a listed file actually is on disk. */
   const diskPath = (path: string) => (disabledMods.has(path) ? `${path}${DISABLED_SUFFIX}` : path);
   const forgetDisabled = (...paths: (string | undefined)[]) =>
@@ -996,6 +1010,7 @@ export default function ModpackDetail() {
       if (cancelled) return;
       const manifestFiles = manifest?.files ?? [];
       setContent(categorize(manifestFiles));
+      setPackManifest(manifest);
 
       let optionalFiles: InstanceFile[] = [];
       if (pack?.installed) {
@@ -1018,7 +1033,10 @@ export default function ModpackDetail() {
         const missing = new Set(
           manifestFiles.filter((f) => f.required === false && categoryOf(f.path) && !onDisk.has(f.path)).map((f) => f.path)
         );
+        const meta = await getInstalledModpacksMeta().catch(() => ({} as Record<string, any>));
         if (cancelled) return;
+        setLocalPaths(onDisk);
+        setSavedGroupChoice(meta[id]?.optionalGroupChoice ?? null);
         setNotInstalled(missing);
         setDisabledMods(disabled);
         setOptionalContent(categorize(optionalFiles));
@@ -1062,7 +1080,7 @@ export default function ModpackDetail() {
     return () => {
       cancelled = true;
     };
-  }, [id, pack?.installed]);
+  }, [id, pack?.installed, contentReloadKey]);
 
   // Fetch description/gallery/versions when a mod is opened.
   useEffect(() => {
@@ -1690,6 +1708,38 @@ export default function ModpackDetail() {
       });
   };
 
+  // Online pack with optional groups → the "Contenido adicional" box/screen.
+  const extraGroups = packManifest ? splitOptionalGroups(packManifest) : null;
+  const hasExtras =
+    pack.source !== "custom" && !!pack.installed && !!extraGroups &&
+    extraGroups.groups.length + extraGroups.selectable.length > 0;
+
+  /** Re-runs the snapshot install with the new group choice: downloads the
+   *  newly picked groups, removes the dropped ones (see mc:install-snapshot). */
+  const applyGroupChoice = async (choice: OptionalGroupChoice) => {
+    if (!packManifest) return;
+    try {
+      const { repoUrl, token } = requirePackSource(pack);
+      await installSnapshot(
+        pack.id,
+        packManifest,
+        snapshotBaseUrl(repoUrl, packManifest),
+        { name: pack.name, minecraftVersion: pack.minecraftVersion, loaderType: pack.loaderType },
+        token || undefined,
+        choice
+      );
+      useModpacks.getState().updateModpackStatus(pack.id, {
+        installed: true,
+        installedVersion: packManifest.version,
+        updateAvailable: false,
+      });
+      toast.success("Contenido adicional actualizado.");
+      setContentReloadKey((k) => k + 1);
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudo aplicar el cambio.");
+    }
+  };
+
   /** Private instances: a mod that enabled mods require can't be switched off
    *  (they'd fail to load) — turn those off first. Online instances keep the
    *  warn-and-allow behavior below; their must-haves are the admin's
@@ -2231,6 +2281,29 @@ export default function ModpackDetail() {
               // the button, and centering against the whole column left the ⋮
               // lower than the button itself. Both are h-9, so tops line up.
               <div className="flex items-start gap-1.5 shrink-0">
+                {hasExtras && (
+                  <div className="h-9 mr-1.5 flex items-center gap-2 pl-3 pr-1 rounded-md border border-white/10 bg-black/40 backdrop-blur">
+                    <Layers className="h-4 w-4 text-accent shrink-0" />
+                    <span className="text-xs font-semibold text-gray-100 whitespace-nowrap">Contenido adicional</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setEmotesOpen(false);
+                        setSchematicsOpen(false);
+                        setScreenshotsOpen(false);
+                        setExtrasOpen((v) => !v);
+                      }}
+                      className={`h-7 px-3 text-xs font-bold ${
+                        extrasOpen
+                          ? "bg-white/10 text-white hover:bg-white/15"
+                          : "bg-accent/15 text-accent hover:bg-accent/25"
+                      }`}
+                    >
+                      {extrasOpen ? "Cerrar" : "Ver"}
+                    </Button>
+                  </div>
+                )}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -2401,7 +2474,7 @@ export default function ModpackDetail() {
                 overflow-x-hidden. */}
             <AnimatePresence mode="wait" initial={false} custom={panelDirection}>
               <motion.div
-                key={selectedModPath ? "mod" : "pack"}
+                key={selectedModPath ? "mod" : extrasOpen && hasExtras ? "extras" : "pack"}
                 custom={panelDirection}
                 variants={sweepVariants}
                 initial="enter"
@@ -2630,6 +2703,16 @@ export default function ModpackDetail() {
                   )}
                 </TabsContent>
               </Tabs>
+            ) : extrasOpen && hasExtras && packManifest ? (
+              <OptionalContentView
+                key={contentReloadKey}
+                manifest={packManifest}
+                savedChoice={savedGroupChoice}
+                installedPaths={localPaths}
+                pendingUpdateVersion={pack.updateAvailable ? packManifest.version : undefined}
+                onApply={applyGroupChoice}
+                onBack={() => setExtrasOpen(false)}
+              />
             ) : loading ? (
               <div className="flex items-center justify-center py-16 text-muted-foreground">
                 <Loader2 className="h-5 w-5 animate-spin mr-2" /> Cargando contenido...

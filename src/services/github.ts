@@ -72,12 +72,24 @@ export interface ChangelogEntry {
   title?: string;
 }
 
+export interface OptionalGroupOption {
+  id: string;
+  name: string;
+  /** Optional files installed when this option is the one picked. */
+  paths: string[];
+}
+
 export interface OptionalGroup {
   id: string;
   name: string;
   description: string;
-  /** Paths of optional files (required === false) that belong to this group. */
+  /** Paths of optional files (required === false) that belong to this group.
+   *  For a selectable group, the union of its options' paths. */
   paths: string[];
+  /** Present = "seleccionable": the player must pick exactly one option (e.g.
+   *  MAPA → Xaero's minimap+worldmap OR JourneyMap) — never all of them, not
+   *  even with "experiencia completa". */
+  options?: OptionalGroupOption[];
 }
 
 export interface SnapshotManifest {
