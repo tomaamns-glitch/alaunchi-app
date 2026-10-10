@@ -1139,15 +1139,8 @@ export default function AdminModpack() {
             </div>
           )}
           <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
+          {/* "Volver al panel" lives in the titlebar, same as every other page. */}
           <div className="relative flex items-center gap-4">
-            <button
-              type="button"
-              onClick={() => setLocation("/admin")}
-              className="h-9 w-9 shrink-0 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-              aria-label="Volver al panel"
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </button>
             <img
               src={pack.imageUrl || "./logo.png"}
               alt={pack.name}

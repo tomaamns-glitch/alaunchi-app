@@ -232,6 +232,7 @@ export function PresenceButton({ context, open, onOpenChange }: PresenceButtonPr
           setAnnouncement(null);
         }}
         aria-label="Jugadores en línea"
+        data-tour={context.type === "general" ? "presence-button" : undefined}
         className="relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors"
       >
         <span className="relative flex items-center justify-center h-6 w-6">

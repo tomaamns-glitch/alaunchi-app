@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { loginWithMicrosoft, isElectron, AuthStep } from "@/services/auth";
 import { Loader2, CheckCircle2, Copy, ExternalLink, AlertCircle } from "lucide-react";
 import { getLastViewPath } from "@/lib/last-view";
+import { focusWindow } from "@/services/electron";
+import { markJustSignedIn, tourPending } from "@/components/onboarding-tour";
 
 function MicrosoftIcon({ className }: { className?: string }) {
   return (
@@ -18,16 +20,10 @@ function MicrosoftIcon({ className }: { className?: string }) {
   );
 }
 
-function CodeBox({ code }: { code: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+function CodeBox({ code, copied, onCopy }: { code: string; copied: boolean; onCopy: () => void }) {
   return (
     <button
-      onClick={copy}
+      onClick={onCopy}
       data-testid="button-copy-code"
       className="group flex items-center gap-3 bg-black/40 border border-white/10 hover:border-accent/50 rounded-xl px-6 py-4 transition-all w-full justify-center"
     >
@@ -56,9 +52,29 @@ export default function Login() {
   const [verificationUri, setVerificationUri] = useState("");
   const [countdown, setCountdown] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
+  const [codeCopied, setCodeCopied] = useState(false);
+  const justSignedIn = useRef(false);
+  const [browserOpened, setBrowserOpened] = useState(false);
+
+  const copyCode = () => {
+    navigator.clipboard.writeText(userCode);
+    setCodeCopied(true);
+  };
+
+  // Copy first, then open: by the time Microsoft's page loads the code is
+  // already in the clipboard, so there's no need to come back for it.
+  // window.open goes through main.js' setWindowOpenHandler → system browser.
+  const copyAndOpenBrowser = () => {
+    copyCode();
+    window.open(verificationUri, "_blank");
+    setBrowserOpened(true);
+  };
 
   useEffect(() => {
-    if (isAuthenticated) setLocation(getLastViewPath());
+    if (!isAuthenticated) return;
+    // Someone who still has the tour ahead lands on the Hub, where it runs.
+    const uuid = useAuth.getState().uuid;
+    setLocation(uuid && tourPending(uuid) && justSignedIn.current ? "/hub" : getLastViewPath());
   }, [isAuthenticated, setLocation]);
 
   useEffect(() => {
@@ -70,6 +86,8 @@ export default function Login() {
   const handleProgress = useCallback((step: AuthStep) => {
     setStepState(step.stage as StepState);
     if (step.stage === "awaiting_user") {
+      setCodeCopied(false);
+      setBrowserOpened(false);
       setUserCode(step.userCode);
       setVerificationUri(step.verificationUri);
       setCountdown(step.expiresIn);
@@ -101,6 +119,11 @@ export default function Login() {
 
     try {
       const authData = await loginWithMicrosoft(handleProgress);
+      // The player is still in the browser at this point — pull the launcher
+      // back up so they see they're in.
+      focusWindow();
+      markJustSignedIn();
+      justSignedIn.current = true;
       await setAuth(authData);
     } catch (e: any) {
       setStepState("error");
@@ -190,22 +213,32 @@ export default function Login() {
           {(stepState === "awaiting_user" || stepState === "polling") && (
             <motion.div key="awaiting" className="w-full space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <div className="text-center space-y-1">
-                <p className="text-sm font-medium text-white">Abre tu navegador e introduce este código</p>
-                <p className="text-xs text-muted-foreground">El navegador se ha abierto automáticamente</p>
+                <p className="text-sm font-medium text-white">Este es tu código de inicio de sesión</p>
+                <p className="text-xs text-muted-foreground">
+                  {browserOpened
+                    ? "Pégalo con Ctrl+V en la página de Microsoft y acepta. ALaunchi volverá solo cuando termines."
+                    : "Pulsa el botón: se copia el código y se abre Microsoft. Allí solo tienes que pegarlo (Ctrl+V)."}
+                </p>
               </div>
 
-              <CodeBox code={userCode} />
+              <CodeBox code={userCode} copied={codeCopied} onCopy={copyCode} />
 
-              <a
-                href={verificationUri}
-                target="_blank"
-                rel="noopener noreferrer"
-                data-testid="link-verification"
-                className="flex items-center justify-center gap-1.5 text-xs text-accent hover:text-accent/80 transition-colors"
+              <Button
+                size="lg"
+                data-testid="button-copy-and-open"
+                className="w-full bg-white text-black hover:bg-gray-100 h-12 font-semibold"
+                onClick={copyAndOpenBrowser}
               >
-                <ExternalLink className="h-3.5 w-3.5" />
-                {verificationUri}
-              </a>
+                <ExternalLink className="mr-2 h-4 w-4" />
+                {browserOpened ? "Volver a abrir Microsoft" : "Copiar código y abrir Microsoft"}
+              </Button>
+
+              {codeCopied && (
+                <p className="flex items-center justify-center gap-1.5 text-xs text-green-400">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Código copiado
+                </p>
+              )}
 
               <div className="flex items-center justify-between text-xs text-muted-foreground border border-white/5 rounded-lg px-4 py-2.5 bg-black/20">
                 <span className="flex items-center gap-1.5">

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Package, Sparkles, Image as ImageIcon, Smile, Loader2, ArrowLeft, Send, Box, Shirt, Camera, Star } from "lucide-react";
-import { listInstanceFiles, listEmotes, listSchematics, listScreenshots, readInstanceFile } from "@/services/electron";
+import { listInstanceFiles, listEmotes, listSchematics, listScreenshots, readInstanceFile, DISABLED_SUFFIX } from "@/services/electron";
 import { identifyModrinthFiles, categoryOf, fileName, guessTitle } from "@/services/modrinth";
 import { uploadSharedContent, type ContentCategory, type SharedContent } from "@/services/content-share";
 import { sendSharedContent } from "@/services/chat";
@@ -212,7 +212,11 @@ export function ChatContentPicker({
         const perInstance = await Promise.all(
           scopedInstances.map(async (pack): Promise<PickerItem[]> => {
             const files = await listInstanceFiles(pack.id);
-            const catFiles = files.filter((f) => categoryOf(f.path) === category && f.sha1);
+            // Disabled mods (".jar.disabled") aren't offered — the recipient
+            // would get the file switched off.
+            const catFiles = files.filter(
+              (f) => categoryOf(f.path) === category && f.sha1 && !f.path.endsWith(DISABLED_SUFFIX)
+            );
             const matches = await identifyModrinthFiles(catFiles);
             return catFiles.map((f) => {
               const match = matches.get(f.path);

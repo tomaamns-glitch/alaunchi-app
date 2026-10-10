@@ -15,15 +15,22 @@ const noDragStyle = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
 
 export function Titlebar() {
   const [maximized, setMaximized] = useState(false);
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const [onModpackDetail] = useRoute("/modpack/:id");
   const [onHub] = useRoute("/hub");
   const [onProfile] = useRoute("/profile");
   const [onPublicProfile] = useRoute("/profile/:uuid");
   const [onFriends] = useRoute("/friends");
   const [onServers] = useRoute("/servers");
+  const [onSettings] = useRoute("/settings");
+  const [onAdmin] = useRoute("/admin");
+  // The admin's sub-pages (a modpack, the mod library) go back to the panel,
+  // not all the way out.
+  const onAdminSubpage = location.startsWith("/admin/");
   const [onHome] = useRoute("/");
-  const showBack = onModpackDetail || onHub || onProfile || onPublicProfile || onFriends || onServers;
+  const showBack =
+    onModpackDetail || onHub || onProfile || onPublicProfile || onFriends || onServers || onSettings || onAdmin || onAdminSubpage;
+  const backTarget = onAdminSubpage ? "/admin" : getLastViewPath();
   const isAdmin = useIsAdmin();
   const [redeemOpen, setRedeemOpen] = useState(false);
   const { loadModpacks } = useModpacks();
@@ -57,13 +64,14 @@ export function Titlebar() {
       >
         <div className="flex items-center gap-1 px-2">
           {onHub && !hasCarousel ? (
-            <div className="h-7 w-7 flex items-center justify-center">
+            <div className="h-7 w-7 flex items-center justify-center" data-tour="titlebar-carousel">
               <img src="./logo.png" alt="ALaunchi" className="h-5 w-5 object-contain" draggable={false} />
             </div>
           ) : (
             <button
               style={noDragStyle}
-              onClick={() => setLocation(onHub ? "/" : showBack ? getLastViewPath() : "/hub")}
+              data-tour="titlebar-carousel"
+              onClick={() => setLocation(onHub ? "/" : showBack ? backTarget : "/hub")}
               className="h-7 w-7 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
               aria-label={onHub ? "Ir a las instancias online" : showBack ? "Volver" : "Panel"}
             >

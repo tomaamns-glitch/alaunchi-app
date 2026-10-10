@@ -137,6 +137,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   <CharacterColumn skinUrl={mySkinUrl} effect={decoration}>
                     <button
                       type="button"
+                      data-tour="account-customize"
                       onClick={() => setProfileView("skin")}
                       className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-accent-foreground text-xs font-bold hover:bg-accent/90 transition-colors"
                     >
@@ -148,7 +149,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   <div className="flex-1 flex flex-col gap-2 pt-1">
                     <MenuTile icon={User} label="Perfil" onClick={() => setProfileView("profile")} />
                     <MenuTile icon={Users} label="Amigos" badge={pendingRequests} onClick={() => setProfileView("friends")} />
-                    <MenuTile icon={Globe} label="Instancias online" badge={inviteCount} onClick={() => setProfileView("online")} />
+                    <MenuTile icon={Globe} label="Instancias online" badge={inviteCount} tourId="account-online" onClick={() => setProfileView("online")} />
                     <MenuTile icon={Server} label="Servers" onClick={() => setProfileView("servers")} />
                     <MenuTile icon={BookMarked} label="Biblioteca" onClick={() => setProfileView("library")} />
                     <MenuTile icon={Settings} label="Configuración" onClick={() => go("/settings")} />
@@ -338,6 +339,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
       <button
         ref={buttonRef}
         type="button"
+        data-tour="account-button"
         onClick={() => setProfileOpen((v) => !v)}
         className="relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors"
       >
@@ -438,12 +440,15 @@ interface MenuTileProps {
   label: string;
   badge?: number;
   onClick: () => void;
+  /** data-tour anchor for the onboarding tour. */
+  tourId?: string;
 }
 
-function MenuTile({ icon: Icon, label, badge, onClick }: MenuTileProps) {
+function MenuTile({ icon: Icon, label, badge, onClick, tourId }: MenuTileProps) {
   return (
     <button
       type="button"
+      data-tour={tourId}
       onClick={onClick}
       // Single line even if that widens the menu ("Instancias online").
       className="group flex items-center gap-3 px-3 py-2.5 rounded-lg bg-white/[0.04] border border-white/5 text-[15px] font-medium text-gray-200 whitespace-nowrap hover:bg-white/10 hover:border-white/10 transition-colors"

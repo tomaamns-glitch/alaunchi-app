@@ -10,7 +10,6 @@ import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import {
-  ArrowLeft,
   Save,
   LogOut,
   Cpu,
@@ -27,8 +26,10 @@ import {
   Check,
   MonitorDown,
   Sparkles,
+  Compass,
   type LucideIcon,
 } from "lucide-react";
+import { useTour } from "@/components/onboarding-tour";
 import { Switch } from "@/components/ui/switch";
 import { readSettings, writeSettings, isElectron, getDataDir, chooseDataDir, openDataDir } from "@/services/electron";
 import {
@@ -38,7 +39,6 @@ import {
   playNotificationSound,
   type NotificationSoundId,
 } from "@/lib/notification-sound";
-import { getLastViewPath } from "@/lib/last-view";
 import { useTheme, type Theme } from "@/lib/theme";
 import { useAnimatedBackground } from "@/lib/animated-background";
 import { cn } from "@/lib/utils";
@@ -56,7 +56,6 @@ const GLASS = "rounded-xl border border-white/10 bg-card/40";
 const SECTION_KEY = "alaunchi_settings_section";
 
 export default function Settings() {
-  const [, setLocation] = useLocation();
   const [section, setSection] = useState<SectionId>(() => {
     try {
       const saved = sessionStorage.getItem(SECTION_KEY) as SectionId | null;
@@ -80,15 +79,8 @@ export default function Settings() {
         {/* Same glass header card as the Hub / Admin */}
         <div className={cn(GLASS, "relative shrink-0 p-5 overflow-hidden")}>
           <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
+          {/* "Volver" lives in the titlebar, same as every other page. */}
           <div className="relative flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setLocation(getLastViewPath())}
-              className="h-9 w-9 shrink-0 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-              aria-label="Volver"
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </button>
             <div className="min-w-0">
               <h1 className="text-xl font-bold leading-tight">Ajustes</h1>
               <p className="text-xs text-muted-foreground">Configura ALaunchi a tu gusto</p>
@@ -309,7 +301,31 @@ function PersonalizationSection() {
         </Button>
       </div>
     </Panel>
+    <TourPanel />
     </>
+  );
+}
+
+function TourPanel() {
+  const [, setLocation] = useLocation();
+  return (
+    <Panel
+      icon={Compass}
+      title="Tutorial"
+      description="El recorrido rápido por ALaunchi que sale la primera vez que inicias sesión: instancias, tu menú, el personaje y las instancias online."
+    >
+      <Button
+        type="button"
+        variant="outline"
+        className="border-white/10"
+        onClick={() => {
+          useTour.getState().request();
+          setLocation("/hub");
+        }}
+      >
+        Ver el tutorial de nuevo
+      </Button>
+    </Panel>
   );
 }
 

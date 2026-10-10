@@ -246,7 +246,7 @@ function InstanceRow({ pack, creator, archived, canLeave, onOpen, onToggleArchiv
   const handleInstall = async () => {
     setInstalling(true);
     try {
-      await installOnlineInstance(pack);
+      if (!(await installOnlineInstance(pack))) return; // cancelled in the groups picker
       toast.success(`${pack.name} instalada.`);
     } catch (e: any) {
       toast.error(e?.message || "Error al instalar.");

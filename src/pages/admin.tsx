@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ArrowLeft, ChevronRight, Library, Package, Plus, Trash, Loader2 } from "lucide-react";
+import { ChevronRight, Library, Package, Plus, Trash, Loader2 } from "lucide-react";
 import { isModLibraryOwner } from "@/services/mod-library";
 import { createModpack, deleteModpack, type NewModpackData } from "@/services/github";
 import { getMySource, uniqueModpackId } from "@/lib/sources";
@@ -116,15 +116,8 @@ export default function Admin() {
           {/* Same glass header card as the Hub / Perfil */}
           <div className="relative shrink-0 rounded-xl border border-white/10 bg-card/40 p-5 overflow-hidden">
             <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
+            {/* "Volver" lives in the titlebar, same as every other page. */}
             <div className="relative flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setLocation("/")}
-                className="h-9 w-9 shrink-0 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-                aria-label="Volver"
-              >
-                <ArrowLeft className="h-5 w-5" />
-              </button>
               <div className="min-w-0 flex-1">
                 <h1 className="text-xl font-bold leading-tight">Panel de administración</h1>
                 <p className="text-xs text-muted-foreground">

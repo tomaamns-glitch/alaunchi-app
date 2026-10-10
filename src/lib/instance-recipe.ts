@@ -5,6 +5,7 @@ import {
   listForgeVersions,
   listNeoforgeVersions,
   listFabricVersions,
+  DISABLED_SUFFIX,
 } from "@/services/electron";
 import { identifyModrinthFiles, categoryOf, getVersionsByIds } from "@/services/modrinth";
 import type { PublicInstanceSummary, RecipeEntry } from "@/services/public-profile";
@@ -19,7 +20,8 @@ import type { PublicInstanceSummary, RecipeEntry } from "@/services/public-profi
  */
 export async function buildInstanceRecipe(instanceId: string): Promise<{ recipe: RecipeEntry[]; unresolvedCount: number }> {
   const files = await listInstanceFiles(instanceId);
-  const contentFiles = files.filter((f) => categoryOf(f.path) !== null);
+  // A mod the owner switched off doesn't travel — the friend would get it on.
+  const contentFiles = files.filter((f) => categoryOf(f.path) !== null && !f.path.endsWith(DISABLED_SUFFIX));
   const matches = await identifyModrinthFiles(contentFiles.map((f) => ({ path: f.path, sha1: f.sha1 })));
 
   const recipe: RecipeEntry[] = [];
