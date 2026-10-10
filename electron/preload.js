@@ -7,6 +7,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   close: () => ipcRenderer.send("window-close"),
   isMaximized: () => ipcRenderer.invoke("window:is-maximized"),
   focusWindow: () => ipcRenderer.send("app:focus-window"),
+  getAppUpdateState: () => ipcRenderer.invoke("app:get-update-state"),
+  installAppUpdate: () => ipcRenderer.invoke("app:install-update"),
+  onAppUpdateReady: (callback) => {
+    const handler = (_, info) => callback(info);
+    ipcRenderer.on("app-update-ready", handler);
+    return () => ipcRenderer.removeListener("app-update-ready", handler);
+  },
   onMaximizedChange: (callback) => {
     const handler = (_, maximized) => callback(maximized);
     ipcRenderer.on("window-maximized-change", handler);

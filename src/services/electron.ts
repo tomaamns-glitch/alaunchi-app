@@ -401,6 +401,30 @@ export async function getInstalledModpacksMeta(): Promise<Record<string, any>> {
   return eAPI.getInstalledModpacks();
 }
 
+/** A new ALaunchi version downloaded in the background while the launcher
+ *  was open (electron-updater), ready to install. */
+export interface AppUpdateState {
+  ready: boolean;
+  version: string | null;
+}
+
+export async function getAppUpdateState(): Promise<AppUpdateState> {
+  if (!isElectron) return { ready: false, version: null };
+  return eAPI.getAppUpdateState();
+}
+
+export function onAppUpdateReady(callback: (info: { version: string | null }) => void): () => void {
+  if (!isElectron) return () => {};
+  return eAPI.onAppUpdateReady(callback);
+}
+
+/** Closes the launcher, runs the installer and reopens it. Refused (with the
+ *  reason) while Minecraft or a modpack install is running. */
+export async function installAppUpdate(): Promise<{ ok: boolean; reason?: string }> {
+  if (!isElectron) return { ok: false, reason: "Solo en la app de escritorio." };
+  return eAPI.installAppUpdate();
+}
+
 /** Brings the window back to the front — used when a background presence
  *  notification is clicked while the app is hidden in the tray. */
 export function focusWindow(): void {
