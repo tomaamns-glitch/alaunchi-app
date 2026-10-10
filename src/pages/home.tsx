@@ -946,7 +946,7 @@ export default function Home() {
                   type="button"
                   onClick={() => setLocation(`/modpack/${currentPack.id}`)}
                   data-testid="button-instance-manager"
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors text-gray-200"
+                  className="h-[38px] flex items-center gap-2 px-3 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors text-gray-200"
                 >
                   <Package className="h-4 w-4" />
                   <span className="text-sm font-medium">Contenido</span>

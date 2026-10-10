@@ -220,19 +220,19 @@ export function InstanceGroupChat({ pack, myUuid, myUsername }: { pack: Modpack;
 
       <motion.button
         ref={buttonRef}
-        whileHover={{ scale: 1.08 }}
-        whileTap={{ scale: 0.92 }}
-        transition={{ duration: 0.15 }}
         type="button"
         onClick={toggle}
         aria-label={`Chat de grupo de ${pack.name}`}
         title={`Chat de grupo de ${pack.name}`}
+        // Same 38px box, radius and border as the other footer buttons
+        // (account, players, Contenido) — the instance logo sits inside at a
+        // fixed size, so switching carousel packs never changes the button.
         className={cn(
-          "relative h-9 w-9 shrink-0 rounded-md border transition-colors",
-          open ? "border-accent bg-accent/15" : "border-white/10 bg-white/5 hover:bg-white/10"
+          "relative h-[38px] w-[38px] shrink-0 flex items-center justify-center rounded-lg border transition-colors",
+          open ? "border-accent bg-accent/15" : "border-white/5 bg-white/5 hover:bg-white/10"
         )}
       >
-        <InstanceAvatar pack={pack} className="h-full w-full" />
+        <InstanceAvatar pack={pack} className="h-6 w-6 shrink-0 text-xs" />
         <span className="absolute -bottom-1 -left-1 h-4 w-4 flex items-center justify-center rounded-full bg-card border border-white/10">
           <Users className="h-2.5 w-2.5 text-accent" />
         </span>
