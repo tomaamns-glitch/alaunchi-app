@@ -5,6 +5,7 @@ import { format } from "date-fns";
 import { Head } from "@/components/player-picker";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
+import { useKeepInViewport } from "@/hooks/use-keep-in-viewport";
 import { subscribePresence, sortAllPresence, type PresenceEntry } from "@/services/presence";
 import {
   getGroupLastRead,
@@ -34,6 +35,8 @@ export function InstanceGroupChat({ pack, myUuid, myUsername }: { pack: Modpack;
   const panelRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Opens towards the left when there's no room on the right (see the hook).
+  const panelShift = useKeepInViewport(panelRef, open);
   const initialLoad = useRef(true);
 
   // Another footer popup (account, players) or a 1:1 chat opening closes this one.
@@ -117,7 +120,8 @@ export function InstanceGroupChat({ pack, myUuid, myUsername }: { pack: Modpack;
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8, scale: 0.96 }}
             transition={{ duration: 0.15, ease: "easeOut" }}
-            className="absolute bottom-full left-0 mb-2 z-40 flex flex-col w-[36rem] h-[30rem] rounded-lg bg-card/95 backdrop-blur border border-white/10 shadow-2xl overflow-hidden"
+            style={{ left: panelShift }}
+            className="absolute bottom-full left-0 mb-2 z-40 flex flex-col w-[36rem] max-w-[calc(100vw-24px)] h-[30rem] rounded-lg bg-card/95 backdrop-blur border border-white/10 shadow-2xl overflow-hidden"
           >
             <div className="px-4 py-3 border-b border-white/10 flex items-center gap-3">
               <InstanceAvatar pack={pack} className="h-9 w-9" />

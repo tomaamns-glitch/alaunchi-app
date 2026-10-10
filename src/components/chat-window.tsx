@@ -42,6 +42,7 @@ import { getInstanceAccentColor } from "@/lib/instance-color";
 import { findCompatibleInstances, type CompatibleInstance } from "@/lib/content-compat";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
+import { useKeepInViewport } from "@/hooks/use-keep-in-viewport";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { ChatContactRail } from "@/components/chat-contact-rail";
@@ -358,6 +359,9 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
 
   const panelRef = useRef<HTMLDivElement | null>(null);
   useDismissOnOutsideClick([panelRef], minimizeChat, !!openUuid);
+  // With several bubbles pinned (or a narrow window) the 52rem panel used to
+  // run past the right edge — it shifts left to open towards that side.
+  const panelShift = useKeepInViewport(panelRef, !!openUuid);
 
   return (
     <AnimatePresence>
@@ -382,7 +386,8 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 8, scale: 0.96 }}
           transition={{ duration: 0.15, ease: "easeOut" }}
-          className="absolute bottom-full left-0 mb-2 z-40 flex w-[52rem] h-[30rem] rounded-lg bg-card/95 backdrop-blur border border-white/10 shadow-2xl overflow-hidden"
+          style={{ left: panelShift }}
+          className="absolute bottom-full left-0 mb-2 z-40 flex w-[52rem] max-w-[calc(100vw-24px)] h-[30rem] rounded-lg bg-card/95 backdrop-blur border border-white/10 shadow-2xl overflow-hidden"
         >
           <ChatContactRail
             myUuid={myUuid}
