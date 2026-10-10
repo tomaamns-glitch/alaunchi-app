@@ -52,6 +52,7 @@ import {
   shouldIncludeFile,
   type SnapshotEntry,
   type OptionalGroup,
+  type OptionalGroupOption,
   type WalkedFile,
   type PublishProgress,
 } from "@/services/github";
@@ -863,6 +864,96 @@ export default function AdminModpack() {
     );
   };
 
+  /** One optional file as a toggleable chip in the Contenido adicional tab. */
+  const renderGroupChip = (row: (typeof optionalRows)[number], active: boolean, onToggle: () => void) => {
+    const match = matchFor(row.key);
+    return (
+      <button
+        type="button"
+        key={row.path}
+        onClick={onToggle}
+        title={row.path}
+        className={cn(
+          "flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border transition-colors",
+          match ? "" : "font-mono",
+          active
+            ? "bg-accent/20 border-accent/40 text-accent"
+            : "bg-white/5 border-white/10 text-muted-foreground hover:text-white"
+        )}
+      >
+        {match && <ProjectIcon url={match.iconUrl} title={match.title} className="h-4 w-4 rounded-sm" />}
+        {match?.title ?? row.path}
+      </button>
+    );
+  };
+
+  // ── Selectable groups: the player picks exactly one option ─────────────────
+  /** A selectable group's `paths` is always the union of its options'. */
+  const withOptions = (g: OptionalGroup, options: OptionalGroupOption[]): OptionalGroup => ({
+    ...g,
+    options,
+    paths: Array.from(new Set(options.flatMap((o) => o.paths))),
+  });
+  const newOption = (n: number, paths: string[] = []): OptionalGroupOption => ({
+    id: crypto.randomUUID(),
+    name: `Opción ${n}`,
+    paths,
+  });
+
+  const handleSetSelectable = (groupId: string, selectable: boolean) => {
+    setOptionalGroups((prev) =>
+      prev.map((g) => {
+        if (g.id !== groupId) return g;
+        if (!selectable) return { id: g.id, name: g.name, description: g.description, paths: g.paths };
+        // What was already in the group becomes the first option.
+        return withOptions(g, [newOption(1, g.paths), newOption(2)]);
+      })
+    );
+  };
+
+  const handleAddOption = (groupId: string) => {
+    setOptionalGroups((prev) =>
+      prev.map((g) => (g.id === groupId && g.options ? withOptions(g, [...g.options, newOption(g.options.length + 1)]) : g))
+    );
+  };
+
+  const handleDeleteOption = (groupId: string, optionId: string) => {
+    setOptionalGroups((prev) =>
+      prev.map((g) =>
+        g.id === groupId && g.options && g.options.length > 2
+          ? withOptions(g, g.options.filter((o) => o.id !== optionId))
+          : g
+      )
+    );
+  };
+
+  const handleRenameOption = (groupId: string, optionId: string, name: string) => {
+    setOptionalGroups((prev) =>
+      prev.map((g) =>
+        g.id === groupId && g.options
+          ? { ...g, options: g.options.map((o) => (o.id === optionId ? { ...o, name } : o)) }
+          : g
+      )
+    );
+  };
+
+  /** A file belongs to at most one option of a selectable group: assigning it
+   *  to one takes it out of the others. */
+  const handleToggleOptionPath = (groupId: string, optionId: string, path: string) => {
+    setOptionalGroups((prev) =>
+      prev.map((g) => {
+        if (g.id !== groupId || !g.options) return g;
+        const options = g.options.map((o) => {
+          if (o.id === optionId) {
+            return { ...o, paths: o.paths.includes(path) ? o.paths.filter((p) => p !== path) : [...o.paths, path] };
+          }
+          return { ...o, paths: o.paths.filter((p) => p !== path) };
+        });
+        return withOptions(g, options);
+      })
+    );
+  };
+
   const handleSaveSettings = async () => {
     if (!id) return;
     const token = getMySource()?.adminToken ?? "";
@@ -1046,7 +1137,15 @@ export default function AdminModpack() {
     try {
       const validOptionalPaths = new Set(optionalRows.map((r) => r.path));
       const cleanedGroups = optionalGroups
-        .map((g) => ({ ...g, paths: g.paths.filter((p) => validOptionalPaths.has(p)) }))
+        .map((g): OptionalGroup => {
+          if (!g.options) return { ...g, paths: g.paths.filter((p) => validOptionalPaths.has(p)) };
+          // Selectable: options keep only current optional files; an option
+          // left with nothing in it isn't offered.
+          const options = g.options
+            .map((o) => ({ ...o, name: o.name.trim() || "Opción", paths: o.paths.filter((p) => validOptionalPaths.has(p)) }))
+            .filter((o) => o.paths.length > 0);
+          return { ...g, options, paths: Array.from(new Set(options.flatMap((o) => o.paths))) };
+        })
         .filter((g) => g.name.trim());
       const result = await publishModpackUpdate(
         token,
@@ -1571,34 +1670,77 @@ export default function AdminModpack() {
                             className="h-8 bg-background/50 border-white/10 text-gray-300 text-xs"
                             placeholder="Descripción"
                           />
-                          <div className="flex flex-wrap gap-2 pt-1">
-                            {optionalRows.length === 0 ? (
-                              <p className="text-xs text-muted-foreground">No hay archivos opcionales.</p>
-                            ) : (
-                              optionalRows.map((row) => {
-                                const inGroup = group.paths.includes(row.path);
-                                const match = matchFor(row.key);
-                                return (
-                                  <button
-                                    type="button"
-                                    key={row.path}
-                                    onClick={() => handleToggleGroupPath(group.id, row.path)}
-                                    title={row.path}
-                                    className={cn(
-                                      "flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border transition-colors",
-                                      match ? "" : "font-mono",
-                                      inGroup
-                                        ? "bg-accent/20 border-accent/40 text-accent"
-                                        : "bg-white/5 border-white/10 text-muted-foreground hover:text-white"
-                                    )}
-                                  >
-                                    {match && <ProjectIcon url={match.iconUrl} title={match.title} className="h-4 w-4 rounded-sm" />}
-                                    {match?.title ?? row.path}
-                                  </button>
-                                );
-                              })
-                            )}
-                          </div>
+                          <label className="flex items-center justify-between gap-3 rounded-md bg-black/20 px-3 py-2 cursor-pointer">
+                            <span className="min-w-0">
+                              <span className="block text-xs font-semibold text-gray-100">Seleccionable</span>
+                              <span className="block text-[11px] text-muted-foreground">
+                                El grupo se divide en opciones y el jugador tiene que elegir una (ej: Xaero's o JourneyMap).
+                              </span>
+                            </span>
+                            <Switch
+                              checked={!!group.options}
+                              onCheckedChange={(on) => handleSetSelectable(group.id, on)}
+                            />
+                          </label>
+                          {optionalRows.length === 0 ? (
+                            <p className="text-xs text-muted-foreground pt-1">No hay archivos opcionales.</p>
+                          ) : group.options ? (
+                            <div className="space-y-2 pt-1">
+                              {group.options.map((option, i) => (
+                                <div key={option.id}>
+                                  {i > 0 && (
+                                    <p className="text-center text-[10px] font-bold uppercase tracking-widest text-muted-foreground py-1">
+                                      o
+                                    </p>
+                                  )}
+                                  <div className="rounded-md border border-white/10 bg-black/20 p-2.5 space-y-2">
+                                    <div className="flex items-center gap-2">
+                                      <Input
+                                        value={option.name}
+                                        onChange={(e) => handleRenameOption(group.id, option.id, e.target.value)}
+                                        className="h-7 bg-background/50 border-white/10 text-white text-xs font-semibold"
+                                        placeholder={`Opción ${i + 1}`}
+                                      />
+                                      {group.options!.length > 2 && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteOption(group.id, option.id)}
+                                          title="Quitar opción"
+                                          className="h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
+                                        >
+                                          <Trash className="h-3.5 w-3.5" />
+                                        </button>
+                                      )}
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                      {optionalRows.map((row) =>
+                                        renderGroupChip(row, option.paths.includes(row.path), () =>
+                                          handleToggleOptionPath(group.id, option.id, row.path)
+                                        )
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="w-full border-dashed border-white/15 text-xs"
+                                onClick={() => handleAddOption(group.id)}
+                              >
+                                <Plus className="mr-1.5 h-3.5 w-3.5" /> Añadir opción
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {optionalRows.map((row) =>
+                                renderGroupChip(row, group.paths.includes(row.path), () =>
+                                  handleToggleGroupPath(group.id, row.path)
+                                )
+                              )}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>

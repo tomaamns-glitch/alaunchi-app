@@ -2389,7 +2389,14 @@ function validateManifest(manifest) {
 function normalizeGroupChoice(choice) {
   if (!choice || typeof choice !== "object") return null;
   const selected = Array.isArray(choice.selected) ? choice.selected.filter((id) => typeof id === "string") : [];
-  return { all: choice.all === true, selected };
+  // Selectable groups: groupId → the option the player picked.
+  const options = {};
+  if (choice.options && typeof choice.options === "object") {
+    for (const [groupId, optionId] of Object.entries(choice.options)) {
+      if (typeof optionId === "string") options[groupId] = optionId;
+    }
+  }
+  return { all: choice.all === true, selected, options };
 }
 
 ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manifest, baseUrl, token, optionalGroupChoice }) => {
@@ -2445,17 +2452,49 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
   // and re-applied on every update, so files the admin later adds to a group
   // the player didn't pick stay out too. No choice at all (instances installed
   // before groups existed) = everything, as before.
-  const groupChoice = normalizeGroupChoice(optionalGroupChoice) ?? savedGroupChoice ?? { all: true, selected: [] };
+  const explicitChoice = normalizeGroupChoice(optionalGroupChoice);
+  const groupChoice = explicitChoice ?? savedGroupChoice ?? { all: true, selected: [], options: {} };
   const skippedGroupPaths = new Set();
-  if (!groupChoice.all && Array.isArray(manifest.optionalGroups)) {
+  const wantedGroupPaths = new Set();
+  // Files of the options NOT picked in selectable groups — removed from disk
+  // if present (e.g. the admin turned an existing group into a selectable
+  // one), since those options are meant to be alternatives, never together.
+  const unpickedOptionPaths = new Set();
+  if (Array.isArray(manifest.optionalGroups)) {
     const selected = new Set(groupChoice.selected);
-    const wanted = new Set();
+    const wanted = wantedGroupPaths;
     for (const g of manifest.optionalGroups) {
-      if (!g || !Array.isArray(g.paths)) continue;
-      for (const p of g.paths) (selected.has(g.id) ? wanted : skippedGroupPaths).add(p);
+      if (!g) continue;
+      const options = Array.isArray(g.options) ? g.options.filter((o) => o && Array.isArray(o.paths)) : [];
+      if (options.length > 0) {
+        // Exactly one option, even with "experiencia completa". No choice
+        // recorded (installed before this group existed) → the first one.
+        const picked = options.find((o) => o.id === groupChoice.options[g.id]) ?? options[0];
+        for (const o of options) {
+          for (const p of o.paths) {
+            if (o === picked) wanted.add(p);
+            else {
+              skippedGroupPaths.add(p);
+              unpickedOptionPaths.add(p);
+            }
+          }
+        }
+      } else if (!groupChoice.all && Array.isArray(g.paths)) {
+        for (const p of g.paths) (selected.has(g.id) ? wanted : skippedGroupPaths).add(p);
+      }
     }
     // A file in several groups installs if any of them was picked.
-    for (const p of wanted) skippedGroupPaths.delete(p);
+    for (const p of wanted) {
+      skippedGroupPaths.delete(p);
+      unpickedOptionPaths.delete(p);
+    }
+  }
+  if (explicitChoice) {
+    // The player just (re)chose: a group they picked comes back in full even
+    // if they had deleted one of its files by hand before…
+    for (const p of wantedGroupPaths) removedOptionalPaths.delete(p);
+    // …and groups they dropped are removed below (with the unpicked options).
+    for (const p of skippedGroupPaths) unpickedOptionPaths.add(p);
   }
 
   const total = manifest.files.length;
@@ -2621,6 +2660,15 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
         await fs.unlink(`${fullPath}${DISABLED_SUFFIX}`).catch(() => {});
       } catch {}
     }
+  }
+  // Options of a selectable group the player didn't pick aren't kept around.
+  for (const p of unpickedOptionPaths) {
+    if (newByPath.get(p)?.required !== false) continue;
+    try {
+      const fullPath = safeJoin(instanceDir, p);
+      await fs.unlink(fullPath).catch(() => {});
+      await fs.unlink(`${fullPath}${DISABLED_SUFFIX}`).catch(() => {});
+    } catch {}
   }
 
   // Merged over the previous meta, not rebuilt from scratch: it also holds
