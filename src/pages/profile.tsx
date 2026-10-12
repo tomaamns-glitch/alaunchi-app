@@ -397,7 +397,7 @@ export default function Profile() {
       </main>
 
       <Dialog open={skinDialogOpen} onOpenChange={setSkinDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-fit">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ImagePlus className="h-4 w-4 text-accent" />

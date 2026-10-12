@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useRoute } from "wouter";
-import { ArrowLeft, Download, GalleryHorizontal, Home, KeyRound, Loader2, Minus, Server, Square, Copy, X } from "lucide-react";
+import { ArrowLeft, Download, GalleryHorizontal, Home, KeyRound, LayoutGrid, Loader2, Minus, Server, Square, Copy, X } from "lucide-react";
 import { toast } from "sonner";
 import { getAppUpdateState, installAppUpdate, isElectron, onAppUpdateReady } from "@/services/electron";
 import { getLastViewPath } from "@/lib/last-view";
@@ -8,6 +8,7 @@ import { useIsAdmin } from "@/hooks/use-is-admin";
 import { useCarouselModpacks, useModpacks } from "@/hooks/use-modpacks";
 import { useAuth } from "@/hooks/use-auth";
 import { RedeemCodeDialog } from "@/components/redeem-code-dialog";
+import { ONLINE_DRAWER_AVAILABLE, useOnlineViewMode } from "@/lib/online-view-mode";
 
 const api = (window as any).electronAPI;
 
@@ -77,6 +78,7 @@ export function Titlebar() {
   const [maximized, setMaximized] = useState(false);
   const [location, setLocation] = useLocation();
   const [onModpackDetail] = useRoute("/modpack/:id");
+  const [onOnlineInstance] = useRoute("/online/:id");
   const [onHub] = useRoute("/hub");
   const [onProfile] = useRoute("/profile");
   const [onPublicProfile] = useRoute("/profile/:uuid");
@@ -89,15 +91,18 @@ export function Titlebar() {
   const onAdminSubpage = location.startsWith("/admin/");
   const [onHome] = useRoute("/");
   const showBack =
-    onModpackDetail || onHub || onProfile || onPublicProfile || onFriends || onServers || onSettings || onAdmin || onAdminSubpage;
+    onModpackDetail || onOnlineInstance || onHub || onProfile || onPublicProfile || onFriends || onServers || onSettings || onAdmin || onAdminSubpage;
   const backTarget = onAdminSubpage ? "/admin" : getLastViewPath();
   const isAdmin = useIsAdmin();
   const [redeemOpen, setRedeemOpen] = useState(false);
+  const onlineViewMode = useOnlineViewMode((s) => s.mode);
+  const toggleOnlineViewMode = useOnlineViewMode((s) => s.toggle);
   const { loadModpacks } = useModpacks();
   const isAuthenticated = useAuth((s) => s.isAuthenticated);
   // The Hub's "go to the carousel" button only exists when the carousel has
-  // something to show — otherwise that spot is just the app's logo.
-  const hasCarousel = useCarouselModpacks().length > 0;
+  // something to show — otherwise that spot is just the app's logo. Dev
+  // builds always show it, so the empty online view stays reachable.
+  const hasCarousel = useCarouselModpacks().length > 0 || import.meta.env.DEV;
 
   useEffect(() => {
     if (!isElectron) return;
@@ -150,8 +155,9 @@ export function Titlebar() {
         </div>
         <div style={noDragStyle} className="flex items-center h-full">
           <AppUpdateBanner />
-          {/* SERVER: always in dev builds (it's being reworked), creators only in releases. */}
-          {(isAdmin || import.meta.env.DEV) && (
+          {/* SERVER and ADMIN: only for creators (GitHub repo + tokens verified in
+              Ajustes), on every view — online instances (/) and private ones (/hub). */}
+          {isAdmin && (
             <>
               <button
                 onClick={() => setLocation("/servers")}
@@ -184,6 +190,21 @@ export function Titlebar() {
               >
                 <KeyRound className="h-3 w-3" />
                 AÑADIR
+              </button>
+              <div className="w-px h-4 bg-white/10" />
+            </>
+          )}
+          {onHome && ONLINE_DRAWER_AVAILABLE && (
+            <>
+              {/* Carousel ⇄ drawer view of the online instances (lib/online-view-mode.ts).
+                  The icon is the view you'd switch to. */}
+              <button
+                onClick={toggleOnlineViewMode}
+                className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+                aria-label={onlineViewMode === "carousel" ? "Ver como cajón" : "Ver como carrusel"}
+                title={onlineViewMode === "carousel" ? "Ver como cajón" : "Ver como carrusel"}
+              >
+                {onlineViewMode === "carousel" ? <LayoutGrid className="h-3.5 w-3.5" /> : <GalleryHorizontal className="h-3.5 w-3.5" />}
               </button>
               <div className="w-px h-4 bg-white/10" />
             </>
