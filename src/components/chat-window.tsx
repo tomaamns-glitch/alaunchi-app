@@ -717,7 +717,7 @@ function SharedInstanceCard({ instance, fromMe }: { instance: SharedInstance; fr
   );
 }
 
-function SharedContentCard({
+export function SharedContentCard({
   content,
   carouselInstanceId,
   senderUsername,

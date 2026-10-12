@@ -20,10 +20,14 @@ import { toast } from "sonner";
 interface ChatContentPickerProps {
   myUuid: string;
   myUsername: string;
-  otherUuid: string;
-  otherUsername: string;
+  /** 1:1 chat: who it's sent to. Not needed when onSendContent is given. */
+  otherUuid?: string;
+  otherUsername?: string;
   mode: ChatMode;
   onClose: () => void;
+  /** Sends the picked content somewhere else than a 1:1 conversation (the
+   *  instance group chat). Default: sendSharedContent to otherUuid. */
+  onSendContent?: (content: SharedContent) => Promise<void>;
 }
 
 const CATEGORY_META: Record<ContentCategory, { label: string; icon: typeof Package }> = {
@@ -87,6 +91,7 @@ export function ChatContentPicker({
   otherUsername,
   mode,
   onClose,
+  onSendContent,
 }: ChatContentPickerProps) {
   const [category, setCategory] = useState<ContentCategory | null>(null);
   const [items, setItems] = useState<PickerItem[]>([]);
@@ -311,7 +316,8 @@ export function ChatContentPicker({
         };
       }
 
-      await sendSharedContent(myUuid, myUsername, otherUuid, otherUsername, content, carouselInstanceId);
+      if (onSendContent) await onSendContent(content);
+      else await sendSharedContent(myUuid, myUsername, otherUuid ?? "", otherUsername ?? "", content, carouselInstanceId);
       toast.success(`${item.displayName} compartido.`);
       onClose();
     } catch (e: any) {

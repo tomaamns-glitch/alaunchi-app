@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Minus, Send, Users } from "lucide-react";
+import { Minus, Paperclip, Send, Users } from "lucide-react";
 import { format } from "date-fns";
 import { Head } from "@/components/player-picker";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
@@ -10,6 +10,7 @@ import { subscribePresence, sortAllPresence, type PresenceEntry } from "@/servic
 import {
   getGroupLastRead,
   groupKeyFor,
+  sendGroupContent,
   sendGroupMessage,
   setGroupLastRead,
   subscribeGroupMessages,
@@ -19,6 +20,8 @@ import { getNicknames } from "@/lib/nicknames";
 import { playNotificationSound } from "@/lib/notification-sound";
 import { cn } from "@/lib/utils";
 import type { Modpack } from "@/services/github";
+import { ChatContentPicker } from "@/components/lazy-heavy";
+import { SharedContentCard } from "@/components/chat-window";
 
 /** Footer button (next to Jugadores, styled like a chat head but showing the
  *  instance's picture) + the group chat of that online instance: one room for
@@ -31,6 +34,7 @@ export function InstanceGroupChat({ pack, myUuid, myUsername }: { pack: Modpack;
   const [members, setMembers] = useState<Record<string, PresenceEntry>>({});
   const [lastRead, setLastRead] = useState(0);
   const [draft, setDraft] = useState("");
+  const [showContentPicker, setShowContentPicker] = useState(false);
   const [nicknames] = useState(() => getNicknames());
   const panelRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -47,6 +51,9 @@ export function InstanceGroupChat({ pack, myUuid, myUsername }: { pack: Modpack;
   }, [overlayActive, openUuid]);
   // Switching carousel instance closes the room of the previous one.
   useEffect(() => setOpen(false), [groupKey]);
+  useEffect(() => {
+    if (!open) setShowContentPicker(false);
+  }, [open]);
 
   useEffect(() => {
     // First time ever in this room: start from "now", not with its whole history unread.
@@ -175,14 +182,26 @@ export function InstanceGroupChat({ pack, myUuid, myUsername }: { pack: Modpack;
                             {isMe ? "Tú" : nameOf(m)} · {m.timestamp ? format(m.timestamp, "HH:mm") : ""}
                           </span>
                         )}
-                        <div
-                          className={cn(
-                            "rounded-2xl px-3.5 py-2 text-sm shadow-sm whitespace-pre-wrap break-words select-text",
-                            isMe ? "bg-accent text-accent-foreground rounded-br-md" : "bg-white/10 text-gray-100 rounded-bl-md"
-                          )}
-                        >
-                          {m.text}
-                        </div>
+                        {m.content ? (
+                          // Sent "in this instance's mode": whoever has the
+                          // instance installs straight into it, like the 1:1 chat.
+                          <SharedContentCard
+                            content={m.content}
+                            carouselInstanceId={pack.id}
+                            senderUsername={m.senderUsername}
+                            installed={false}
+                            onInstalled={() => {}}
+                          />
+                        ) : (
+                          <div
+                            className={cn(
+                              "rounded-2xl px-3.5 py-2 text-sm shadow-sm whitespace-pre-wrap break-words select-text",
+                              isMe ? "bg-accent text-accent-foreground rounded-br-md" : "bg-white/10 text-gray-100 rounded-bl-md"
+                            )}
+                          >
+                            {m.text}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -191,6 +210,30 @@ export function InstanceGroupChat({ pack, myUuid, myUsername }: { pack: Modpack;
             </div>
 
             <div className="p-3 border-t border-white/10 flex items-center gap-2">
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowContentPicker((v) => !v)}
+                  title="Enviar contenido"
+                  className={cn(
+                    "h-9 w-9 flex items-center justify-center rounded-md transition-colors shrink-0",
+                    showContentPicker ? "bg-accent/20 text-accent" : "bg-white/5 hover:bg-white/10 text-gray-300"
+                  )}
+                >
+                  <Paperclip className="h-4 w-4" />
+                </button>
+                <AnimatePresence>
+                  {showContentPicker && (
+                    <ChatContentPicker
+                      myUuid={myUuid}
+                      myUsername={myUsername}
+                      mode={{ type: "carousel", pack }}
+                      onClose={() => setShowContentPicker(false)}
+                      onSendContent={(content) => sendGroupContent(groupKey, myUuid, myUsername, content)}
+                    />
+                  )}
+                </AnimatePresence>
+              </div>
               <input
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
