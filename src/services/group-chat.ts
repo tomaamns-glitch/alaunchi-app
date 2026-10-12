@@ -1,6 +1,7 @@
 import { limitToLast, onValue, push, query, ref, serverTimestamp, set } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 import { grantKey } from "@/services/access-codes";
+import type { SharedContent } from "@/services/content-share";
 
 // Group chat of an online instance: everyone who plays it talks in one room.
 // RTDB `groupChats/{groupKey}/messages/{pushId}`. groupKey is the instance's
@@ -12,6 +13,9 @@ export interface GroupMessage {
   senderUsername: string;
   text: string;
   timestamp: number;
+  /** A mod/shader/texture/emote/schematic/skin/screenshot shared in the room
+   *  (same card and install flow as the 1:1 chat); text is "" then. */
+  content?: SharedContent;
 }
 
 const MAX_LOADED = 150;
@@ -33,13 +37,15 @@ export function subscribeGroupMessages(groupKey: string, onChange: (messages: Gr
       const out: GroupMessage[] = [];
       snap.forEach((child) => {
         const v = child.val();
-        if (v && typeof v.text === "string") {
+        const content = v?.content && typeof v.content === "object" ? (v.content as SharedContent) : undefined;
+        if (v && (typeof v.text === "string" || content)) {
           out.push({
             id: child.key!,
             senderUuid: String(v.senderUuid ?? ""),
             senderUsername: String(v.senderUsername ?? ""),
-            text: v.text,
+            text: typeof v.text === "string" ? v.text : "",
             timestamp: Number(v.timestamp) || 0,
+            ...(content ? { content } : {}),
           });
         }
       });
@@ -56,6 +62,18 @@ export async function sendGroupMessage(groupKey: string, senderUuid: string, sen
     senderUuid,
     senderUsername,
     text: trimmed,
+    timestamp: serverTimestamp(),
+  });
+}
+
+/** Shares content in the room — a card everyone can download/install from
+ *  (bytes already uploaded by the picker, see content-share.ts). */
+export async function sendGroupContent(groupKey: string, senderUuid: string, senderUsername: string, content: SharedContent): Promise<void> {
+  await set(push(ref(rtdb, `groupChats/${groupKey}/messages`)), {
+    senderUuid,
+    senderUsername,
+    text: "",
+    content,
     timestamp: serverTimestamp(),
   });
 }
