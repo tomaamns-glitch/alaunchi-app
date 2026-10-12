@@ -18,6 +18,7 @@ import { prefetchHeavyChunks } from "@/components/lazy-heavy";
 // background once the app is idle (prefetchLazyPages below), so navigating to
 // it later is still instant. Same routes, same components.
 const loadModpackDetail = () => import("@/pages/modpack-detail");
+const loadOnlineInstance = () => import("@/pages/online-instance");
 const loadSettings = () => import("@/pages/settings");
 const loadProfile = () => import("@/pages/profile");
 const loadPublicProfile = () => import("@/pages/public-profile");
@@ -27,6 +28,7 @@ const loadAdmin = () => import("@/pages/admin");
 const loadAdminModpack = () => import("@/pages/admin-modpack");
 const loadAdminLibrary = () => import("@/pages/admin-library");
 const ModpackDetail = lazy(loadModpackDetail);
+const OnlineInstance = lazy(loadOnlineInstance);
 const Settings = lazy(loadSettings);
 const Profile = lazy(loadProfile);
 const PublicProfile = lazy(loadPublicProfile);
@@ -40,6 +42,7 @@ function prefetchLazyPages() {
   // Most-visited first.
   const loaders = [
     loadModpackDetail,
+    loadOnlineInstance,
     loadSettings,
     loadProfile,
     loadPublicProfile,
@@ -159,6 +162,7 @@ function routeDepth(path: string): number | null {
   if (path.startsWith("/admin/")) return 2;
   if (
     path.startsWith("/modpack/") ||
+    path.startsWith("/online/") ||
     path === "/settings" ||
     path === "/servers" ||
     path === "/friends" ||
@@ -266,6 +270,7 @@ function RouteSwitch({ location }: { location: string }) {
       <Route path="/friends" component={Friends} />
       <Route path="/hub" component={Hub} />
       <Route path="/modpack/:id" component={ModpackDetail} />
+      <Route path="/online/:id" component={OnlineInstance} />
       <Route component={NotFound} />
     </Switch>
   );

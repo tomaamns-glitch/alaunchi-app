@@ -225,14 +225,14 @@ export function InstanceGroupChat({ pack, myUuid, myUsername }: { pack: Modpack;
         aria-label={`Chat de grupo de ${pack.name}`}
         title={`Chat de grupo de ${pack.name}`}
         // Same 38px box, radius and border as the other footer buttons
-        // (account, players, Contenido) — the instance logo sits inside at a
-        // fixed size, so switching carousel packs never changes the button.
+        // (account, players, Contenido) — the instance logo fills it edge to
+        // edge, so switching carousel packs never changes the button's size.
         className={cn(
           "relative h-[38px] w-[38px] shrink-0 flex items-center justify-center rounded-lg border transition-colors",
           open ? "border-accent bg-accent/15" : "border-white/5 bg-white/5 hover:bg-white/10"
         )}
       >
-        <InstanceAvatar pack={pack} className="h-6 w-6 shrink-0 text-xs" />
+        <InstanceAvatar pack={pack} className="h-full w-full rounded-[7px] text-sm" />
         <span className="absolute -bottom-1 -left-1 h-4 w-4 flex items-center justify-center rounded-full bg-card border border-white/10">
           <Users className="h-2.5 w-2.5 text-accent" />
         </span>
@@ -256,9 +256,9 @@ export function InstanceGroupChat({ pack, myUuid, myUsername }: { pack: Modpack;
 
 function InstanceAvatar({ pack, className }: { pack: Modpack; className?: string }) {
   return pack.imageUrl ? (
-    <img src={pack.imageUrl} alt="" className={cn(className, "rounded-md object-cover")} draggable={false} />
+    <img src={pack.imageUrl} alt="" className={cn("rounded-md object-cover", className)} draggable={false} />
   ) : (
-    <div className={cn(className, "rounded-md bg-accent/20 text-accent font-bold flex items-center justify-center")}>
+    <div className={cn("rounded-md bg-accent/20 text-accent font-bold flex items-center justify-center", className)}>
       {pack.name.charAt(0).toUpperCase()}
     </div>
   );

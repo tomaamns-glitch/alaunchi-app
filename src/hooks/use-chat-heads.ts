@@ -6,9 +6,13 @@ import { notifyUser, isAppVisible } from "@/lib/notify";
 
 /** Incoming chat message: sound, plus a Windows notification if the launcher
  *  is minimized/in the tray (see notifyUser). Nothing at all if that very
- *  conversation is open on screen — you're already reading it. */
+ *  conversation is open on screen — you're already reading it — or if you
+ *  muted that person (right click on their chat bubble); the unread badge
+ *  still shows. */
 function notifyNewMessage(uuid: string, name: string, text: string) {
-  if (isAppVisible() && useChatHeads.getState().openUuid === uuid) return;
+  const { openUuid, mutedUuids } = useChatHeads.getState();
+  if (mutedUuids.has(uuid)) return;
+  if (isAppVisible() && openUuid === uuid) return;
   notifyUser({ title: name, body: text, iconUuid: uuid }).catch(() => {});
 }
 
@@ -31,7 +35,11 @@ interface ChatHeadsState {
   directory: Record<string, KnownUser>;
   openUuid: string | null;
   pinnedUuids: Set<string>;
+  /** Conversations whose new messages don't play a sound or show a Windows
+   *  notification. Per account, persisted. */
+  mutedUuids: Set<string>;
   init: (myUuid: string) => void;
+  toggleMute: (uuid: string) => void;
   openChat: (uuid: string) => void;
   minimizeChat: () => void;
   closeChat: (uuid: string) => void;
@@ -102,19 +110,32 @@ function savePinnedUuids(myUuid: string, pinnedUuids: Set<string>) {
   localStorage.setItem(pinnedStorageKey(myUuid), JSON.stringify(Array.from(pinnedUuids)));
 }
 
+// Muted chats, same per-account scoping as the pinned ones.
+const mutedStorageKey = (myUuid: string) => `alaunchi_muted_chats_${myUuid}`;
+
+function loadMutedUuids(myUuid: string): Set<string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(mutedStorageKey(myUuid)) || "[]");
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch {
+    return new Set();
+  }
+}
+
 export const useChatHeads = create<ChatHeadsState>((set, get) => ({
   myUuid: null,
   chatIndex: {},
   directory: {},
   openUuid: null,
   pinnedUuids: new Set(),
+  mutedUuids: new Set(),
 
   init: (myUuid) => {
     if (get().myUuid === myUuid) return;
     unsubscribeIndex?.();
     unsubscribeDirectory?.();
     unsubscribeFriendEvents?.();
-    set({ myUuid, chatIndex: {}, directory: {}, openUuid: null, pinnedUuids: loadPinnedUuids(myUuid) });
+    set({ myUuid, chatIndex: {}, directory: {}, openUuid: null, pinnedUuids: loadPinnedUuids(myUuid), mutedUuids: loadMutedUuids(myUuid) });
 
     let previous: Record<string, ChatIndexEntry> = {};
     unsubscribeIndex = subscribeChatIndex(myUuid, (index) => {
@@ -146,6 +167,19 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
   },
 
   minimizeChat: () => set({ openUuid: null }),
+
+  toggleMute: (uuid) => {
+    const { myUuid, mutedUuids } = get();
+    const next = new Set(mutedUuids);
+    if (next.has(uuid)) next.delete(uuid);
+    else next.add(uuid);
+    set({ mutedUuids: next });
+    if (myUuid) {
+      try {
+        localStorage.setItem(mutedStorageKey(myUuid), JSON.stringify(Array.from(next)));
+      } catch {}
+    }
+  },
 
   closeChat: (uuid) => {
     const { myUuid, openUuid, pinnedUuids } = get();

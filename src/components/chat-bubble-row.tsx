@@ -1,4 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
+import { Bell, BellOff } from "lucide-react";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
 import { useChatHeads, useVisibleChatBubbles } from "@/hooks/use-chat-heads";
@@ -15,6 +17,8 @@ export function ChatBubbleRow() {
   const openUuid = useChatHeads((s) => s.openUuid);
   const openChat = useChatHeads((s) => s.openChat);
   const minimizeChat = useChatHeads((s) => s.minimizeChat);
+  const mutedUuids = useChatHeads((s) => s.mutedUuids);
+  const toggleMute = useChatHeads((s) => s.toggleMute);
   const invites = useBarInvites();
 
   if (uuids.length === 0 && invites.length === 0) return <InviteCard />;
@@ -37,6 +41,8 @@ export function ChatBubbleRow() {
               username={entry?.otherUsername || directory[uuid]?.username || ""}
               unread={unread}
               active={active}
+              muted={mutedUuids.has(uuid)}
+              onToggleMute={() => toggleMute(uuid)}
               onClick={() => (active ? minimizeChat() : openChat(uuid))}
             />
           );
@@ -53,17 +59,25 @@ function ChatBubble({
   username,
   unread,
   active,
+  muted,
+  onToggleMute,
   onClick,
 }: {
   uuid: string;
   username: string;
   unread: number;
   active: boolean;
+  muted: boolean;
+  onToggleMute: () => void;
   onClick: () => void;
 }) {
   const headUrl = usePlayerHeadUrl(uuid);
 
+  // Right click → mute/unmute this person's notifications (sound + Windows
+  // notification; the unread badge still shows).
   return (
+    <ContextMenu>
+    <ContextMenuTrigger asChild>
     <motion.button
       layout
       initial={{ opacity: 0, scale: 0.7 }}
@@ -98,6 +112,19 @@ function ChatBubble({
           </motion.span>
         )}
       </AnimatePresence>
+      {muted && (
+        <span className="absolute -bottom-1 -right-1 h-4 w-4 flex items-center justify-center rounded-full bg-card border border-white/10 text-muted-foreground">
+          <BellOff className="h-2.5 w-2.5" />
+        </span>
+      )}
     </motion.button>
+    </ContextMenuTrigger>
+    <ContextMenuContent data-keep-popups-open className="min-w-[11rem]">
+      <ContextMenuItem onSelect={onToggleMute}>
+        {muted ? <Bell className="mr-2 h-3.5 w-3.5" /> : <BellOff className="mr-2 h-3.5 w-3.5" />}
+        {muted ? "Activar notificaciones" : "Silenciar"}
+      </ContextMenuItem>
+    </ContextMenuContent>
+    </ContextMenu>
   );
 }

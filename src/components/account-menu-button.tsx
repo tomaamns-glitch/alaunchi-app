@@ -299,7 +299,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.12 }}
-                  className="p-6 max-h-[70vh] overflow-y-auto"
+                  className="p-6"
                 >
                   <SkinManagerPanel
                     uuid={uuid}
@@ -402,7 +402,7 @@ function CharacterColumn({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center gap-2 shrink-0">
+    <div className="flex flex-col items-center gap-2 shrink-0 self-end">
       <div className="rounded-xl bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.18),transparent_70%)]">
         {skinUrl ? (
           <SkinViewerAnimated

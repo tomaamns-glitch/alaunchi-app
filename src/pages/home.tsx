@@ -30,6 +30,8 @@ import { OFFLINE_REASON_LABEL } from "@/lib/online-history";
 import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AccountMenuButton } from "@/components/account-menu-button";
+import { DRAWER_EXAMPLE_PACK, useOnlineViewMode } from "@/lib/online-view-mode";
+import { OnlineBannerTile } from "@/components/online-banner-tile";
 import { InstanceGroupChat } from "@/components/instance-group-chat";
 import { ChangelogHistoryButton } from "@/components/changelog-history-button";
 import { ChangelogViewerDialog } from "@/components/changelog-viewer-dialog";
@@ -564,6 +566,8 @@ export default function Home() {
   const modpacks = useCarouselModpacks();
   const isAdmin = useIsAdmin();
   const [redeemOpen, setRedeemOpen] = useState(false);
+  // Carousel (one banner at a time) or drawer (Hub-style page) — toggled from the titlebar.
+  const drawerView = useOnlineViewMode((s) => s.mode) === "drawer";
 
   const [currentIndex, setCurrentIndex] = useState(0);
   // Skin panel, players popup, "todos" dialog, and an open chat are all
@@ -668,7 +672,7 @@ export default function Home() {
   // pack (if any) is this page currently showing" in the same shape. A past
   // (out-of-network) instance has no instance chat/players anymore → general.
   const viewContext: ChatMode =
-    currentPack && !currentPack.outOfNetwork ? { type: "carousel", pack: currentPack } : { type: "general" };
+    !drawerView && currentPack && !currentPack.outOfNetwork ? { type: "carousel", pack: currentPack } : { type: "general" };
 
   useEffect(() => {
     if (currentPack) localStorage.setItem(CAROUSEL_POSITION_KEY, currentPack.id);
@@ -753,7 +757,40 @@ export default function Home() {
       <main className="flex-1 relative overflow-hidden min-h-0">
         {/* Only the first load blanks the page — a reload (Recargar, a redeemed
             code) keeps the current list and the footer's open popups. */}
-        {loading && modpacks.length === 0 ? (
+        {drawerView ? (
+          // Drawer view: same header card as the Hub ("Mis instancias"); the
+          // instances themselves come later.
+          <div className="absolute inset-0 flex flex-col px-6 pt-6 pb-4 gap-6">
+            <div className="relative shrink-0 rounded-xl border border-white/10 bg-card/40 p-5 overflow-hidden">
+              <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
+              <div className="relative min-w-0">
+                <h1 className="text-xl font-bold leading-tight">Instancias online</h1>
+                <p className="text-xs text-muted-foreground">
+                  {loading && modpacks.length === 0
+                    ? "Cargando…"
+                    : `${modpacks.length} instancia${modpacks.length === 1 ? "" : "s"}`}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(420px, 1fr))" }}>
+                {modpacks.map((pack) => (
+                  <OnlineBannerTile key={pack.id} pack={pack} onClick={() => setLocation(`/online/${pack.id}`)} />
+                ))}
+                {/* DEV: a fake one, to see how a banner looks without any real instance. */}
+                {import.meta.env.DEV && (
+                  <OnlineBannerTile
+                    pack={DRAWER_EXAMPLE_PACK}
+                    badge="Ejemplo"
+                    preview
+                    onClick={() => setLocation(`/online/${DRAWER_EXAMPLE_PACK.id}`)}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+        ) : loading && modpacks.length === 0 ? (
           // absolute inset-0 (not h-full) — same reasoning as the two states below:
           // main's real height only resolves reliably for absolutely-positioned children,
           // the same trick the loaded carousel below already relies on.
@@ -934,7 +971,7 @@ export default function Home() {
           </div>
 
           {/* Play button + content shortcuts only once there's a modpack. */}
-          {currentPack && (
+          {currentPack && !drawerView && (
             <>
               <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2">
                 <ModpackActionBar key={currentPack.id} pack={currentPack} />

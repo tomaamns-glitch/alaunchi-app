@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
@@ -299,16 +299,13 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
     </AnimatePresence>
   );
 
-  const libraryCols = gridCols(library.length);
-  const showcaseCols = gridCols(showcaseUsernames.length);
-  const capesCols = gridCols(profile?.capes.length ?? 0);
-
   return (
-    <div className="flex gap-4">
-      {/* Same size, backdrop and spot as the account menu's character, so
-          switching to "Personalizar" doesn't make it jump. */}
-      <div className="flex flex-col items-center gap-2 shrink-0">
-        <div className="rounded-xl bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.18),transparent_70%)]">
+    <div className="flex gap-6">
+      {/* Same size, backdrop and spot as the account menu's character column
+          (190×254, bottom-aligned), so switching to "Personalizar" doesn't make
+          it jump. */}
+      <div className="flex flex-col items-center gap-2 shrink-0 self-end">
+        <div className="relative rounded-xl bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.18),transparent_70%)]">
           <SkinViewerAnimated
             skinUrl={
               shownSkin
@@ -317,22 +314,20 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
             }
             capeUrl={shownCapeDataUrl}
             variant={shownVariant ?? "auto-detect"}
-            width={150}
-            height={200}
+            width={190}
+            height={254}
             effect={decoration}
             className="cursor-grab active:cursor-grabbing"
           />
-        </div>
-        {/* Space is always reserved (even with nothing to preview), so the
-            label showing up never pushes "Volver" around. */}
-        <div className="h-5 flex items-center justify-center">
+          {/* Over the viewer instead of below it, so the column keeps the same
+              height as in the other menu views. */}
           <AnimatePresence>
             {hasPreview && (
               <motion.span
                 initial={{ opacity: 0, y: -4 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -4 }}
-                className="px-2 py-0.5 rounded-full bg-accent/15 text-[9px] uppercase tracking-wide text-accent font-semibold whitespace-nowrap"
+                className="absolute bottom-1 left-1/2 -translate-x-1/2 pointer-events-none px-2 py-0.5 rounded-full bg-accent/15 text-[9px] uppercase tracking-wide text-accent font-semibold whitespace-nowrap"
               >
                 Vista previa
               </motion.span>
@@ -343,7 +338,7 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
         {previewActionsSlot ? createPortal(previewActions, previewActionsSlot) : previewActions}
       </div>
 
-      <AnimatedWidth>
+      <div className="w-[29rem] h-[300px] flex flex-col">
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="w-full bg-card/50 border border-white/5">
             <TabsTrigger value="library" className="flex-1 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground">
@@ -430,7 +425,7 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
             {library.length === 0 ? (
               <p className="text-xs text-muted-foreground text-center py-4">Aún no has guardado ninguna skin.</p>
             ) : (
-              <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${libraryCols}, ${TILE_WIDTH})` }}>
+              <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${GRID_COLS}, ${TILE_WIDTH})` }}>
                 {library.map((entry) => {
                   const key = `lib:${entry.id}`;
                   const equipped = entry.fileBase64 === activeSkinBase64;
@@ -499,7 +494,7 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
                 Añade un nombre de Minecraft para ver su skin actual aquí.
               </p>
             ) : (
-              <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${showcaseCols}, ${TILE_WIDTH})` }}>
+              <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${GRID_COLS}, ${TILE_WIDTH})` }}>
                 {showcaseUsernames.map((name) => (
                   <ShowcaseEntry
                     key={name}
@@ -526,7 +521,7 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
           {profile && profile.capes.length > 0 && (
             <TabsContent value="capes" className="mt-3">
               <TabBody>
-              <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${capesCols}, ${TILE_WIDTH})` }}>
+              <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${GRID_COLS}, ${TILE_WIDTH})` }}>
                 {profile.capes.map((cape) => {
                   const shown = cape.id === shownCapeId;
                   return (
@@ -555,7 +550,7 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
             </TabsContent>
           )}
         </Tabs>
-      </AnimatedWidth>
+      </div>
     </div>
   );
 }
@@ -590,13 +585,10 @@ function EquippedBadge() {
 // when switching tabs.
 const TILE_WIDTH = "4.5rem";
 
-/** Two rows fit the fixed-height tab body; past that, extra items add columns
- *  (the panel widens to the right) up to 6, and only then start scrolling. */
-function gridCols(count: number): number {
-  return Math.min(6, Math.max(3, Math.ceil(count / 2)));
-}
+/** Columns that fit the fixed 29rem panel; more items scroll down. */
+const GRID_COLS = 5;
 
-/** Fixed height (lines up with the character column on the left) so switching
+/** Fixed height (fills the 300px panel under the tabs, like the other menu views) so switching
  *  tabs never moves the panel up or down; each tab slides in from the right. */
 function TabBody({ children }: { children: React.ReactNode }) {
   return (
@@ -604,38 +596,9 @@ function TabBody({ children }: { children: React.ReactNode }) {
       initial={{ opacity: 0, x: 24 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-      className="h-[218px] overflow-y-auto overflow-x-hidden p-1.5 space-y-3"
+      className="h-[252px] overflow-y-auto overflow-x-hidden p-1.5 space-y-3"
     >
       {children}
-    </motion.div>
-  );
-}
-
-/** Animates its own width to whatever its content naturally needs — anchored
- *  on the left, so a wider tab grows the panel to the right and a narrower one
- *  pulls it back in. */
-function AnimatedWidth({ children }: { children: React.ReactNode }) {
-  const innerRef = useRef<HTMLDivElement | null>(null);
-  const [width, setWidth] = useState<number | "auto">("auto");
-
-  useLayoutEffect(() => {
-    const el = innerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setWidth(el.offsetWidth));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  return (
-    <motion.div
-      initial={false}
-      animate={{ width }}
-      transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-      className="overflow-hidden shrink-0"
-    >
-      <div ref={innerRef} className="w-max min-w-[16rem]">
-        {children}
-      </div>
     </motion.div>
   );
 }
