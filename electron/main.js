@@ -2423,6 +2423,13 @@ function normalizeGroupChoice(choice) {
   return { all: choice.all === true, selected, options };
 }
 
+// Files a player is expected to tweak (game options, mod configs…) as opposed
+// to content archives (mods, resource packs, shaders), which always follow the
+// published version. See the "player changed it locally" check in mc:install-snapshot.
+function isPlayerEditableFile(relPath) {
+  return !/\.(jar|zip|litemod)$/i.test(relPath);
+}
+
 ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manifest, baseUrl, token, optionalGroupChoice }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   acquireModpackOp(modpackId, "installing");
@@ -2548,14 +2555,25 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
       const disabledPath = `${destPath}${DISABLED_SUFFIX}`;
       if (await fs.stat(disabledPath).then(() => true, () => false)) destPath = disabledPath;
     }
+    let existsOnDisk = false;
     try {
       const stat = await fs.stat(destPath);
+      existsOnDisk = true;
       if (stat.size === f.size && (f.size === 0 || (await hashFile(destPath)) === f.hash)) {
         done++;
         sendProgress();
         continue;
       }
     } catch {}
+    // A config-type file (options.txt, config/*.toml/json…, anything that
+    // isn't a .jar/.zip) the player changed locally is theirs: an update only
+    // overwrites it when the admin actually changed that file since the
+    // version the player has. Before, every update reverted all of them.
+    if (existsOnDisk && isPlayerEditableFile(f.path) && oldByPath.get(f.path)?.hash === f.hash) {
+      done++;
+      sendProgress();
+      continue;
+    }
     // The user deliberately deleted this optional file — don't restore it, unless
     // the admin has since made it mandatory again in this manifest.
     if (f.required === false && removedOptionalPaths.has(f.path)) {
