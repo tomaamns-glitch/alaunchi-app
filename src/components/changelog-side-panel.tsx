@@ -24,15 +24,28 @@ function formatDate(iso: string): string {
  * Vertical "Novedades" panel on the online instance page: every publish's
  * changelog, newest first (same data as the carousel's history button). Each
  * card shows title, version, date and a short preview; clicking it opens the
- * full viewer. `history` overrides the fetch (dev example pack).
+ * full viewer. Pass `history` (null = still loading) when the caller already
+ * has the manifest — then nothing is fetched here.
  */
-export function ChangelogSidePanel({ pack, history: given }: { pack: Modpack; history?: ChangelogEntry[] }) {
-  const [history, setHistory] = useState<ChangelogEntry[] | null>(given ?? null);
-  const [error, setError] = useState(false);
+export function ChangelogSidePanel({
+  pack,
+  history: given,
+  error: givenError = false,
+}: {
+  pack: Modpack;
+  history?: ChangelogEntry[] | null;
+  error?: boolean;
+}) {
+  const controlled = given !== undefined;
+  const [fetched, setFetched] = useState<ChangelogEntry[] | null>(null);
+  const [fetchError, setError] = useState(false);
+  const history = controlled ? given : fetched;
+  const error = controlled ? givenError : fetchError;
+  const setHistory = setFetched;
   const [selected, setSelected] = useState<ChangelogEntry | null>(null);
 
   useEffect(() => {
-    if (given) return;
+    if (controlled) return;
     let cancelled = false;
     setHistory(null);
     setError(false);
@@ -53,7 +66,7 @@ export function ChangelogSidePanel({ pack, history: given }: { pack: Modpack; hi
     };
     // Only when the pack changes (or a new version is published).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pack.id, pack.version, given]);
+  }, [pack.id, pack.version, controlled]);
 
   return (
     <aside className="h-full flex flex-col rounded-md border border-white/10 bg-gray-500/10 backdrop-blur-md overflow-hidden">
