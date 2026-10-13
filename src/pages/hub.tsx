@@ -8,6 +8,7 @@ import { useDragReorder } from "@/hooks/use-drag-reorder";
 import { AccountMenuButton } from "@/components/account-menu-button";
 import { ChatBubbleRow } from "@/components/chat-bubble-row";
 import { ChatWindow } from "@/components/chat-window";
+import { GroupChatNotifications } from "@/components/instance-group-chat";
 import { PresenceButton } from "@/components/presence-button";
 import { useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { NewInstanceDialog } from "@/components/new-instance-dialog";
@@ -15,13 +16,10 @@ import { NewFolderDialog } from "@/components/new-folder-dialog";
 import { HubSidebar, type HubView } from "@/components/hub-sidebar";
 import { InstanceTile } from "@/components/hub-tile";
 import { Button } from "@/components/ui/button";
-import SwellLight from "@/components/swell-light";
-import { StaticGlow } from "@/components/static-glow";
-import { useAnimatedBackground } from "@/lib/animated-background";
+import { AppBackground } from "@/components/app-background";
 import { CurseForgeImportDialog, CurseForgeLogo } from "@/components/curseforge-import-dialog";
 import { ModrinthModpacksDialog } from "@/components/modrinth-modpacks-dialog";
 import { ModrinthGlyph } from "@/components/admin-modrinth-browser";
-import { useTheme } from "@/lib/theme";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
@@ -34,8 +32,6 @@ const TILE_MIN = 140;
 const TILE_MAX = 340;
 
 export default function Hub() {
-  const theme = useTheme((s) => s.theme);
-  const animatedBackground = useAnimatedBackground((s) => s.enabled);
   const [curseForgeOpen, setCurseForgeOpen] = useState(false);
   const [modrinthOpen, setModrinthOpen] = useState(false);
   const { isAuthenticated, username, uuid } = useAuth();
@@ -157,32 +153,8 @@ export default function Hub() {
 
   return (
     <div className="relative h-full overflow-hidden bg-background text-foreground flex flex-col">
-      {/* Animated background: soft blue light rolling across the window, with
-          a glowing trail behind the cursor (components/swell-light.tsx), under
-          every card (z-0). Colors follow the theme — on a light background the
-          light needs a darker blue and dark (not white) highlights to show. */}
-      <div
-        className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
-        style={{ opacity: theme === "light" ? 0.6 : 0.9 }}
-        aria-hidden
-      >
-        {animatedBackground ? (
-          <SwellLight
-            key={theme}
-            color={theme === "light" ? "hsl(208 92% 44%)" : "#259DF4"}
-            glintColor={theme === "light" ? "#0b2f5c" : "#7fc4ff"}
-            // Mostly dark: only the crests of the swell light up, highlights
-            // stay faint, and the cursor leaves a small, short trail.
-            contrast={2.2}
-            glint={0.3}
-            cursorSize={18}
-            cursorStrength={0.6}
-            trail={0.9}
-          />
-        ) : (
-          <StaticGlow color={theme === "light" ? "hsl(208 92% 44%)" : "#259DF4"} />
-        )}
-      </div>
+      {/* Animated background, under every card (z-0). */}
+      <AppBackground />
       <div className="relative z-10 flex-1 flex flex-col min-h-0 px-6 pt-6 pb-4 gap-6">
         {/* Same floating glass-card treatment as the Perfil header — rounded-xl,
             bg-card/40, one scoped accent glow — instead of the old flush,
@@ -330,7 +302,7 @@ export default function Hub() {
       />
       <NewFolderDialog open={newFolderOpen} onOpenChange={setNewFolderOpen} onCreate={createFolder} />
 
-      <footer className="relative z-20 h-20 border-t border-white/5 bg-card/50 backdrop-blur flex items-center px-6 shrink-0">
+      <footer className="relative z-20 h-20 border-t border-white/5 bg-card/50 backdrop-blur flex items-center justify-between px-6 shrink-0">
         <div className="flex items-center gap-1">
           <AccountMenuButton uuid={uuid} username={username} />
           {uuid && (
@@ -347,6 +319,8 @@ export default function Hub() {
             </div>
           )}
         </div>
+        {/* Someone wrote in one of your online instances' group chats. */}
+        {uuid && <GroupChatNotifications myUuid={uuid} myUsername={username ?? ""} />}
       </footer>
     </div>
   );

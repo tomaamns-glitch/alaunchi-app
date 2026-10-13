@@ -30,9 +30,12 @@ import { OFFLINE_REASON_LABEL } from "@/lib/online-history";
 import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AccountMenuButton } from "@/components/account-menu-button";
-import { DRAWER_EXAMPLE_PACK, useOnlineViewMode } from "@/lib/online-view-mode";
+import { DRAWER_EXAMPLE_MEMBERS, DRAWER_EXAMPLE_PACK, useOnlineViewMode } from "@/lib/online-view-mode";
+import { OnlineNowPanel } from "@/components/online-now-panel";
+import { playingNow, useInstancesPresence } from "@/hooks/use-instances-presence";
 import { OnlineBannerTile } from "@/components/online-banner-tile";
-import { InstanceGroupChat } from "@/components/instance-group-chat";
+import { AppBackground } from "@/components/app-background";
+import { GroupChatNotifications, InstanceGroupChat } from "@/components/instance-group-chat";
 import { ChangelogHistoryButton } from "@/components/changelog-history-button";
 import { ChangelogViewerDialog } from "@/components/changelog-viewer-dialog";
 import { PresenceButton } from "@/components/presence-button";
@@ -558,6 +561,8 @@ function OutOfNetworkNotice({ reason }: { reason: OfflineReason }) {
 type JavaStatus = "checking" | "ok" | "missing";
 type JavaInstallStage = "idle" | "fetching" | "downloading" | "extracting" | "done";
 
+const NO_PACKS: Modpack[] = [];
+
 export default function Home() {
   const { isAuthenticated, username, uuid } = useAuth();
   const [, setLocation] = useLocation();
@@ -568,6 +573,8 @@ export default function Home() {
   const [redeemOpen, setRedeemOpen] = useState(false);
   // Carousel (one banner at a time) or drawer (Hub-style page) — toggled from the titlebar.
   const drawerView = useOnlineViewMode((s) => s.mode) === "drawer";
+  // Drawer view: live rosters of every online instance (tile counts + "Jugando ahora").
+  const drawerPresence = useInstancesPresence(drawerView ? modpacks : NO_PACKS);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   // Skin panel, players popup, "todos" dialog, and an open chat are all
@@ -760,7 +767,10 @@ export default function Home() {
         {drawerView ? (
           // Drawer view: same header card as the Hub ("Mis instancias"); the
           // instances themselves come later.
-          <div className="absolute inset-0 flex flex-col px-6 pt-6 pb-4 gap-6">
+          <div className="absolute inset-0 flex flex-col">
+          {/* Same animated background as the Hub, under everything (z-0). */}
+          <AppBackground />
+          <div className="relative z-10 flex-1 min-h-0 flex flex-col px-6 pt-6 pb-4 gap-6">
             <div className="relative shrink-0 rounded-xl border border-white/10 bg-card/40 p-5 overflow-hidden">
               <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
               <div className="relative min-w-0">
@@ -773,22 +783,41 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto">
-              <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(420px, 1fr))" }}>
-                {modpacks.map((pack) => (
-                  <OnlineBannerTile key={pack.id} pack={pack} onClick={() => setLocation(`/online/${pack.id}`)} />
-                ))}
-                {/* DEV: a fake one, to see how a banner looks without any real instance. */}
-                {import.meta.env.DEV && (
-                  <OnlineBannerTile
-                    pack={DRAWER_EXAMPLE_PACK}
-                    badge="Ejemplo"
-                    preview
-                    onClick={() => setLocation(`/online/${DRAWER_EXAMPLE_PACK.id}`)}
-                  />
-                )}
+            <div className="flex-1 min-h-0 flex gap-4">
+              <div className="flex-1 min-w-0 overflow-y-auto">
+                <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(420px, 1fr))" }}>
+                  {modpacks.map((pack) => (
+                    <OnlineBannerTile
+                      key={pack.id}
+                      pack={pack}
+                      playingCount={pack.outOfNetwork ? undefined : playingNow(drawerPresence[pack.id], uuid).length}
+                      onClick={() => setLocation(`/online/${pack.id}`)}
+                    />
+                  ))}
+                  {/* DEV: a fake one, to see how a banner looks without any real instance. */}
+                  {import.meta.env.DEV && (
+                    <OnlineBannerTile
+                      pack={DRAWER_EXAMPLE_PACK}
+                      badge="Ejemplo"
+                      preview
+                      playingCount={playingNow(DRAWER_EXAMPLE_MEMBERS, uuid).length}
+                      onClick={() => setLocation(`/online/${DRAWER_EXAMPLE_PACK.id}`)}
+                    />
+                  )}
+                </div>
+              </div>
+
+              {/* Who's playing your online instances right now. */}
+              <div className="w-72 shrink-0 min-h-0 flex flex-col">
+                <OnlineNowPanel
+                  packs={modpacks}
+                  presence={drawerPresence}
+                  myUuid={uuid}
+                  onOpenPack={(p) => setLocation(`/online/${p.id}`)}
+                />
               </div>
             </div>
+          </div>
           </div>
         ) : loading && modpacks.length === 0 ? (
           // absolute inset-0 (not h-full) — same reasoning as the two states below:
@@ -969,6 +998,9 @@ export default function Home() {
               </div>
             )}
           </div>
+
+          {/* Drawer view: someone wrote in one of your online instances' group chats. */}
+          {drawerView && uuid && <GroupChatNotifications myUuid={uuid} myUsername={username ?? ""} />}
 
           {/* Play button + content shortcuts only once there's a modpack. */}
           {currentPack && !drawerView && (

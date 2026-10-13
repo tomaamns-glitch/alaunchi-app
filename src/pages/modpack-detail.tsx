@@ -1,6 +1,7 @@
 import { memo, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useLocation, useParams } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
+import { createPortal } from "react-dom";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { DRAWER_EXAMPLE_PACK } from "@/lib/online-view-mode";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
@@ -540,7 +541,14 @@ export default function ModpackDetail() {
   return <ModpackManager />;
 }
 
-export function ModpackManager({ embeddedId }: { embeddedId?: string }) {
+/** Elements of the embedding page that receive the manager's Play group and
+ *  "Contenido adicional" card (see playGroup/extrasCard). */
+export interface ManagerHeaderSlots {
+  actions: HTMLElement | null;
+  extras: HTMLElement | null;
+}
+
+export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slots?: ManagerHeaderSlots }) {
   const params = useParams<{ id: string }>();
   const id = embeddedId ?? params.id;
   const embedded = !!embeddedId;
@@ -2074,6 +2082,204 @@ export function ModpackManager({ embeddedId }: { embeddedId?: string }) {
     </AnimatePresence>
   );
 
+  // ⋮ + Play (+ playtime) and the "Contenido adicional" card. Inline in the
+  // header; embedded (the online instance page) they're portaled into that
+  // page's own header card instead, so they're shown on every view.
+  const playGroup = pack.installed ? (
+    // items-start, not center: the Play column has the playtime under
+    // the button, and centering against the whole column left the ⋮
+    // lower than the button itself. Both are h-9, so tops line up.
+    <div className={`flex items-start shrink-0 ${embedded ? "gap-2" : "gap-1.5"}`}>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`shrink-0 rounded-md border-white/15 bg-white/5 text-gray-300 hover:bg-white/10 hover:border-white/25 hover:text-white data-[state=open]:bg-white/10 data-[state=open]:border-white/25 data-[state=open]:text-white ${embedded ? "h-11 w-11" : ""}`}
+            aria-label="Más opciones"
+          >
+            <MoreVertical className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={() => setTimeout(() => setSettingsOpen(true), 0)}>
+            <Settings2 className="mr-2 h-4 w-4" />
+            Configuración
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={async () => {
+              try {
+                await openInstanceFolder(pack.id);
+              } catch (e: any) {
+                toast.error(e?.message || "No se pudo abrir la carpeta.");
+              }
+            }}
+          >
+            <FolderOpen className="mr-2 h-4 w-4" />
+            Abrir carpeta
+          </DropdownMenuItem>
+          {pack.source === "custom" && (
+            <DropdownMenuItem onSelect={() => setTimeout(() => setSharingInstance(true), 0)}>
+              <Share2 className="mr-2 h-4 w-4" />
+              Compartir
+            </DropdownMenuItem>
+          )}
+          {pack.source === "custom" && (
+            <DropdownMenuItem onSelect={() => setTimeout(() => setDuplicatingInstance(true), 0)}>
+              <Copy className="mr-2 h-4 w-4" />
+              Duplicar
+            </DropdownMenuItem>
+          )}
+          {pack.source === "custom" && (
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onClick={() => {
+                setKeepInstanceFiles(false);
+                setDeleteConfirmOpen(true);
+              }}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Eliminar instancia
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <div className="flex flex-col items-center gap-1 shrink-0">
+        {playProgress.active ? (
+          <InstanceProgressChip
+            entry={playProgress.entry}
+            runState={playProgress.runState}
+            status={playProgress.status}
+            installed={!!pack.installed}
+            online={pack.source !== "custom"}
+            size={36}
+            className="w-60"
+          />
+        ) : (
+        <Button
+          ref={playButtonRef}
+          onClick={playToggle}
+          disabled={playBusy}
+          className={`shrink-0 border-transparent font-bold gap-1.5 ${embedded ? "h-11 px-6 text-base" : ""} ${
+            playRunning
+              ? "bg-red-600 hover:bg-red-500 text-white"
+              : "bg-accent hover:bg-accent/90 text-accent-foreground"
+          }`}
+        >
+          {playBusy ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : playRunning ? (
+            <Square className="h-4 w-4 fill-current" />
+          ) : (
+            <Play className="h-4 w-4 fill-current" />
+          )}
+          {playBusy
+            ? runStateBusyLabel(playRunState)
+            : playRunning
+              ? "CERRAR"
+              : pack.updateAvailable
+                ? "ACTUALIZAR Y JUGAR"
+                : "JUGAR"}
+        </Button>
+        )}
+        {totalPlaytimeMs > 0 && (
+          <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+            {formatPlaytime(totalPlaytimeMs)}
+          </span>
+        )}
+      </div>
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Eliminar "{pack.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {keepInstanceFiles
+                ? "La instancia dejará de aparecer en la app, pero sus archivos (mods, partidas guardadas, configuración) se quedarán en el equipo."
+                : "Se borrará toda la instancia (mods, partidas guardadas, configuración) de este equipo. Esta acción no se puede deshacer."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
+            <Checkbox
+              checked={keepInstanceFiles}
+              onCheckedChange={(v) => setKeepInstanceFiles(v === true)}
+              disabled={deletingInstance}
+            />
+            Conservar los archivos de la instancia
+          </label>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingInstance}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deletingInstance}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={async (e) => {
+                e.preventDefault();
+                setDeletingInstance(true);
+                try {
+                  // Call the IPC directly rather than the store's deleteInstance
+                  // action — that also removes the instance from the shared
+                  // Zustand array, which would flip `pack` to undefined while
+                  // this page is still mounted and crash the hook count (there
+                  // are hooks declared after the `if (!pack) return` above).
+                  // Navigating away first, then letting the Hub's own mount
+                  // effect reload the list, sidesteps that entirely.
+                  await deleteInstanceIpc(pack.id, keepInstanceFiles);
+                  toast.success(
+                    keepInstanceFiles
+                      ? `${pack.name} quitada de la app (archivos conservados).`
+                      : `${pack.name} eliminada.`
+                  );
+                  setLocation("/hub");
+                } catch (err: any) {
+                  toast.error(err?.message || "No se pudo eliminar la instancia.");
+                } finally {
+                  setDeletingInstance(false);
+                  setDeleteConfirmOpen(false);
+                }
+              }}
+            >
+              {deletingInstance && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {keepInstanceFiles ? "Quitar" : "Eliminar"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  ) : null;
+  const extrasCard =
+    hasExtras && extraGroups ? (
+    <div className={`${embedded ? "flex h-full w-80" : "hidden md:flex flex-1"} min-w-0 items-center gap-3 bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4`}>
+      <div className="h-11 w-11 shrink-0 rounded-md bg-accent/15 text-accent flex items-center justify-center">
+        <Layers className="h-5 w-5" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-white truncate">Contenido adicional</p>
+        <p className="text-[11px] text-muted-foreground truncate">
+          {extraGroups.groups.length + extraGroups.selectable.length} grupo
+          {extraGroups.groups.length + extraGroups.selectable.length === 1 ? " opcional" : "s opcionales"}
+        </p>
+      </div>
+      <Button
+        variant="ghost"
+        onClick={() => {
+          // Embedded the card stays visible from a mod's page or the search too.
+          setSelectedModPath(null);
+          setSearchMode(false);
+          setEmotesOpen(false);
+          setSchematicsOpen(false);
+          setScreenshotsOpen(false);
+          setExtrasOpen((v) => !v);
+        }}
+        className={`h-9 px-4 shrink-0 text-xs font-bold border ${
+          extrasOpen
+            ? "border-white/15 bg-white/10 text-white hover:bg-white/15"
+            : "border-accent/30 bg-accent/15 text-accent hover:bg-accent/25"
+        }`}
+      >
+        {extrasOpen ? "Cerrar" : "Ver"}
+      </Button>
+    </div>
+    ) : null;
+
   return (
     <div
       ref={outerRef}
@@ -2299,199 +2505,11 @@ export function ModpackManager({ embeddedId }: { embeddedId?: string }) {
                 )}
               </div>
             )}
-            {!selectedModPath && !searchMode && pack.installed && (
-              // items-start, not center: the Play column has the playtime under
-              // the button, and centering against the whole column left the ⋮
-              // lower than the button itself. Both are h-9, so tops line up.
-              <div className="flex items-start gap-1.5 shrink-0">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="shrink-0 rounded-md border-white/15 bg-white/5 text-gray-300 hover:bg-white/10 hover:border-white/25 hover:text-white data-[state=open]:bg-white/10 data-[state=open]:border-white/25 data-[state=open]:text-white"
-                      aria-label="Más opciones"
-                    >
-                      <MoreVertical className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onSelect={() => setTimeout(() => setSettingsOpen(true), 0)}>
-                      <Settings2 className="mr-2 h-4 w-4" />
-                      Configuración
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={async () => {
-                        try {
-                          await openInstanceFolder(pack.id);
-                        } catch (e: any) {
-                          toast.error(e?.message || "No se pudo abrir la carpeta.");
-                        }
-                      }}
-                    >
-                      <FolderOpen className="mr-2 h-4 w-4" />
-                      Abrir carpeta
-                    </DropdownMenuItem>
-                    {pack.source === "custom" && (
-                      <DropdownMenuItem onSelect={() => setTimeout(() => setSharingInstance(true), 0)}>
-                        <Share2 className="mr-2 h-4 w-4" />
-                        Compartir
-                      </DropdownMenuItem>
-                    )}
-                    {pack.source === "custom" && (
-                      <DropdownMenuItem onSelect={() => setTimeout(() => setDuplicatingInstance(true), 0)}>
-                        <Copy className="mr-2 h-4 w-4" />
-                        Duplicar
-                      </DropdownMenuItem>
-                    )}
-                    {pack.source === "custom" && (
-                      <DropdownMenuItem
-                        className="text-destructive focus:text-destructive"
-                        onClick={() => {
-                          setKeepInstanceFiles(false);
-                          setDeleteConfirmOpen(true);
-                        }}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Eliminar instancia
-                      </DropdownMenuItem>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <div className="flex flex-col items-center gap-1 shrink-0">
-                  {playProgress.active ? (
-                    <InstanceProgressChip
-                      entry={playProgress.entry}
-                      runState={playProgress.runState}
-                      status={playProgress.status}
-                      installed={!!pack.installed}
-                      online={pack.source !== "custom"}
-                      size={36}
-                      className="w-60"
-                    />
-                  ) : (
-                  <Button
-                    ref={playButtonRef}
-                    onClick={playToggle}
-                    disabled={playBusy}
-                    className={`shrink-0 border-transparent font-bold gap-1.5 ${
-                      playRunning
-                        ? "bg-red-600 hover:bg-red-500 text-white"
-                        : "bg-accent hover:bg-accent/90 text-accent-foreground"
-                    }`}
-                  >
-                    {playBusy ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : playRunning ? (
-                      <Square className="h-4 w-4 fill-current" />
-                    ) : (
-                      <Play className="h-4 w-4 fill-current" />
-                    )}
-                    {playBusy
-                      ? runStateBusyLabel(playRunState)
-                      : playRunning
-                        ? "CERRAR"
-                        : pack.updateAvailable
-                          ? "ACTUALIZAR Y JUGAR"
-                          : "JUGAR"}
-                  </Button>
-                  )}
-                  {totalPlaytimeMs > 0 && (
-                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                      {formatPlaytime(totalPlaytimeMs)}
-                    </span>
-                  )}
-                </div>
-                <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>¿Eliminar "{pack.name}"?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        {keepInstanceFiles
-                          ? "La instancia dejará de aparecer en la app, pero sus archivos (mods, partidas guardadas, configuración) se quedarán en el equipo."
-                          : "Se borrará toda la instancia (mods, partidas guardadas, configuración) de este equipo. Esta acción no se puede deshacer."}
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
-                      <Checkbox
-                        checked={keepInstanceFiles}
-                        onCheckedChange={(v) => setKeepInstanceFiles(v === true)}
-                        disabled={deletingInstance}
-                      />
-                      Conservar los archivos de la instancia
-                    </label>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel disabled={deletingInstance}>Cancelar</AlertDialogCancel>
-                      <AlertDialogAction
-                        disabled={deletingInstance}
-                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                        onClick={async (e) => {
-                          e.preventDefault();
-                          setDeletingInstance(true);
-                          try {
-                            // Call the IPC directly rather than the store's deleteInstance
-                            // action — that also removes the instance from the shared
-                            // Zustand array, which would flip `pack` to undefined while
-                            // this page is still mounted and crash the hook count (there
-                            // are hooks declared after the `if (!pack) return` above).
-                            // Navigating away first, then letting the Hub's own mount
-                            // effect reload the list, sidesteps that entirely.
-                            await deleteInstanceIpc(pack.id, keepInstanceFiles);
-                            toast.success(
-                              keepInstanceFiles
-                                ? `${pack.name} quitada de la app (archivos conservados).`
-                                : `${pack.name} eliminada.`
-                            );
-                            setLocation("/hub");
-                          } catch (err: any) {
-                            toast.error(err?.message || "No se pudo eliminar la instancia.");
-                          } finally {
-                            setDeletingInstance(false);
-                            setDeleteConfirmOpen(false);
-                          }
-                        }}
-                      >
-                        {deletingInstance && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                        {keepInstanceFiles ? "Quitar" : "Eliminar"}
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              </div>
-            )}
+            {!embedded && !selectedModPath && !searchMode && playGroup}
           </div>
           {/* Contenido adicional: its own card in the free space right of the
               pack header (only on the pack's main view, like the Play group). */}
-          {hasExtras && !selectedModPath && !searchMode && extraGroups && (
-            <div className="hidden md:flex flex-1 min-w-0 items-center gap-3 bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4">
-              <div className="h-11 w-11 shrink-0 rounded-md bg-accent/15 text-accent flex items-center justify-center">
-                <Layers className="h-5 w-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-white truncate">Contenido adicional</p>
-                <p className="text-[11px] text-muted-foreground truncate">
-                  {extraGroups.groups.length + extraGroups.selectable.length} grupo
-                  {extraGroups.groups.length + extraGroups.selectable.length === 1 ? " opcional" : "s opcionales"}
-                </p>
-              </div>
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setEmotesOpen(false);
-                  setSchematicsOpen(false);
-                  setScreenshotsOpen(false);
-                  setExtrasOpen((v) => !v);
-                }}
-                className={`h-9 px-4 shrink-0 text-xs font-bold border ${
-                  extrasOpen
-                    ? "border-white/15 bg-white/10 text-white hover:bg-white/15"
-                    : "border-accent/30 bg-accent/15 text-accent hover:bg-accent/25"
-                }`}
-              >
-                {extrasOpen ? "Cerrar" : "Ver"}
-              </Button>
-            </div>
-          )}
+          {!embedded && !selectedModPath && !searchMode && extrasCard}
         </div>
         </div>
       </div>
@@ -3745,6 +3763,8 @@ export function ModpackManager({ embeddedId }: { embeddedId?: string }) {
         </DialogContent>
       </Dialog>
       <InstanceSettingsDialog pack={pack} open={settingsOpen} onOpenChange={setSettingsOpen} />
+      {embedded && slots?.actions && playGroup && createPortal(playGroup, slots.actions)}
+      {embedded && slots?.extras && extrasCard && createPortal(extrasCard, slots.extras)}
     </div>
   );
 }
