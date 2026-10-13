@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { create } from "zustand";
 import { AnimatePresence, motion } from "framer-motion";
-import { Minus, Paperclip, Send, Users } from "lucide-react";
+import { MessagesSquare, Minus, Paperclip, Send, Users } from "lucide-react";
 import { format } from "date-fns";
 import { Head } from "@/components/player-picker";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
@@ -20,6 +21,7 @@ import { getNicknames } from "@/lib/nicknames";
 import { playNotificationSound } from "@/lib/notification-sound";
 import { cn } from "@/lib/utils";
 import type { Modpack } from "@/services/github";
+import { useModpacks } from "@/hooks/use-modpacks";
 import { ChatContentPicker } from "@/components/lazy-heavy";
 import { SharedContentCard } from "@/components/chat-window";
 
@@ -90,12 +92,16 @@ function GroupChatBody({
   myUsername,
   room,
   onMinimize,
+  panel = false,
 }: {
   pack: Modpack;
   myUuid: string;
   myUsername: string;
   room: GroupRoom;
   onMinimize?: () => void;
+  /** The online instance page: plain "Chat de grupo" header like its other
+   *  panels (no instance, player count or heads — the page already shows them). */
+  panel?: boolean;
 }) {
   const { messages, members, nicknames, roster, onlineCount } = room;
   const [draft, setDraft] = useState("");
@@ -111,6 +117,22 @@ function GroupChatBody({
 
   return (
     <>
+      {panel ? (
+        <div className="shrink-0 flex items-center gap-2 px-4 py-3 border-b border-white/5">
+          <MessagesSquare className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-semibold text-white">Chat de grupo</h3>
+          {onMinimize && (
+            <button
+              type="button"
+              onClick={onMinimize}
+              title="Minimizar"
+              className="ml-auto h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors shrink-0"
+            >
+              <Minus className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      ) : (
       <div className="px-4 py-3 border-b border-white/10 flex items-center gap-3">
         <InstanceAvatar pack={pack} className="h-9 w-9" />
         <div className="min-w-0 flex-1">
@@ -140,6 +162,7 @@ function GroupChatBody({
           </button>
         )}
       </div>
+      )}
 
       <div ref={room.scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-1">
         {messages.length === 0 ? (
@@ -244,11 +267,34 @@ function GroupChatBody({
   );
 }
 
+// Which group chat popup is open (its groupKey) — so with several buttons in
+// the footer (GroupChatNotifications) opening one closes the others.
+const useOpenGroupChat = create<{ key: string | null; set: (key: string | null) => void }>((set) => ({
+  key: null,
+  set: (key) => set({ key }),
+}));
+
 /** Footer button (next to Jugadores, styled like a chat head but showing the
  *  instance's picture) + the group chat of that online instance: one room for
  *  everyone who plays it. Mutually exclusive with the other footer popups —
  *  opening it closes them, and opening any of them closes this. */
-export function InstanceGroupChat({ pack, myUuid, myUsername }: { pack: Modpack; myUuid: string; myUsername: string }) {
+export function InstanceGroupChat({
+  pack,
+  myUuid,
+  myUsername,
+  plainHeader = false,
+  onlyWhenUnread = false,
+}: {
+  pack: Modpack;
+  myUuid: string;
+  myUsername: string;
+  /** The online instance page's header ("Chat de grupo", see GroupChatBody's `panel`). */
+  plainHeader?: boolean;
+  /** Notification mode (GroupChatNotifications): the button only shows while
+   *  there are unread messages or the room is open. Stays mounted regardless,
+   *  to keep listening. */
+  onlyWhenUnread?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const room = useGroupRoom(pack, myUuid, open);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -264,6 +310,11 @@ export function InstanceGroupChat({ pack, myUuid, myUsername }: { pack: Modpack;
   }, [overlayActive, openUuid]);
   // Switching carousel instance closes the room of the previous one.
   useEffect(() => setOpen(false), [room.groupKey]);
+  // Another group chat button opening closes this one.
+  const openGroupKey = useOpenGroupChat((s) => s.key);
+  useEffect(() => {
+    if (openGroupKey !== room.groupKey) setOpen(false);
+  }, [openGroupKey, room.groupKey]);
 
   useDismissOnOutsideClick([panelRef, buttonRef], () => setOpen(false), open);
 
@@ -272,8 +323,11 @@ export function InstanceGroupChat({ pack, myUuid, myUsername }: { pack: Modpack;
       useHeaderOverlay.getState().close();
       useChatHeads.getState().minimizeChat();
     }
+    useOpenGroupChat.getState().set(open ? null : room.groupKey);
     setOpen((v) => !v);
   };
+
+  if (onlyWhenUnread && !open && room.unread === 0) return null;
 
   return (
     <div className="relative" data-keep-popups-open>
@@ -288,7 +342,7 @@ export function InstanceGroupChat({ pack, myUuid, myUsername }: { pack: Modpack;
             style={{ left: panelShift }}
             className="absolute bottom-full left-0 mb-2 z-40 flex flex-col w-[36rem] max-w-[calc(100vw-24px)] h-[30rem] rounded-lg bg-card/95 backdrop-blur border border-white/10 shadow-2xl overflow-hidden"
           >
-            <GroupChatBody pack={pack} myUuid={myUuid} myUsername={myUsername} room={room} onMinimize={() => setOpen(false)} />
+            <GroupChatBody pack={pack} myUuid={myUuid} myUsername={myUsername} room={room} onMinimize={() => setOpen(false)} panel={plainHeader} />
           </motion.div>
         )}
       </AnimatePresence>
@@ -335,7 +389,7 @@ export function InstanceGroupChatPanel({ pack, myUuid, myUsername }: { pack: Mod
   const room = useGroupRoom(pack, myUuid, true);
   return (
     <aside className="h-full flex flex-col rounded-md border border-white/10 bg-gray-500/10 backdrop-blur-md overflow-hidden">
-      <GroupChatBody pack={pack} myUuid={myUuid} myUsername={myUsername} room={room} />
+      <GroupChatBody pack={pack} myUuid={myUuid} myUsername={myUsername} room={room} panel />
     </aside>
   );
 }
@@ -346,6 +400,23 @@ function InstanceAvatar({ pack, className }: { pack: Modpack; className?: string
   ) : (
     <div className={cn("rounded-md bg-accent/20 text-accent font-bold flex items-center justify-center", className)}>
       {pack.name.charAt(0).toUpperCase()}
+    </div>
+  );
+}
+
+/** Right side of the footer in Inicio's drawer view and the Hub: a group chat
+ *  button for every online instance you're in, shown only while it has
+ *  unread messages — the "someone wrote in X's group" notification. Clicking
+ *  opens that group chat right there; once read and closed it goes away. */
+export function GroupChatNotifications({ myUuid, myUsername }: { myUuid: string; myUsername: string }) {
+  const modpacks = useModpacks((s) => s.modpacks);
+  // Past instances (outOfNetwork, no repoUrl) have no group chat anymore.
+  const rooms = modpacks.filter((p) => !p.outOfNetwork && p.repoUrl);
+  return (
+    <div className="flex items-center gap-1.5">
+      {rooms.map((p) => (
+        <InstanceGroupChat key={groupKeyFor(p)} pack={p} myUuid={myUuid} myUsername={myUsername} onlyWhenUnread />
+      ))}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Loader2, Sparkles } from "lucide-react";
+import { ChevronDown, Loader2, Sparkles } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { ChangelogViewerDialog } from "@/components/changelog-viewer-dialog";
 import { fetchSnapshot, type ChangelogEntry, type Modpack } from "@/services/github";
@@ -31,10 +32,18 @@ export function ChangelogSidePanel({
   pack,
   history: given,
   error: givenError = false,
+  collapsed = false,
+  onToggleCollapsed,
+  className,
 }: {
   pack: Modpack;
   history?: ChangelogEntry[] | null;
   error?: boolean;
+  /** Only the header shows. */
+  collapsed?: boolean;
+  /** Shows the minimize/expand button in the header. */
+  onToggleCollapsed?: () => void;
+  className?: string;
 }) {
   const controlled = given !== undefined;
   const [fetched, setFetched] = useState<ChangelogEntry[] | null>(null);
@@ -69,12 +78,23 @@ export function ChangelogSidePanel({
   }, [pack.id, pack.version, controlled]);
 
   return (
-    <aside className="h-full flex flex-col rounded-md border border-white/10 bg-gray-500/10 backdrop-blur-md overflow-hidden">
-      <div className="shrink-0 flex items-center gap-2 px-4 py-3 border-b border-white/5">
+    <aside className={cn("flex flex-col rounded-md border border-white/10 bg-gray-500/10 backdrop-blur-md overflow-hidden", className)}>
+      <div className={cn("shrink-0 flex items-center gap-2 px-4 py-3", !collapsed && "border-b border-white/5")}>
         <Sparkles className="h-4 w-4 text-accent" />
         <h3 className="text-sm font-semibold text-white">Novedades</h3>
+        {onToggleCollapsed && (
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            title={collapsed ? "Desplegar" : "Minimizar"}
+            className="ml-auto h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors shrink-0"
+          >
+            <ChevronDown className={cn("h-4 w-4 transition-transform", collapsed && "-rotate-90")} />
+          </button>
+        )}
       </div>
 
+      {!collapsed && (
       <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5">
         {error ? (
           <p className="text-xs text-muted-foreground text-center py-6 px-2">No se pudieron cargar las novedades.</p>
@@ -107,6 +127,7 @@ export function ChangelogSidePanel({
           })
         )}
       </div>
+      )}
 
       {selected && (
         <ChangelogViewerDialog

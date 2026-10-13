@@ -1,20 +1,41 @@
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Users } from "lucide-react";
+import { ChevronDown, Loader2, Users } from "lucide-react";
 import { Head } from "@/components/player-picker";
 import { subscribePresence, sortAllPresence, type PresenceEntry } from "@/services/presence";
 import { getNicknames } from "@/lib/nicknames";
 import { formatCompactAgo, formatPlaytime } from "@/lib/format";
 import { useAuth } from "@/hooks/use-auth";
+import { subscribeAllActivity, type UserActivity } from "@/services/user-activity";
+import { cn } from "@/lib/utils";
 
 /**
- * Vertical "Participantes" panel on the online instance page (left side,
- * mirroring Novedades on the right): everyone who has played this instance —
+ * "Participantes" panel on the online instance page (left column, above
+ * Novedades; a footer popover when the window is narrow): everyone who has
+ * played this instance —
  * the same `presence/{modpackId}` roster the group chat and the players panel
  * use — online first, then by last seen. `entries` overrides the live roster
  * (dev example pack).
  */
-export function InstanceMembersPanel({ modpackId, entries }: { modpackId: string; entries?: Record<string, PresenceEntry> }) {
+export function InstanceMembersPanel({
+  modpackId,
+  entries,
+  collapsed = false,
+  onToggleCollapsed,
+  className,
+}: {
+  modpackId: string;
+  entries?: Record<string, PresenceEntry>;
+  /** Only the header shows (the page's left column). */
+  collapsed?: boolean;
+  /** Shows the minimize/expand button in the header. */
+  onToggleCollapsed?: () => void;
+  className?: string;
+}) {
   const [members, setMembers] = useState<Record<string, PresenceEntry> | null>(entries ?? null);
+  // Whether each one has ALaunchi open (green dot) — `online` in the roster
+  // only means "playing this instance right now".
+  const [activity, setActivity] = useState<Record<string, UserActivity>>({});
+  useEffect(() => subscribeAllActivity(setActivity), []);
   const [nicknames] = useState(() => getNicknames());
   const myUuid = useAuth((s) => s.uuid);
 
@@ -25,21 +46,31 @@ export function InstanceMembersPanel({ modpackId, entries }: { modpackId: string
   }, [modpackId, entries]);
 
   const roster = useMemo(() => (members ? sortAllPresence(members) : []), [members]);
-  const onlineCount = roster.filter(([, e]) => e.online).length;
 
   return (
-    <aside className="h-full flex flex-col rounded-md border border-white/10 bg-gray-500/10 backdrop-blur-md overflow-hidden">
-      <div className="shrink-0 flex items-center gap-2 px-4 py-3 border-b border-white/5">
+    <aside className={cn("flex flex-col rounded-md border border-white/10 bg-gray-500/10 backdrop-blur-md overflow-hidden", className)}>
+      <div className={cn("shrink-0 flex items-center gap-2 px-4 py-3", !collapsed && "border-b border-white/5")}>
         <Users className="h-4 w-4 text-accent" />
         <h3 className="text-sm font-semibold text-white">Participantes</h3>
         {members && (
-          <span className="ml-auto text-[11px] text-muted-foreground">
-            {roster.length}
-            {onlineCount > 0 && <span className="text-green-400"> · {onlineCount} en línea</span>}
-          </span>
+          <span className="ml-auto text-[11px] text-muted-foreground">{roster.length}</span>
+        )}
+        {onToggleCollapsed && (
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            title={collapsed ? "Desplegar" : "Minimizar"}
+            className={cn(
+              "h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors shrink-0",
+              !members && "ml-auto"
+            )}
+          >
+            <ChevronDown className={cn("h-4 w-4 transition-transform", collapsed && "-rotate-90")} />
+          </button>
         )}
       </div>
 
+      {!collapsed && (
       <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-0.5">
         {members === null ? (
           <div className="flex justify-center py-6">
@@ -50,13 +81,17 @@ export function InstanceMembersPanel({ modpackId, entries }: { modpackId: string
         ) : (
           roster.map(([uuid, e]) => {
             const name = nicknames[uuid] || e.username;
+            const status = activity[uuid]?.status;
+            const connected = e.online || (!!status && status !== "offline");
+            const ago = e.lastSeen > 0 ? formatCompactAgo(e.lastSeen) : null;
             return (
               <div key={uuid} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-white/5 transition-colors">
                 <div className="relative shrink-0">
                   <Head uuid={uuid} username={e.username} className="h-8 w-8" />
                   <span
+                    title={connected ? "Conectado" : "Desconectado"}
                     className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-card ${
-                      e.online ? "bg-green-500" : "bg-gray-500"
+                      connected ? "bg-green-500" : "bg-gray-500"
                     }`}
                   />
                 </div>
@@ -66,23 +101,25 @@ export function InstanceMembersPanel({ modpackId, entries }: { modpackId: string
                     {uuid === myUuid && <span className="text-muted-foreground"> (tú)</span>}
                   </div>
                   <div className="text-[11px] text-muted-foreground truncate">
-                    {e.online ? (
-                      <span className="text-green-400">Jugando ahora</span>
-                    ) : e.playtimeMs ? (
-                      formatPlaytime(e.playtimeMs)
-                    ) : (
-                      "Sin partidas registradas"
-                    )}
+                    {e.playtimeMs ? formatPlaytime(e.playtimeMs) : "Sin partidas registradas"}
                   </div>
                 </div>
-                {!e.online && e.lastSeen > 0 && (
-                  <span className="shrink-0 text-[10px] text-muted-foreground">{formatCompactAgo(e.lastSeen)}</span>
+                {/* Playing this instance now, or how long since they last did. */}
+                {e.online ? (
+                  <span className="shrink-0 text-[11px] font-medium text-green-400">Jugando</span>
+                ) : (
+                  ago && (
+                    <span className="shrink-0 text-[10px] text-muted-foreground" title="Última vez que jugó a esta instancia">
+                      {ago === "ahora" ? "ahora" : `hace ${ago}`}
+                    </span>
+                  )
                 )}
               </div>
             );
           })
         )}
       </div>
+      )}
     </aside>
   );
 }
