@@ -46,12 +46,11 @@ interface ProfileMenuPanelProps {
   onNavigate: (path: string) => void;
 }
 
-/** Your own profile, compacted to fit the account menu next to your character
- *  (which doubles as the profile's avatar there). EXPERIMENTAL — lives beside
- *  the full /profile page (pages/profile.tsx) while we try it out; that page is
- *  still reachable from "Ver perfil completo" in the ⋮ menu. Like the
- *  page, it republishes the public half of the profile whenever it's shown. */
-export function ProfileMenuPanel({ uuid, username, onNavigate }: ProfileMenuPanelProps) {
+/** Your profile card — banner, frame, name, bio, stats and the ⋮ menu (Editar
+ *  perfil, Decoraciones, Ver perfil completo, Cerrar sesión). Shown at the top
+ *  of the account menu's main view. Like the /profile page, it republishes the
+ *  public half of the profile whenever it's shown. */
+export function ProfileBannerCard({ uuid, username, onNavigate }: ProfileMenuPanelProps) {
   const { logout } = useAuth();
   const { modpacks, loadModpacks } = useModpacks();
   const { instances, loadInstances } = useCustomInstances();
@@ -59,7 +58,6 @@ export function ProfileMenuPanel({ uuid, username, onNavigate }: ProfileMenuPane
   const skin = useShowcaseSkin(username);
   const devBannerVideo = useDevBannerOverride((s) => s.videoUrl);
 
-  const [tab, setTab] = useState<Tab>("online");
   const [totalPlaytimeMs, setTotalPlaytimeMs] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
@@ -138,7 +136,7 @@ export function ProfileMenuPanel({ uuid, username, onNavigate }: ProfileMenuPane
   const favorites = getFavorites();
 
   return (
-    <div className="h-full flex flex-col gap-2.5 min-h-0">
+    <>
       <ProfileFrame frame={frame}>
         <div className="relative rounded-xl border border-white/10 overflow-hidden shrink-0">
           <div className="absolute inset-0">
@@ -203,6 +201,55 @@ export function ProfileMenuPanel({ uuid, username, onNavigate }: ProfileMenuPane
         </div>
       </ProfileFrame>
 
+      <ProfileEditDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        uuid={uuid}
+        bio={bio}
+        bannerUrl={bannerUrl}
+        recentBanners={recentBanners}
+        visibility={visibility}
+        onChange={(patch) => {
+          if (patch.bio !== undefined) setBio(patch.bio);
+          if (patch.bannerUrl !== undefined) setBannerUrl(patch.bannerUrl);
+          if (patch.recentBanners !== undefined) setRecentBanners(patch.recentBanners);
+          if (patch.visibility !== undefined) setVisibility(patch.visibility);
+        }}
+      />
+      <ProfileCustomizeDialog
+        open={customizeOpen}
+        onOpenChange={setCustomizeOpen}
+        uuid={uuid}
+        username={username}
+        skinUrl={skin.fullDataUrl}
+        skinVariant={skin.variant}
+        avatarDecoration={avatarDecoration}
+        frame={frame}
+        onChange={(patch) => {
+          if (patch.avatarDecoration !== undefined) setAvatarDecoration(patch.avatarDecoration);
+          if (patch.frame !== undefined) setFrame(patch.frame);
+        }}
+      />
+    </>
+  );
+}
+
+/** Your own profile, compacted to fit the account menu next to your character
+ *  (which doubles as the profile's avatar there): the profile card on top and
+ *  your instances / favorites below. EXPERIMENTAL — lives beside the full
+ *  /profile page (pages/profile.tsx); that page is still reachable from "Ver
+ *  perfil completo" in the card's ⋮ menu. */
+export function ProfileMenuPanel({ uuid, username, onNavigate }: ProfileMenuPanelProps) {
+  const { modpacks } = useModpacks();
+  const { instances } = useCustomInstances();
+  const [tab, setTab] = useState<Tab>("online");
+  const onlineInstances = modpacks.filter((mp) => mp.installed);
+  const favorites = getFavorites();
+
+  return (
+    <div className="h-full flex flex-col gap-2.5 min-h-0">
+      <ProfileBannerCard uuid={uuid} username={username} onNavigate={onNavigate} />
+
       <div className="flex items-center gap-1 p-0.5 rounded-lg bg-white/[0.04] border border-white/5 shrink-0">
         {TABS.map((t) => (
           <button
@@ -251,36 +298,6 @@ export function ProfileMenuPanel({ uuid, username, onNavigate }: ProfileMenuPane
           ));
         })()}
       </div>
-
-      <ProfileEditDialog
-        open={editOpen}
-        onOpenChange={setEditOpen}
-        uuid={uuid}
-        bio={bio}
-        bannerUrl={bannerUrl}
-        recentBanners={recentBanners}
-        visibility={visibility}
-        onChange={(patch) => {
-          if (patch.bio !== undefined) setBio(patch.bio);
-          if (patch.bannerUrl !== undefined) setBannerUrl(patch.bannerUrl);
-          if (patch.recentBanners !== undefined) setRecentBanners(patch.recentBanners);
-          if (patch.visibility !== undefined) setVisibility(patch.visibility);
-        }}
-      />
-      <ProfileCustomizeDialog
-        open={customizeOpen}
-        onOpenChange={setCustomizeOpen}
-        uuid={uuid}
-        username={username}
-        skinUrl={skin.fullDataUrl}
-        skinVariant={skin.variant}
-        avatarDecoration={avatarDecoration}
-        frame={frame}
-        onChange={(patch) => {
-          if (patch.avatarDecoration !== undefined) setAvatarDecoration(patch.avatarDecoration);
-          if (patch.frame !== undefined) setFrame(patch.frame);
-        }}
-      />
     </div>
   );
 }

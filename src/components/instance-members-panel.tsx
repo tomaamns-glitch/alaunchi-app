@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Loader2, Users } from "lucide-react";
 import { Head } from "@/components/player-picker";
+import { ProfileBannerRow } from "@/components/profile-banner-row";
 import { subscribePresence, sortAllPresence, type PresenceEntry } from "@/services/presence";
 import { getNicknames } from "@/lib/nicknames";
 import { formatCompactAgo, formatPlaytime } from "@/lib/format";
@@ -71,7 +72,7 @@ export function InstanceMembersPanel({
       </div>
 
       {!collapsed && (
-      <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-0.5">
+      <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2">
         {members === null ? (
           <div className="flex justify-center py-6">
             <Loader2 className="h-5 w-5 animate-spin text-accent" />
@@ -85,9 +86,10 @@ export function InstanceMembersPanel({
             const connected = e.online || (!!status && status !== "offline");
             const ago = e.lastSeen > 0 ? formatCompactAgo(e.lastSeen) : null;
             return (
-              <div key={uuid} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-white/5 transition-colors">
+              // Styled like their profile card (banner + frame), like the friends panel.
+              <ProfileBannerRow key={uuid} uuid={uuid} className="h-14">
                 <div className="relative shrink-0">
-                  <Head uuid={uuid} username={e.username} className="h-8 w-8" />
+                  <Head uuid={uuid} username={e.username} className="h-8 w-8 border border-white/10" />
                   <span
                     title={connected ? "Conectado" : "Desconectado"}
                     className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-card ${
@@ -96,25 +98,25 @@ export function InstanceMembersPanel({
                   />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm text-gray-100 truncate">
+                  <div className="text-sm font-medium text-white truncate drop-shadow">
                     {name}
-                    {uuid === myUuid && <span className="text-muted-foreground"> (tú)</span>}
+                    {uuid === myUuid && <span className="font-normal text-gray-300"> (tú)</span>}
                   </div>
-                  <div className="text-[11px] text-muted-foreground truncate">
+                  <div className="text-[11px] text-gray-300 truncate drop-shadow">
                     {e.playtimeMs ? formatPlaytime(e.playtimeMs) : "Sin partidas registradas"}
                   </div>
                 </div>
                 {/* Playing this instance now, or how long since they last did. */}
                 {e.online ? (
-                  <span className="shrink-0 text-[11px] font-medium text-green-400">Jugando</span>
+                  <span className="shrink-0 text-[11px] font-medium text-green-400 drop-shadow">Jugando</span>
                 ) : (
                   ago && (
-                    <span className="shrink-0 text-[10px] text-muted-foreground" title="Última vez que jugó a esta instancia">
+                    <span className="shrink-0 text-[10px] text-gray-200 drop-shadow" title="Última vez que jugó a esta instancia">
                       {ago === "ahora" ? "ahora" : `hace ${ago}`}
                     </span>
                   )
                 )}
-              </div>
+              </ProfileBannerRow>
             );
           })
         )}

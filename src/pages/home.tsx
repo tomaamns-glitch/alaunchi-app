@@ -16,6 +16,7 @@ import {
   KeyRound,
   Settings,
   Square,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { installSnapshot, launchMinecraft, onClosedToTray, type OptionalGroupChoice } from "@/services/electron";
@@ -36,6 +37,8 @@ import { playingNow, useInstancesPresence } from "@/hooks/use-instances-presence
 import { OnlineBannerTile } from "@/components/online-banner-tile";
 import { AppBackground } from "@/components/app-background";
 import { GroupChatNotifications, InstanceGroupChat } from "@/components/instance-group-chat";
+import { FooterPanelButton } from "@/components/footer-panel-button";
+import { InstanceMembersPanel } from "@/components/instance-members-panel";
 import { ChangelogHistoryButton } from "@/components/changelog-history-button";
 import { ChangelogViewerDialog } from "@/components/changelog-viewer-dialog";
 import { PresenceButton } from "@/components/presence-button";
@@ -978,19 +981,17 @@ export default function Home() {
 
       {/* Always mounted: the account menu (Instancias online included) and chats
           don't depend on the catalog, and unmounting would close whatever popup is open. */}
-      <footer className="relative h-20 border-t border-white/5 bg-card/50 backdrop-blur flex items-center justify-between px-6 shrink-0">
+      <footer className="relative z-20 h-20 border-t border-white/5 bg-card/50 backdrop-blur flex items-center justify-between px-6 shrink-0">
           {/* Always here — the account menu (Skin, Ajustes…) and your chats
               don't need a selected modpack. */}
           <div className="flex items-center gap-1">
             <AccountMenuButton uuid={uuid} username={username} />
+            {/* Friends only — the instance's players are in Participantes (right). */}
             <PresenceButton
-              context={viewContext}
+              context={{ type: "general" }}
               open={activePopup === "presence"}
               onOpenChange={(next) => (next ? openOverlay("presence") : closeOverlay())}
             />
-            {uuid && viewContext.type === "carousel" && (
-              <InstanceGroupChat pack={viewContext.pack} myUuid={uuid} myUsername={username ?? ""} />
-            )}
             {uuid && (
               <div className="relative">
                 <ChatBubbleRow />
@@ -1011,6 +1012,13 @@ export default function Home() {
 
               <div className="flex items-center gap-1">
                 {!currentPack.outOfNetwork && <ChangelogHistoryButton modpackId={currentPack.id} />}
+                {!currentPack.outOfNetwork && (
+                  // Same panel as the online instance page's; label hidden on
+                  // narrow windows so the corner never reaches the Play button.
+                  <FooterPanelButton icon={Users} label="Participantes" labelClassName="hidden lg:inline">
+                    <InstanceMembersPanel key={currentPack.id} modpackId={currentPack.id} className="min-h-0" />
+                  </FooterPanelButton>
+                )}
                 <button
                   type="button"
                   onClick={() => setLocation(`/modpack/${currentPack.id}`)}
@@ -1020,6 +1028,9 @@ export default function Home() {
                   <Package className="h-4 w-4" />
                   <span className="text-sm font-medium">Contenido</span>
                 </button>
+                {uuid && viewContext.type === "carousel" && (
+                  <InstanceGroupChat pack={viewContext.pack} myUuid={uuid} myUsername={username ?? ""} />
+                )}
               </div>
             </>
           )}

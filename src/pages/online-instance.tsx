@@ -26,7 +26,7 @@ import { ChatWindow } from "@/components/chat-window";
 import { useAuth } from "@/hooks/use-auth";
 import { useHeaderOverlay } from "@/hooks/use-chat-heads";
 import type { ChatMode } from "@/lib/instance-context";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { FooterPanelButton } from "@/components/footer-panel-button";
 
 // Minimized side panels (Participantes / Novedades), remembered per device.
 const COLLAPSED_KEY = "alaunchi_online_collapsed_panels";
@@ -56,27 +56,6 @@ function useWideLayout(): boolean {
     return () => mq.removeEventListener("change", onChange);
   }, []);
   return wide;
-}
-
-/** Footer corner button that opens one of the side panels as a popover —
- *  what replaces the left column once the window is too narrow for it. */
-function FooterPanelButton({ icon: Icon, label, children }: { icon: typeof Users; label: string; children: React.ReactNode }) {
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="h-[38px] flex items-center gap-2 px-3 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors text-gray-200 data-[state=open]:border-accent data-[state=open]:bg-accent/15"
-        >
-          <Icon className="h-4 w-4" />
-          <span className="text-sm font-medium">{label}</span>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent side="top" align="end" sideOffset={10} className="w-80 max-h-[min(28rem,70vh)] flex flex-col p-0 border-0 bg-card/95">
-        {children}
-      </PopoverContent>
-    </Popover>
-  );
 }
 
 /**

@@ -214,7 +214,7 @@ export function PresenceButton({ context, open, onOpenChange }: PresenceButtonPr
                 >
                   {instancePack ? "Otros amigos" : "Amigos"}
                 </button>
-                <PresenceList players={shownFriends} emptyMessage="Ningún amigo conectado recientemente." />
+                <PresenceList players={shownFriends} emptyMessage="Ningún amigo conectado recientemente." banners />
               </div>
             )}
           </motion.div>

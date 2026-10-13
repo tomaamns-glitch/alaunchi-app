@@ -104,6 +104,16 @@ export async function getProfileBanner(uuid: string): Promise<string | null> {
   return snap.val() ?? null;
 }
 
+/** Just what a list row needs to look like someone's profile card: banner +
+ *  frame (two small reads, not the whole profile node). */
+export async function getProfileLook(uuid: string): Promise<{ bannerUrl: string | null; frame: string }> {
+  const [banner, frame] = await Promise.all([
+    get(ref(rtdb, `profiles/${uuid}/bannerUrl`)),
+    get(ref(rtdb, `profiles/${uuid}/frame`)),
+  ]);
+  return { bannerUrl: banner.val() ?? null, frame: frame.val() ?? "none" };
+}
+
 const RECENT_BANNERS_CAP = 6;
 
 /** Sets the current banner and folds it into the "recently used" list (newest
