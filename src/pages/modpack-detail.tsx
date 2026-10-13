@@ -2,6 +2,7 @@ import { memo, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useLocation, useParams } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import { useModpacks } from "@/hooks/use-modpacks";
+import { DRAWER_EXAMPLE_PACK } from "@/lib/online-view-mode";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { InstanceSettingsDialog } from "@/components/instance-settings-dialog";
 import { ModLibraryDialog } from "@/components/mod-library-dialog";
@@ -528,8 +529,22 @@ interface StagedContentWrite {
 
 const EMPTY_CATEGORIES: Record<Category, any[]> = { mods: [], shaderpacks: [], resourcepacks: [] };
 
+/**
+ * The instance manager (/modpack/:id — ModpackDetail is the route). With `embeddedId` it renders inside
+ * another page instead (the online instance page's middle column): no banner,
+ * no animated background, full width, and the pack's own header card hidden
+ * (that page has its own) — the mod detail / search headers still show. The
+ * parent element must be the scroll container.
+ */
 export default function ModpackDetail() {
-  const { id } = useParams<{ id: string }>();
+  return <ModpackManager />;
+}
+
+export function ModpackManager({ embeddedId }: { embeddedId?: string }) {
+  const params = useParams<{ id: string }>();
+  const id = embeddedId ?? params.id;
+  const embedded = !!embeddedId;
+  const outerRef = useRef<HTMLDivElement | null>(null);
   const [, setLocation] = useLocation();
   const { modpacks, pastModpacks, loadModpacks } = useModpacks();
   const { instances, loadInstances } = useCustomInstances();
@@ -537,7 +552,10 @@ export default function ModpackDetail() {
   const pack =
     modpacks.find((p) => p.id === id) ??
     instances.find((p) => p.id === id) ??
-    pastModpacks.find((p) => p.id === id && p.installed);
+    pastModpacks.find((p) => p.id === id && p.installed) ??
+    // The drawer view's dev example (online page only): no files on disk, so
+    // the manager just shows its empty lists.
+    (import.meta.env.DEV && embedded && id === DRAWER_EXAMPLE_PACK.id ? DRAWER_EXAMPLE_PACK : undefined);
   const { busy: playBusy, running: playRunning, runState: playRunState, toggle: playToggle } = useLaunchModpack(pack);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const playProgress = useInstanceProgress(pack?.id);
@@ -677,11 +695,13 @@ export default function ModpackDetail() {
   const [sortRowStuck, setSortRowStuck] = useState(false);
   useEffect(() => {
     const check = () => {
+      // Embedded, sticky positions are relative to the parent scroll container.
+      const rootTop = embedded ? outerRef.current?.parentElement?.getBoundingClientRect().top ?? 0 : 0;
       if (tabsElRef.current) {
-        setTabsStuck(tabsElRef.current.getBoundingClientRect().top <= headerH + 0.5);
+        setTabsStuck(tabsElRef.current.getBoundingClientRect().top - rootTop <= headerH + 0.5);
       }
       if (sortRowElRef.current) {
-        setSortRowStuck(sortRowElRef.current.getBoundingClientRect().top <= headerH + tabsH + 0.5);
+        setSortRowStuck(sortRowElRef.current.getBoundingClientRect().top - rootTop <= headerH + tabsH + 0.5);
       }
     };
     check();
@@ -691,7 +711,7 @@ export default function ModpackDetail() {
       window.removeEventListener("scroll", check, { capture: true });
       window.removeEventListener("resize", check);
     };
-  }, [headerH, tabsH]);
+  }, [headerH, tabsH, embedded]);
 
   // Mod detail view (opened by clicking a row's icon/name).
   const [selectedModPath, setSelectedModPath] = useState<string | null>(null);
@@ -2056,7 +2076,8 @@ export default function ModpackDetail() {
 
   return (
     <div
-      className="min-h-full bg-background text-foreground relative"
+      ref={outerRef}
+      className={embedded ? "text-foreground relative" : "min-h-full bg-background text-foreground relative"}
       onDragEnter={handlePageDragEnter}
       onDragOver={handlePageDragOver}
       onDragLeave={handlePageDragLeave}
@@ -2066,9 +2087,11 @@ export default function ModpackDetail() {
           scrolls, without taking any space in the flow. Under everything below
           (the content wrapper is z-10, the header group z-30 — opaque when there
           is a banner, so the banner is untouched). */}
-      <div className="pointer-events-none sticky top-0 z-0 h-screen -mb-[100vh] overflow-hidden" aria-hidden>
-        {swellLayer}
-      </div>
+      {!embedded && (
+        <div className="pointer-events-none sticky top-0 z-0 h-screen -mb-[100vh] overflow-hidden" aria-hidden>
+          {swellLayer}
+        </div>
+      )}
       {dropActive && (
         <div className="fixed inset-0 z-50 pointer-events-none bg-accent/10 border-4 border-dashed border-accent/50 flex items-center justify-center">
           <div className="bg-card/90 rounded-lg px-6 py-4 flex items-center gap-3 text-white">
@@ -2083,17 +2106,17 @@ export default function ModpackDetail() {
           only matters once the list scrolls under the sticky header. */}
       <div
         ref={headerGroupRef}
-        className={`sticky top-0 z-30 ${pack.bannerUrl ? "bg-background" : "backdrop-blur-xl"}`}
+        className={`sticky top-0 z-30 ${pack.bannerUrl && !embedded ? "bg-background" : "backdrop-blur-xl"}`}
       >
-        {pack.bannerUrl && (
+        {pack.bannerUrl && !embedded && (
           <div className="relative h-32 md:h-40 overflow-hidden bg-black/50">
             <img src={pack.bannerUrl} alt={pack.name} className="w-full h-full object-cover" />
             <div className="absolute inset-0 bg-[linear-gradient(to_top,hsl(var(--background)/0.9)_0%,hsl(var(--background)/0.5)_18%,hsl(var(--background)/0.15)_40%,transparent_65%)]" />
           </div>
         )}
 
-        <div className="max-w-5xl mx-auto w-full">
-        <div className={`px-4 pb-2 relative z-10 flex items-stretch gap-3 ${pack.bannerUrl ? "-mt-16" : "pt-4"}`}>
+        <div className={embedded ? (!selectedModPath && !searchMode ? "hidden" : "w-full") : "max-w-5xl mx-auto w-full"}>
+        <div className={`px-4 pb-2 relative z-10 flex items-stretch gap-3 ${pack.bannerUrl && !embedded ? "-mt-16" : "pt-4"}`}>
           <div
             className={`w-full flex items-center justify-between gap-4 mr-auto bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 transition-[max-width] duration-300 ease-out ${
               !selectedModPath && !searchMode ? "" : "max-w-full"
@@ -2473,8 +2496,8 @@ export default function ModpackDetail() {
         </div>
       </div>
 
-      <div className="relative z-10 max-w-5xl mx-auto w-full">
-        <div className="px-4 pt-3 pb-8">
+      <div className={`relative z-10 w-full ${embedded ? "" : "max-w-5xl mx-auto"}`}>
+        <div className={embedded ? "pb-4" : "px-4 pt-3 pb-8"}>
           <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4">
             {/* No overflow-hidden here: it would become the nearest "scrolling" ancestor for
                 the sticky tab bars below, so they'd stick to the top of this card (which

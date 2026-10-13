@@ -1,18 +1,16 @@
 import { create } from "zustand";
 import type { ChangelogEntry, Modpack } from "@/services/github";
+import type { PresenceEntry } from "@/services/presence";
 
 // How Inicio (/) shows the online instances: "carousel" (one big banner at a
 // time, the original view) or "drawer" (a Hub-style page). Toggled from the
-// titlebar, next to the window buttons. Per device.
-//
-// The drawer view is still being built, so for now it only exists in dev
-// builds — releases always get the carousel.
+// titlebar, next to the window buttons. Per device; the carousel is the default.
 
 export type OnlineViewMode = "carousel" | "drawer";
 
 const STORAGE_KEY = "alaunchi_online_view_mode";
 
-export const ONLINE_DRAWER_AVAILABLE = import.meta.env.DEV;
+export const ONLINE_DRAWER_AVAILABLE = true;
 
 function read(): OnlineViewMode {
   if (!ONLINE_DRAWER_AVAILABLE) return "carousel";
@@ -78,3 +76,10 @@ export const DRAWER_EXAMPLE_HISTORY: ChangelogEntry[] = [
     changelog: "Primera versión pública de la instancia.",
   },
 ];
+
+/** Fake roster for the example pack's "Participantes" panel. */
+export const DRAWER_EXAMPLE_MEMBERS: Record<string, PresenceEntry> = {
+  "069a79f444e94726a5befca90e38aaf5": { username: "Notch", online: true, lastSeen: Date.now() },
+  "853c80ef3c3749fdaa49938b674adae6": { username: "jeb_", online: false, lastSeen: Date.now() - 3 * 3600_000, playtimeMs: 12.5 * 3600_000 },
+  "61699b2ed3274a019f1e0ea8c3f06bc6": { username: "Dinnerbone", online: false, lastSeen: Date.now() - 4 * 86400_000, playtimeMs: 95 * 60_000 },
+};
