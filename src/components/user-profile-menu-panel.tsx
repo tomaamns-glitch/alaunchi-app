@@ -58,7 +58,8 @@ interface UserProfileMenuViewProps {
   myUuid: string;
   myUsername: string;
   /** "Volver" under the character. */
-  backButton: React.ReactNode;
+  /** Under the character (the account menu now puts Volver in its bottom bar). */
+  backButton?: React.ReactNode;
   /** Navigates somewhere, closing the account menu. */
   onNavigate: (path: string) => void;
 }
