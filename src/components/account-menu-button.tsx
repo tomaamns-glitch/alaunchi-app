@@ -18,6 +18,7 @@ import { UserProfileMenuView } from "@/components/user-profile-menu-panel";
 import { useAvatarDecoration } from "@/hooks/use-avatar-decoration";
 import { subscribeIncomingRequests } from "@/services/friends";
 import { useDevDecoOverride } from "@/lib/dev-deco-override";
+import { DecoratedIcon, useLiveIconDecoration } from "@/components/icon-decoration";
 import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
 
 // DEV ONLY: decoration picked in Personalizar → Pruebas, drawn around your head
@@ -70,6 +71,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
   const myHeadUrl = usePlayerHeadUrl(uuid);
   const mySkinUrl = usePlayerSkinUrl(uuid);
   const decoration = useAvatarDecoration(uuid);
+  const iconDecoration = useLiveIconDecoration(uuid);
   const activePopup = useHeaderOverlay((s) => s.active);
   const openOverlay = useHeaderOverlay((s) => s.open);
   const closeOverlay = useHeaderOverlay((s) => s.close);
@@ -327,7 +329,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                 onClick={() => setProfileOpen(false)}
                 className="flex-1 min-w-0 flex items-center gap-3 px-6 py-3.5 text-left rounded-b-[14px]"
               >
-                <HeadAvatar headUrl={myHeadUrl} username={username} size={40}>
+                <HeadAvatar headUrl={myHeadUrl} username={username} size={40} radius={8} decoration={iconDecoration}>
                   <Avatar className="h-10 w-10 rounded-lg border border-white/10">
                     {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-lg" />}
                     <AvatarFallback className="rounded-lg bg-accent/20 text-accent text-base font-bold">
@@ -358,7 +360,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
         onClick={() => setProfileOpen((v) => !v)}
         className="relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors"
       >
-        <HeadAvatar headUrl={myHeadUrl} username={username} size={24}>
+        <HeadAvatar headUrl={myHeadUrl} username={username} size={24} radius={6} decoration={iconDecoration}>
           <Avatar className="h-6 w-6 rounded-md border border-white/10">
             {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-md" />}
             <AvatarFallback className="rounded-md bg-accent/20 text-accent text-xs font-bold">
@@ -382,16 +384,28 @@ function HeadAvatar({
   headUrl,
   username,
   size,
+  radius,
+  decoration,
   children,
 }: {
   headUrl: string | null;
   username: string | null;
   size: number;
+  /** The avatar's corner radius in px. */
+  radius: number;
+  /** Your saved icon decoration (ICON_DECORATIONS id). */
+  decoration: string;
   children: React.ReactNode;
 }) {
   const devDeco = useDevDecoOverride((s) => s.name);
   const devSquare = useDevDecoOverride((s) => s.square);
-  if (!DevDecoratedHead || !devDeco) return <>{children}</>;
+  if (!DevDecoratedHead || !devDeco) {
+    return (
+      <DecoratedIcon decoration={decoration} size={size} radius={radius}>
+        {children}
+      </DecoratedIcon>
+    );
+  }
   const outer = size * 1.2;
   const overflow = (outer - size) / 2;
   return (

@@ -56,6 +56,9 @@ export interface PublicProfileSnapshot {
   /** Cosmetic id from decoration-catalog.ts for the card's animated border.
    *  "none" / absent = plain border. */
   frame?: string;
+  /** Cosmetic id from decoration-catalog.ts drawn around the player's head
+   *  icon. "none" / absent = plain head. */
+  iconDecoration?: string;
   /** Banner URLs this profile has used before (newest first, capped) — offered
    *  as quick re-picks in the edit dialog. */
   recentBanners?: string[];
@@ -104,14 +107,17 @@ export async function getProfileBanner(uuid: string): Promise<string | null> {
   return snap.val() ?? null;
 }
 
-/** Just what a list row needs to look like someone's profile card: banner +
- *  frame (two small reads, not the whole profile node). */
-export async function getProfileLook(uuid: string): Promise<{ bannerUrl: string | null; frame: string }> {
-  const [banner, frame] = await Promise.all([
+/** Just what a list row needs to look like someone's profile card: banner,
+ *  frame and icon decoration (three small reads, not the whole profile node). */
+export async function getProfileLook(
+  uuid: string
+): Promise<{ bannerUrl: string | null; frame: string; iconDecoration: string }> {
+  const [banner, frame, icon] = await Promise.all([
     get(ref(rtdb, `profiles/${uuid}/bannerUrl`)),
     get(ref(rtdb, `profiles/${uuid}/frame`)),
+    get(ref(rtdb, `profiles/${uuid}/iconDecoration`)),
   ]);
-  return { bannerUrl: banner.val() ?? null, frame: frame.val() ?? "none" };
+  return { bannerUrl: banner.val() ?? null, frame: frame.val() ?? "none", iconDecoration: icon.val() ?? "none" };
 }
 
 const RECENT_BANNERS_CAP = 6;
@@ -139,6 +145,7 @@ export interface ProfileCustomization {
   bio: string;
   avatarDecoration: string;
   frame: string;
+  iconDecoration: string;
   bannerUrl: string | null;
   recentBanners: string[];
   visibility: ProfileVisibility;
@@ -152,6 +159,7 @@ export async function getProfileCustomization(uuid: string): Promise<ProfileCust
     bio: typeof v.bio === "string" ? v.bio : "",
     avatarDecoration: v.avatarDecoration ?? "none",
     frame: v.frame ?? "none",
+    iconDecoration: v.iconDecoration ?? "none",
     bannerUrl: v.bannerUrl ?? null,
     recentBanners: Array.isArray(v.recentBanners) ? v.recentBanners : [],
     visibility: (v.visibility as ProfileVisibility) ?? "everyone",
@@ -179,6 +187,18 @@ export async function setProfileFrame(uuid: string, id: string): Promise<void> {
   await update(ref(rtdb, `profiles/${uuid}`), { frame: id });
 }
 
+export async function setProfileIconDecoration(uuid: string, id: string): Promise<void> {
+  await update(ref(rtdb, `profiles/${uuid}`), { iconDecoration: id });
+}
+
+/** Live icon-decoration id ("none" when unset) — for your own head in the
+ *  account menu, so a pick in Personalizar shows up right away. */
+export function subscribeIconDecoration(uuid: string, callback: (id: string) => void): Unsubscribe {
+  const r = ref(rtdb, `profiles/${uuid}/iconDecoration`);
+  const handler = onValue(r, (snap) => callback((snap.val() as string | null) ?? "none"));
+  return () => off(r, "value", handler);
+}
+
 export function subscribeProfile(
   uuid: string,
   callback: (profile: PublicProfileSnapshot | null) => void
@@ -199,6 +219,7 @@ export function subscribeProfile(
         favorites: val.favorites ?? [],
         avatarDecoration: val.avatarDecoration ?? "none",
         frame: val.frame ?? "none",
+        iconDecoration: val.iconDecoration ?? "none",
       }
     );
   });
