@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { format, formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
@@ -20,6 +20,7 @@ import {
   Camera,
   Server as ServerIcon,
   Check,
+  ImagePlus,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { LoaderIcon } from "@/components/loader-icon";
@@ -53,6 +54,8 @@ import { ChatModeSelector } from "@/components/chat-mode-selector";
 import type { ContentCategory, SharedContent } from "@/services/content-share";
 import { addToGallery, usePersonalLibrary } from "@/services/personal-library";
 import { cn } from "@/lib/utils";
+import { ChatDaySeparator, startsNewDay } from "@/components/chat-day-separator";
+import { ImageLightbox } from "@/components/image-lightbox";
 // Re-exported for existing imports (chat-content-picker.tsx) — the type now
 // lives in a shared module since PresenceButton/ChatContactRail need it too.
 export type { ChatMode } from "@/lib/instance-context";
@@ -473,7 +476,7 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
               ) : (
                 visibleMessages
                   .sort((a, b) => a.timestamp - b.timestamp)
-                  .map((m, i) => {
+                  .map((m, i, sorted) => {
                     const isMe = m.senderUuid === myUuid;
                     // Degradation rule: a message tagged with a carousel instance the
                     // viewer doesn't have renders exactly like a general message — no
@@ -481,8 +484,9 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                     const tagPack = m.carouselInstanceId ? modpacks.find((p) => p.id === m.carouselInstanceId) : undefined;
                     const tagColor = m.carouselInstanceId ? tagColors[m.carouselInstanceId] : undefined;
                     return (
+                      <Fragment key={i}>
+                      {startsNewDay(m.timestamp, sorted[i - 1]?.timestamp) && <ChatDaySeparator timestamp={m.timestamp} />}
                       <motion.div
-                        key={i}
                         initial={{ opacity: 0, y: 6 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.15 }}
@@ -536,6 +540,7 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                           </div>
                         )}
                       </motion.div>
+                      </Fragment>
                     );
                   })
               )}
@@ -824,6 +829,17 @@ export function SharedContentCard({
   const isScreenshot = content.category === "screenshots";
   const isOneClick = content.category === "skins" || isScreenshot || !!directPack;
 
+  if (isScreenshot) {
+    return (
+      <ScreenshotCard
+        content={content}
+        saved={installed}
+        saving={installing}
+        onSave={handleClick}
+      />
+    );
+  }
+
   return (
     <div className="max-w-[85%] flex items-center gap-2.5 rounded-2xl px-3 py-2.5 bg-white/10 shadow-sm">
       {content.iconUrl ? (
@@ -938,6 +954,86 @@ export function SharedContentCard({
           )}
         </AnimatePresence>
       </div>
+    </div>
+  );
+}
+
+/** A shared screenshot: the image itself (click → full size), and "Agregar a
+ *  la galería" underneath. The thumbnail sent with it shows while the full
+ *  image loads (or if it can't be fetched). */
+function ScreenshotCard({
+  content,
+  saved,
+  saving,
+  onSave,
+}: {
+  content: SharedContent;
+  saved: boolean;
+  saving: boolean;
+  onSave: () => void;
+}) {
+  // The group chat doesn't pass `saved`, so check the gallery here as well.
+  const inGallery = usePersonalLibrary((st) => st.gallery.some((g) => g.sha1 === content.sha1));
+  const galleryLoaded = usePersonalLibrary((st) => st.loaded);
+  useEffect(() => {
+    if (!galleryLoaded) usePersonalLibrary.getState().refresh().catch(() => {});
+  }, [galleryLoaded]);
+  saved = saved || inGallery;
+  const [fullLoaded, setFullLoaded] = useState(false);
+  const [fullFailed, setFullFailed] = useState(false);
+  const [open, setOpen] = useState(false);
+  const preview = fullFailed || !fullLoaded ? content.iconUrl : content.downloadUrl;
+
+  return (
+    <div className="w-64 max-w-[85%] rounded-2xl bg-white/10 p-1.5 shadow-sm">
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        title="Ver a tamaño completo"
+        className="relative block w-full overflow-hidden rounded-xl bg-black/30 aspect-video"
+      >
+        {preview ? (
+          <img src={preview} alt={content.displayName} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center">
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          </div>
+        )}
+        {/* Full image loads off-screen first so the thumbnail never flashes away. */}
+        {!fullLoaded && !fullFailed && (
+          <img
+            src={content.downloadUrl}
+            alt=""
+            className="hidden"
+            onLoad={() => setFullLoaded(true)}
+            onError={() => setFullFailed(true)}
+          />
+        )}
+      </button>
+      <motion.button
+        whileHover={saving ? undefined : { scale: 1.02 }}
+        whileTap={saving ? undefined : { scale: 0.97 }}
+        type="button"
+        onClick={onSave}
+        disabled={saving || saved}
+        className={cn(
+          "mt-1.5 w-full flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-bold transition-colors disabled:opacity-70",
+          saved ? "bg-white/10 text-gray-300" : "bg-accent hover:bg-accent/90 text-accent-foreground"
+        )}
+      >
+        {saving ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : saved ? (
+          <Check className="h-3 w-3" />
+        ) : (
+          <ImagePlus className="h-3 w-3" />
+        )}
+        {saved ? "En tu galería" : "Agregar a galería"}
+      </motion.button>
+      <ImageLightbox
+        image={open ? { src: fullFailed ? content.iconUrl || content.downloadUrl : content.downloadUrl, title: content.displayName } : null}
+        onClose={() => setOpen(false)}
+      />
     </div>
   );
 }

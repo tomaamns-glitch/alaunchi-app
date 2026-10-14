@@ -91,6 +91,7 @@ export function useLaunchModpack(pack: Modpack | undefined) {
         uuid: auth.uuid,
         xuid: auth.xuid,
         clientId: getAzureClientId(),
+        displayName: pack.name,
       });
       // Out-of-network (past) instances have no instance presence anymore.
       if (!pack.outOfNetwork) markOnline(pack.id, auth.uuid, auth.username).catch(() => {});
