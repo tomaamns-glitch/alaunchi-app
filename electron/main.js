@@ -16,6 +16,7 @@ const AdmZip = require("adm-zip");
 const ftp = require("basic-ftp");
 const SftpClient = require("ssh2-sftp-client");
 const { readNbt, writeNbt, NBT } = require("./nbt");
+const { createDiscordPresence } = require("./discord-rpc");
 
 const execAsync = promisify(exec);
 
@@ -154,6 +155,13 @@ process.on("unhandledRejection", (reason) => {
 // Los usuarios finales no necesitan configurar nada.
 const LAUNCHER_CONFIG = {
   azureClientId: "544a65b8-0d01-4dad-bb15-67202be45edc",
+  // Discord Rich Presence (discord.com/developers → Applications). El nombre de
+  // la aplicación es lo que Discord pone tras "Jugando a": la del launcher se
+  // llama "ALaunchi" y la de partida "Minecraft". Si discordPlayingClientId está
+  // vacío se usa la del launcher también en partida. Vacíos = presencia apagada.
+  // Son públicos por diseño (igual que el client id de Azure).
+  discordClientId: "1559944545351897138",
+  discordPlayingClientId: "1559948323408838736",
 };
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -356,6 +364,70 @@ function runStateSnapshot() {
 function broadcastRunState() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("instances:run-state", runStateSnapshot());
+  }
+  updateDiscordPresence();
+}
+
+// ─── DISCORD RICH PRESENCE ──────────────────────────────────────────────────
+// "Jugando a Minecraft · <instancia>" while a game is up (newest of
+// runningInstances), "ALaunchi · En el launcher" while the window is shown,
+// nothing otherwise (closed to the tray counts as closed). Off with
+// settings.json discordPresence: false (Ajustes). See discord-rpc.js.
+const discordPresence = createDiscordPresence();
+const launcherStartedAt = Date.now();
+
+const LOADER_LABELS = { fabric: "Fabric", forge: "Forge", neoforge: "NeoForge", quilt: "Quilt", vanilla: "Vanilla" };
+
+function applyDiscordSetting(settings) {
+  discordPresence.setEnabled(settings?.discordPresence !== false);
+}
+
+function updateDiscordPresence() {
+  let playing = null;
+  for (const r of runningInstances.values()) {
+    if (r.state === "stopping" || !r.info) continue;
+    if (!playing || (r.info.startedAt || 0) > (playing.startedAt || 0)) playing = r.info;
+  }
+  if (playing) {
+    const clientId = LAUNCHER_CONFIG.discordPlayingClientId || LAUNCHER_CONFIG.discordClientId;
+    const sameApp = !LAUNCHER_CONFIG.discordPlayingClientId;
+    const loader = LOADER_LABELS[String(playing.loaderType || "").toLowerCase()] || "";
+    const version = [playing.mcVersion ? `Minecraft ${playing.mcVersion}` : "Minecraft", loader].filter(Boolean).join(" · ");
+    const name = String(playing.name || "Minecraft").slice(0, 120);
+    discordPresence.setActivity({
+      clientId,
+      activity: {
+        type: 0,
+        // One app only (named "ALaunchi"): status_display_type 2 makes the member
+        // list show the details line ("Jugando a Minecraft") instead of the app name.
+        ...(sameApp
+          ? { details: "Jugando a Minecraft", state: name, status_display_type: 2 }
+          : { details: name, state: version }),
+        timestamps: { start: playing.startedAt || Date.now() },
+        assets: {
+          large_image: sameApp ? "logo" : "minecraft",
+          large_text: version,
+          ...(sameApp ? {} : { small_image: "logo", small_text: "ALaunchi" }),
+        },
+        instance: false,
+      },
+    });
+    return;
+  }
+  const windowShown = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
+  if (windowShown && LAUNCHER_CONFIG.discordClientId) {
+    discordPresence.setActivity({
+      clientId: LAUNCHER_CONFIG.discordClientId,
+      activity: {
+        type: 0,
+        details: "En el launcher",
+        timestamps: { start: launcherStartedAt },
+        assets: { large_image: "logo", large_text: "ALaunchi" },
+        instance: false,
+      },
+    });
+  } else {
+    discordPresence.setActivity(null);
   }
 }
 
@@ -929,6 +1001,11 @@ function createWindow() {
     show: false,
   });
 
+  // Discord: "En el launcher" only while the window is actually shown.
+  win.on("show", updateDiscordPresence);
+  win.on("hide", updateDiscordPresence);
+  win.on("closed", updateDiscordPresence);
+
   win.once("ready-to-show", () => {
     if (revealWhenReady) {
       revealWhenReady = false;
@@ -1045,7 +1122,9 @@ app.whenReady().then(async () => {
     console.error("[startup] No se pudieron crear las carpetas de datos:", e);
   }
   try {
-    applyCloseToTraySetting(JSON.parse(await fs.readFile(path.join(APP_DATA_DIR, "settings.json"), "utf8")));
+    const settings = JSON.parse(await fs.readFile(path.join(APP_DATA_DIR, "settings.json"), "utf8"));
+    applyCloseToTraySetting(settings);
+    applyDiscordSetting(settings);
   } catch {}
   try {
     reconcileDanglingPlaytimeSessions();
@@ -1565,10 +1644,11 @@ async function creditPlaytimeAndClearSession(modpackId, startedAt) {
 // Also registers the instance in runningInstances (drives the Play/Cerrar buttons),
 // which is why it polls every 2 s: the button has to go back to "Jugar" right after
 // the game closes. process.kill(pid, 0) is just a syscall, so this is cheap.
-function watchProcessForPlaytime(modpackId, pid, startedAt, initialState = "running") {
+// `info` ({ name, mcVersion, loaderType }) only feeds the Discord presence.
+function watchProcessForPlaytime(modpackId, pid, startedAt, initialState = "running", info = null) {
   const existing = activePlaytimeWatchers.get(modpackId);
   if (existing) clearInterval(existing);
-  runningInstances.set(modpackId, { pid, state: initialState });
+  runningInstances.set(modpackId, { pid, state: initialState, info: { name: modpackId, ...info, startedAt } });
   broadcastRunState();
   const interval = setInterval(() => {
     if (isPidAlive(pid)) return;
@@ -1599,9 +1679,13 @@ async function reconcileDanglingPlaytimeSessions() {
         try {
           const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
           if (!meta.activeSession) continue;
-          const { pid, startedAt } = meta.activeSession;
+          const { pid, startedAt, displayName, mcVersion, loaderType } = meta.activeSession;
           if (isPidAlive(pid)) {
-            watchProcessForPlaytime(entry.name, pid, startedAt);
+            watchProcessForPlaytime(entry.name, pid, startedAt, "running", {
+              name: displayName || meta.name || entry.name,
+              mcVersion,
+              loaderType,
+            });
           } else {
             delete meta.activeSession;
             await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
@@ -3278,7 +3362,7 @@ ipcMain.handle("mc:get-loader-icons", async () => {
   return out;
 });
 
-ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, authToken, username, uuid, xuid, clientId }) => {
+ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, authToken, username, uuid, xuid, clientId, displayName }) => {
   // Refuse to spawn a second JVM against the same instance/world if one's already
   // running. Nothing else guarantees this: the renderer's "disabled while launching"
   // guards are per-component React state, and the same modpack has independent Play
@@ -3668,16 +3752,21 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   }
 
   const playtimeStartedAt = Date.now();
+  const sessionInfo = {
+    name: typeof displayName === "string" && displayName.trim() ? displayName.trim().slice(0, 120) : modpackId,
+    mcVersion,
+    loaderType,
+  };
   try {
     const metaPath = path.join(instanceDir, "alaunchi-meta.json");
     const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
-    meta.activeSession = { pid: child.pid, startedAt: playtimeStartedAt };
+    meta.activeSession = { pid: child.pid, startedAt: playtimeStartedAt, displayName: sessionInfo.name, mcVersion, loaderType };
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
   } catch (e) {
     console.warn("[Playtime] No se pudo iniciar el seguimiento de tiempo jugado:", e.message);
   }
   // Registered even if the meta write failed — the Play/Cerrar buttons depend on it.
-  watchProcessForPlaytime(modpackId, child.pid, playtimeStartedAt, "starting");
+  watchProcessForPlaytime(modpackId, child.pid, playtimeStartedAt, "starting", sessionInfo);
   waitForGameWindow(modpackId, child.pid, logFile);
 
   child.unref();
@@ -4823,6 +4912,7 @@ ipcMain.handle("fs:read-settings", async () => {
 ipcMain.handle("fs:write-settings", async (_, settings) => {
   await fs.writeFile(path.join(APP_DATA_DIR, "settings.json"), JSON.stringify(settings, null, 2));
   applyCloseToTraySetting(settings);
+  applyDiscordSetting(settings);
   return { success: true };
 });
 
@@ -5403,6 +5493,7 @@ function getLiveConnection(id) {
 // Every live FTP/SFTP session is an in-memory-only socket — never leave one
 // dangling when the app actually exits.
 app.on("will-quit", () => {
+  discordPresence.destroy();
   for (const id of Array.from(liveServerConnections.keys())) {
     disconnectServerConnection(id).catch(() => {});
   }

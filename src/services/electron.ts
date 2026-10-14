@@ -12,6 +12,8 @@ export interface LaunchOptions {
   uuid: string;
   xuid: string;
   clientId: string;
+  /** Instance name shown in the Discord presence. */
+  displayName?: string;
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

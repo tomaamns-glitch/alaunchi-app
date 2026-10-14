@@ -475,23 +475,6 @@ const InstalledContentRow = memo(function InstalledContentRow({
           <p className="text-muted-foreground text-[11px] font-mono truncate select-text">{fileName(path)}</p>
         </div>
       </div>
-      {canToggle && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="shrink-0 flex items-center">
-              <Switch
-                checked={!disabled}
-                disabled={busy || !!toggleLockedReason}
-                onCheckedChange={(on) => onToggle(path, on)}
-                aria-label={disabled ? "Activar mod" : "Desactivar mod"}
-              />
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            {toggleLockedReason ?? (disabled ? "Activar mod" : "Desactivar mod (no se carga al jugar)")}
-          </TooltipContent>
-        </Tooltip>
-      )}
       {!mandatory && !notInstalled && update && (
         <button
           onClick={() => onUpdate(category, path)}
@@ -502,6 +485,31 @@ const InstalledContentRow = memo(function InstalledContentRow({
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
         </button>
       )}
+      {/* Mods: the switch sits in a fixed column (always rendered, empty when
+          the row can't be toggled) right before the delete slot, so every
+          switch lines up whether or not the row has update/delete buttons. */}
+      {category === "mods" && (
+        <span className="shrink-0 w-11 flex items-center justify-center">
+          {canToggle && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="flex items-center">
+                  <Switch
+                    checked={!disabled}
+                    disabled={busy || !!toggleLockedReason}
+                    onCheckedChange={(on) => onToggle(path, on)}
+                    aria-label={disabled ? "Activar mod" : "Desactivar mod"}
+                  />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-xs">
+                {toggleLockedReason ?? (disabled ? "Activar mod" : "Desactivar mod (no se carga al jugar)")}
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </span>
+      )}
+      {(mandatory || notInstalled) && category === "mods" && <span className="w-7 shrink-0" aria-hidden />}
       {!mandatory && !notInstalled && (
         <button
           onClick={() => onDelete(category, path)}
@@ -1768,58 +1776,111 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
     }
   };
 
-  /** Private instances: a mod that enabled mods require can't be switched off
-   *  (they'd fail to load) — turn those off first. Online instances keep the
-   *  warn-and-allow behavior below; their must-haves are the admin's
-   *  mandatory files, which have no switch at all. */
+  /** Every mod reachable from `path` by repeatedly following `next` (BFS),
+   *  `path` itself excluded. */
+  const collectChain = (path: string, next: (p: string) => string[]): string[] => {
+    const seen = new Set([path]);
+    const queue = [path];
+    const out: string[] = [];
+    while (queue.length) {
+      for (const p of next(queue.shift()!)) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        out.push(p);
+        queue.push(p);
+      }
+    }
+    return out;
+  };
+
+  /** Enabled mods that (directly or through others) need `path` — switched
+   *  off together with it so none is left without its dependency. */
+  const enabledDependentsChain = (path: string) =>
+    collectChain(path, (p) => dependentsOf(p).filter((d) => !disabledMods.has(d)));
+
+  /** Disabled mods that `path` (directly or through others) needs — switched
+   *  back on together with it. */
+  const disabledDependenciesChain = (path: string) =>
+    collectChain(path, (p) => modPaths.filter((q) => disabledMods.has(q) && dependentsOf(q).includes(p)));
+
+  /** Disabling a dependency in use also disables the mods that need it (see
+   *  handleToggleMod) — except when one of those is a mandatory file of the
+   *  online pack, which has no switch: then this one can't be turned off. */
   const toggleLockedReason = (row: ContentRow): string | undefined => {
-    if (pack.source !== "custom" || row.disabled) return undefined;
-    const needing = dependentsOf(row.path).filter((d) => !disabledMods.has(d));
-    if (needing.length === 0) return undefined;
-    const names = needing.map(titleFor);
-    return `No se puede desactivar: lo necesita${names.length > 1 ? "n" : ""} ${names.join(", ")}. Desactiva antes ${
-      names.length > 1 ? "esos mods" : "ese mod"
-    }.`;
+    if (row.disabled) return undefined;
+    const rows = rowsFor("mods");
+    const blocking = enabledDependentsChain(row.path).filter((d) => rows.find((r) => r.path === d)?.mandatory);
+    if (blocking.length === 0) return undefined;
+    const names = blocking.map(titleFor);
+    return `No se puede desactivar: lo necesita${names.length > 1 ? "n" : ""} ${names.join(", ")}, que forma${
+      names.length > 1 ? "n" : ""
+    } parte del modpack.`;
+  };
+
+  /** Switches several mods at once (a mod plus its dependents/dependencies). */
+  const setModsEnabled = async (paths: string[], enabled: boolean) => {
+    setBusyPaths((s) => new Set([...s, ...paths]));
+    const done: string[] = [];
+    try {
+      for (const p of paths) {
+        await setModEnabled(pack.id, p, enabled);
+        done.push(p);
+      }
+    } finally {
+      setDisabledMods((prev) => {
+        const next = new Set(prev);
+        for (const p of done) {
+          if (enabled) next.delete(p);
+          else next.add(p);
+        }
+        return next;
+      });
+      setBusyPaths((s) => {
+        const next = new Set(s);
+        for (const p of paths) next.delete(p);
+        return next;
+      });
+    }
   };
 
   const handleToggleMod = async (path: string, enabled: boolean) => {
+    const rows = rowsFor("mods");
     if (!enabled) {
-      const row = rowsFor("mods").find((r) => r.path === path);
+      const row = rows.find((r) => r.path === path);
       const locked = row && toggleLockedReason(row);
       if (locked) {
         toast.error(locked);
         return;
       }
     }
-    setBusyPaths((s) => new Set(s).add(path));
+    // Off: also every enabled mod that needs it. On: also every disabled mod
+    // it needs. Only rows that actually have a switch.
+    const switchable = (p: string) => {
+      const r = rows.find((x) => x.path === p);
+      return !!r && !r.mandatory && !r.notInstalled;
+    };
+    const extra = (enabled ? disabledDependenciesChain(path) : enabledDependentsChain(path)).filter(switchable);
     try {
-      await setModEnabled(pack.id, path, enabled);
-      setDisabledMods((prev) => {
-        const next = new Set(prev);
-        if (enabled) next.delete(path);
-        else next.add(path);
-        return next;
-      });
-      if (!enabled) {
-        // Turning off something other enabled mods need: allowed (maybe on
-        // purpose), but say what will likely break.
-        const needing = dependentsOf(path).filter((d) => !disabledMods.has(d));
-        if (needing.length > 0) {
-          const names = needing.map(titleFor).join(", ");
-          toast.warning(`${titleFor(path)} desactivado. Lo necesita${needing.length > 1 ? "n" : ""} ${names}: puede que el juego no arranque.`, {
-            duration: 8000,
-            action: { label: "Reactivar", onClick: () => void handleToggleMod(path, true) },
-          });
-        }
-      }
+      await setModsEnabled([path, ...extra], enabled);
     } catch (e: any) {
       toast.error(e?.message || "No se pudo cambiar el mod.");
-    } finally {
-      setBusyPaths((s) => {
-        const next = new Set(s);
-        next.delete(path);
-        return next;
-      });
+      return;
+    }
+    if (extra.length === 0) return;
+    const names = extra.map(titleFor).join(", ");
+    if (enabled) {
+      toast.info(`${titleFor(path)} activado, junto con lo que necesita: ${names}.`, { duration: 6000 });
+    } else {
+      toast.info(
+        `${titleFor(path)} desactivado. También se desactivó lo que depende de él: ${names}.`,
+        {
+          duration: 8000,
+          action: {
+            label: "Deshacer",
+            onClick: () => void setModsEnabled([path, ...extra], true).catch(() => toast.error("No se pudo reactivar.")),
+          },
+        }
+      );
     }
   };
 

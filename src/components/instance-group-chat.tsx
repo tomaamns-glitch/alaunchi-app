@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { AnimatePresence, motion } from "framer-motion";
 import { MessagesSquare, Minus, Paperclip, Send, Users } from "lucide-react";
 import { format } from "date-fns";
+import { ChatDaySeparator, startsNewDay } from "@/components/chat-day-separator";
 import { Head } from "@/components/player-picker";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
@@ -174,9 +175,13 @@ function GroupChatBody({
             const isMe = m.senderUuid === myUuid;
             const prev = messages[i - 1];
             // Name + head only at the start of a run from the same person.
-            const startsRun = !prev || prev.senderUuid !== m.senderUuid || m.timestamp - prev.timestamp > 5 * 60 * 1000;
+            const newDay = startsNewDay(m.timestamp, prev?.timestamp);
+            const startsRun =
+              newDay || !prev || prev.senderUuid !== m.senderUuid || m.timestamp - prev.timestamp > 5 * 60 * 1000;
             return (
-              <div key={m.id} className={cn("flex gap-2", isMe ? "justify-end" : "justify-start", startsRun && i > 0 && "pt-2")}>
+              <Fragment key={m.id}>
+              {newDay && <ChatDaySeparator timestamp={m.timestamp} />}
+              <div className={cn("flex gap-2", isMe ? "justify-end" : "justify-start", startsRun && i > 0 && !newDay && "pt-2")}>
                 {!isMe && (
                   <div className="w-7 shrink-0">
                     {startsRun && <Head uuid={m.senderUuid} username={m.senderUsername} className="h-7 w-7" />}
@@ -210,6 +215,7 @@ function GroupChatBody({
                   )}
                 </div>
               </div>
+              </Fragment>
             );
           })
         )}

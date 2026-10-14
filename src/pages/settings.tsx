@@ -27,6 +27,7 @@ import {
   MonitorDown,
   Sparkles,
   Compass,
+  Gamepad2,
   type LucideIcon,
 } from "lucide-react";
 import { useTour } from "@/components/onboarding-tour";
@@ -270,6 +271,7 @@ function PersonalizationSection() {
     <ThemePanel />
     <AnimatedBackgroundPanel />
     <BackgroundPanel />
+    <DiscordPanel />
     <Panel
       icon={Bell}
       title="Notificaciones"
@@ -390,6 +392,45 @@ function BackgroundPanel() {
           Seguir en segundo plano
         </Label>
         <Switch id="close-to-tray" checked={closeToTray} disabled={!loaded || !isElectron} onCheckedChange={handleChange} />
+      </div>
+    </Panel>
+  );
+}
+
+/** Discord Rich Presence ("Jugando a Minecraft · <instancia>") — settings.json
+ *  `discordPresence`, read by electron/main.js. */
+function DiscordPanel() {
+  const [enabled, setEnabled] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    readSettings()
+      .then((s) => setEnabled(s.discordPresence !== false))
+      .finally(() => setLoaded(true));
+  }, []);
+
+  const handleChange = async (on: boolean) => {
+    setEnabled(on);
+    try {
+      const current = await readSettings();
+      await writeSettings({ ...current, discordPresence: on });
+    } catch {
+      setEnabled(!on);
+      toast.error("No se pudo guardar el ajuste.");
+    }
+  };
+
+  return (
+    <Panel
+      icon={Gamepad2}
+      title="Actividad en Discord"
+      description="Muestra en tu perfil de Discord que tienes ALaunchi abierto y, mientras juegas, la instancia a la que juegas. Necesita la app de Discord abierta en este equipo."
+    >
+      <div className="flex items-center justify-between gap-3">
+        <Label htmlFor="discord-presence" className="text-sm text-gray-100">
+          Mostrar en Discord
+        </Label>
+        <Switch id="discord-presence" checked={enabled} disabled={!loaded || !isElectron} onCheckedChange={handleChange} />
       </div>
     </Panel>
   );
