@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
+import { PlayerDecoratedIcon } from "@/components/icon-decoration";
 import { useChatHeads } from "@/hooks/use-chat-heads";
 
 /**
@@ -101,12 +102,15 @@ export function PlayerPicker({
 
 export function Head({ uuid, username, className = "h-7 w-7" }: { uuid: string; username: string; className?: string }) {
   const headUrl = usePlayerHeadUrl(uuid);
+  // With the player's icon decoration (Trazo, Enredadera…), like every head.
   return (
-    <Avatar className={`${className} rounded-md shrink-0`}>
-      {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
-      <AvatarFallback className="rounded-md bg-accent/20 text-accent text-[10px] font-bold">
-        {username.charAt(0).toUpperCase()}
-      </AvatarFallback>
-    </Avatar>
+    <PlayerDecoratedIcon uuid={uuid}>
+      <Avatar className={`${className} rounded-md shrink-0`}>
+        {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
+        <AvatarFallback className="rounded-md bg-accent/20 text-accent text-[10px] font-bold">
+          {username.charAt(0).toUpperCase()}
+        </AvatarFallback>
+      </Avatar>
+    </PlayerDecoratedIcon>
   );
 }

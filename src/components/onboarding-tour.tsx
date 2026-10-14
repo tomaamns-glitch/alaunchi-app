@@ -28,6 +28,7 @@ import { InstanceLogo } from "@/components/invite-bubbles";
 import { useAuth } from "@/hooks/use-auth";
 import { useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
+import { PlayerDecoratedIcon } from "@/components/icon-decoration";
 
 // First-login walkthrough of the Hub, in chapters: private instances, your
 // character, chat & friends, and online instances (how they unlock). Steps
@@ -219,10 +220,12 @@ function WelcomeSample() {
   const headUrl = usePlayerHeadUrl(uuid);
   return (
     <div className="mt-3 flex items-center gap-3 rounded-lg border border-white/10 bg-black/30 p-3">
-      <Avatar className="h-10 w-10 rounded-md">
-        {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
-        <AvatarFallback className="rounded-md bg-accent/20 text-accent font-bold">{username.charAt(0)}</AvatarFallback>
-      </Avatar>
+      <PlayerDecoratedIcon uuid={uuid} size={40} radius={6}>
+        <Avatar className="h-10 w-10 rounded-md">
+          {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
+          <AvatarFallback className="rounded-md bg-accent/20 text-accent font-bold">{username.charAt(0)}</AvatarFallback>
+        </Avatar>
+      </PlayerDecoratedIcon>
       <div className="min-w-0">
         <p className="text-sm font-semibold text-white truncate">{username}</p>
         <p className="text-[11px] text-muted-foreground">Sesión iniciada con tu cuenta de Minecraft</p>

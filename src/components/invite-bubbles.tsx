@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, Globe, Loader2, Minus, X } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
+import { PlayerDecoratedIcon } from "@/components/icon-decoration";
 import { useBarInvites, useInvites } from "@/hooks/use-invites";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
@@ -171,11 +172,13 @@ export function InstanceLogo({ invite, className }: { invite: Pick<Invite, "imag
 function SenderHead({ uuid, username }: { uuid: string; username: string }) {
   const headUrl = usePlayerHeadUrl(uuid);
   return (
-    <Avatar className="absolute -bottom-1.5 -right-1.5 h-6 w-6 rounded-md border-2 border-card" title={username}>
-      {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-sm" />}
-      <AvatarFallback className="rounded-sm bg-accent/20 text-accent text-[10px] font-bold">
-        {username.charAt(0).toUpperCase()}
-      </AvatarFallback>
-    </Avatar>
+    <PlayerDecoratedIcon uuid={uuid} size={24} radius={6} className="absolute -bottom-1.5 -right-1.5">
+      <Avatar className="h-6 w-6 rounded-md border-2 border-card" title={username}>
+        {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-sm" />}
+        <AvatarFallback className="rounded-sm bg-accent/20 text-accent text-[10px] font-bold">
+          {username.charAt(0).toUpperCase()}
+        </AvatarFallback>
+      </Avatar>
+    </PlayerDecoratedIcon>
   );
 }

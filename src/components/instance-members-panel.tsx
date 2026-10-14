@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Loader2, Users } from "lucide-react";
 import { Head } from "@/components/player-picker";
 import { ProfileBannerRow } from "@/components/profile-banner-row";
-import { PlayerDecoratedIcon } from "@/components/icon-decoration";
 import { subscribePresence, sortAllPresence, type PresenceEntry } from "@/services/presence";
 import { getNicknames } from "@/lib/nicknames";
 import { formatCompactAgo, formatPlaytime } from "@/lib/format";
@@ -90,9 +89,7 @@ export function InstanceMembersPanel({
               // Styled like their profile card (banner + frame), like the friends panel.
               <ProfileBannerRow key={uuid} uuid={uuid} className="h-14">
                 <div className="relative shrink-0">
-                  <PlayerDecoratedIcon uuid={uuid} size={32} radius={6}>
-                    <Head uuid={uuid} username={e.username} className="h-8 w-8 border border-white/10" />
-                  </PlayerDecoratedIcon>
+                  <Head uuid={uuid} username={e.username} className="h-8 w-8 border border-white/10" />
                   <span
                     title={connected ? "Conectado" : "Desconectado"}
                     className={`absolute z-[2] -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-card ${
