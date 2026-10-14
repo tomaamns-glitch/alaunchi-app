@@ -113,14 +113,21 @@ export function ProfileCustomizeDialog({
         <Tabs defaultValue="avatar">
           <TabsList className="w-full">
             <TabsTrigger value="avatar" className="flex-1">
-              Decoración del avatar
+              Avatar
             </TabsTrigger>
             <TabsTrigger value="frame" className="flex-1">
-              Marco
+              Marco del banner
             </TabsTrigger>
+            {/* Banner and Icono: still test-only (dev builds) until we have
+                our own designs — the lab packs are third-party. */}
+            {DevBannerLab && (
+              <TabsTrigger value="banner" className="flex-1 text-amber-400">
+                Banner
+              </TabsTrigger>
+            )}
             {DevDecoLab && (
-              <TabsTrigger value="dev-lab" className="flex-1 text-amber-400">
-                Pruebas
+              <TabsTrigger value="icon" className="flex-1 text-amber-400">
+                Icono
               </TabsTrigger>
             )}
           </TabsList>
@@ -175,26 +182,18 @@ export function ProfileCustomizeDialog({
             </div>
           </TabsContent>
 
-          {DevDecoLab && DevBannerLab && (
-            <TabsContent value="dev-lab" className="pt-4">
-              <Tabs defaultValue="deco">
-                <TabsList className="h-8">
-                  <TabsTrigger value="deco" className="text-xs">
-                    Decoraciones
-                  </TabsTrigger>
-                  <TabsTrigger value="banners" className="text-xs">
-                    Banners
-                  </TabsTrigger>
-                </TabsList>
-                <Suspense fallback={null}>
-                  <TabsContent value="deco" className="pt-3">
-                    <DevDecoLab uuid={uuid} />
-                  </TabsContent>
-                  <TabsContent value="banners" className="pt-3">
-                    <DevBannerLab uuid={uuid} username={username} />
-                  </TabsContent>
-                </Suspense>
-              </Tabs>
+          {DevBannerLab && (
+            <TabsContent value="banner" className="pt-4">
+              <Suspense fallback={null}>
+                <DevBannerLab uuid={uuid} username={username} />
+              </Suspense>
+            </TabsContent>
+          )}
+          {DevDecoLab && (
+            <TabsContent value="icon" className="pt-4">
+              <Suspense fallback={null}>
+                <DevDecoLab uuid={uuid} />
+              </Suspense>
             </TabsContent>
           )}
         </Tabs>

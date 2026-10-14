@@ -1,9 +1,13 @@
-import { ref, set, update, push, onValue, runTransaction, serverTimestamp, off, type Unsubscribe } from "firebase/database";
+import { ref, set, update, push, remove, onValue, runTransaction, serverTimestamp, off, type Unsubscribe } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 import type { SharedContent } from "./content-share";
 import type { RecipeEntry } from "./public-profile";
 
 export interface ChatMessage {
+  /** RTDB push key — set by subscribeMessages. */
+  id?: string;
+  /** Deleted by its sender (tombstone, see deleteChatMessage). */
+  deleted?: boolean;
   senderUuid: string;
   senderUsername: string;
   text: string;
@@ -104,8 +108,8 @@ export function subscribeMessages(
 ): Unsubscribe {
   const messagesRef = ref(rtdb, `chats/${conversationId}/messages`);
   const handler = onValue(messagesRef, (snap) => {
-    const val = snap.val() || {};
-    callback(Object.values(val) as ChatMessage[]);
+    const val = (snap.val() || {}) as Record<string, ChatMessage>;
+    callback(Object.entries(val).map(([id, m]) => ({ ...m, id })));
   });
   return () => off(messagesRef, "value", handler);
 }
@@ -216,6 +220,30 @@ export async function sendSharedInstance(
   instance: SharedInstance
 ): Promise<void> {
   await pushMessageAndUpdateIndex(myUuid, myUsername, otherUuid, otherUsername, { text: "", instance }, `📦 ${instance.name}`);
+}
+
+/** Removes a message for both participants (only offered on your own). If the
+ *  rules don't allow removing the node, it's emptied into a tombstone instead
+ *  ("Mensaje eliminado"). When it was the last message, both sidebar previews
+ *  stop showing its text. */
+export async function deleteChatMessage(
+  myUuid: string,
+  otherUuid: string,
+  messageId: string,
+  wasLatest: boolean
+): Promise<void> {
+  const msgRef = ref(rtdb, `chats/${getConversationId(myUuid, otherUuid)}/messages/${messageId}`);
+  try {
+    await remove(msgRef);
+  } catch {
+    await update(msgRef, { text: "", deleted: true, content: null, server: null, instance: null });
+  }
+  if (wasLatest) {
+    await Promise.all([
+      update(ref(rtdb, `chatIndex/${myUuid}/${otherUuid}`), { lastMessage: "Mensaje eliminado" }),
+      update(ref(rtdb, `chatIndex/${otherUuid}/${myUuid}`), { lastMessage: "Mensaje eliminado" }),
+    ]).catch(() => {});
+  }
 }
 
 /** Clears unread count for one conversation — call when the user opens it. */

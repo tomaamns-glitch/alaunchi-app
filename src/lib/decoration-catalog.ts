@@ -51,6 +51,7 @@ export const AVATAR_DECORATIONS: AvatarDecoration[] = [
 export const FRAME_DECORATIONS: FrameDecoration[] = [
   { id: "none", label: "Sin marco", description: "Borde normal de la tarjeta." },
   { id: "electric", label: "Borde eléctrico", description: "Ondas de corriente naranja recorriendo el borde." },
+  { id: "traced", label: "Trazo", description: "Una línea verde y naranja que dibuja el borde y se vuelve a borrar." },
 ];
 
 export function avatarDecorationLabel(id: string | undefined): string {

@@ -4,6 +4,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { MessagesSquare, Minus, Paperclip, Send, Users } from "lucide-react";
 import { format } from "date-fns";
 import { ChatDaySeparator, startsNewDay } from "@/components/chat-day-separator";
+import { ChatMessageMenu, DeletedMessageBubble, useMessageMenu } from "@/components/chat-message-menu";
+import { hiddenKey, useHiddenMessages } from "@/lib/hidden-messages";
 import { Head } from "@/components/player-picker";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
@@ -16,6 +18,7 @@ import {
   sendGroupMessage,
   setGroupLastRead,
   subscribeGroupMessages,
+  deleteGroupMessage,
   type GroupMessage,
 } from "@/services/group-chat";
 import { getNicknames } from "@/lib/nicknames";
@@ -31,7 +34,17 @@ import { SharedContentCard } from "@/components/chat-window";
  *  notification sound). Shared by the footer popup and the inline panel. */
 function useGroupRoom(pack: Modpack, myUuid: string, open: boolean) {
   const groupKey = useMemo(() => groupKeyFor(pack), [pack.id, pack.repoUrl]);
-  const [messages, setMessages] = useState<GroupMessage[]>([]);
+  const [allMessages, setMessages] = useState<GroupMessage[]>([]);
+  // Others' messages you deleted "para mí" (lib/hidden-messages.ts) — left
+  // out here so they don't count as unread either.
+  const hidden = useHiddenMessages((s) => s.hidden);
+  useEffect(() => {
+    useHiddenMessages.getState().init(myUuid);
+  }, [myUuid]);
+  const messages = useMemo(
+    () => allMessages.filter((m) => !hidden.has(hiddenKey(groupKey, m.id))),
+    [allMessages, hidden, groupKey]
+  );
   const [members, setMembers] = useState<Record<string, PresenceEntry>>({});
   const [lastRead, setLastRead] = useState(0);
   const [nicknames] = useState(() => getNicknames());
@@ -107,6 +120,7 @@ function GroupChatBody({
   const { messages, members, nicknames, roster, onlineCount } = room;
   const [draft, setDraft] = useState("");
   const [showContentPicker, setShowContentPicker] = useState(false);
+  const messageMenu = useMessageMenu();
 
   const send = () => {
     if (!draft.trim()) return;
@@ -181,7 +195,19 @@ function GroupChatBody({
             return (
               <Fragment key={m.id}>
               {newDay && <ChatDaySeparator timestamp={m.timestamp} />}
-              <div className={cn("flex gap-2", isMe ? "justify-end" : "justify-start", startsRun && i > 0 && !newDay && "pt-2")}>
+              <div
+                className={cn("flex gap-2", isMe ? "justify-end" : "justify-start", startsRun && i > 0 && !newDay && "pt-2")}
+                // Right-click: your own message → deleted for everyone;
+                // someone else's (or an already-deleted one) → hidden for you.
+                onContextMenu={(e) => {
+                  const forEveryone = isMe && !m.deleted;
+                  messageMenu.open(e, forEveryone, () =>
+                    forEveryone
+                      ? deleteGroupMessage(room.groupKey, m.id)
+                      : useHiddenMessages.getState().hide(myUuid, room.groupKey, m.id)
+                  );
+                }}
+              >
                 {!isMe && (
                   <div className="w-7 shrink-0">
                     {startsRun && <Head uuid={m.senderUuid} username={m.senderUsername} className="h-7 w-7" />}
@@ -193,7 +219,9 @@ function GroupChatBody({
                       {isMe ? "Tú" : nameOf(m)} · {m.timestamp ? format(m.timestamp, "HH:mm") : ""}
                     </span>
                   )}
-                  {m.content ? (
+                  {m.deleted ? (
+                    <DeletedMessageBubble mine={isMe} />
+                  ) : m.content ? (
                     // Sent "in this instance's mode": whoever has the
                     // instance installs straight into it, like the 1:1 chat.
                     <SharedContentCard
@@ -221,6 +249,7 @@ function GroupChatBody({
         )}
       </div>
 
+      <ChatMessageMenu menu={messageMenu.menu} onClose={messageMenu.close} />
       <div className="p-3 border-t border-white/10 flex items-center gap-2">
         <div className="relative">
           <button
