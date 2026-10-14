@@ -14,6 +14,7 @@ import {
   type FriendRequestEntry,
 } from "@/services/friends";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
+import { PlayerDecoratedIcon } from "@/components/icon-decoration";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,12 +24,14 @@ import { es } from "date-fns/locale";
 function PersonAvatar({ uuid, username }: { uuid: string; username: string }) {
   const headUrl = usePlayerHeadUrl(uuid);
   return (
-    <Avatar className="h-8 w-8 rounded-md border border-white/10 shrink-0">
-      {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
-      <AvatarFallback className="rounded-md bg-accent/20 text-accent text-xs font-bold">
-        {username.charAt(0).toUpperCase()}
-      </AvatarFallback>
-    </Avatar>
+    <PlayerDecoratedIcon uuid={uuid} size={32} radius={6}>
+      <Avatar className="h-8 w-8 rounded-md border border-white/10 shrink-0">
+        {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
+        <AvatarFallback className="rounded-md bg-accent/20 text-accent text-xs font-bold">
+          {username.charAt(0).toUpperCase()}
+        </AvatarFallback>
+      </Avatar>
+    </PlayerDecoratedIcon>
   );
 }
 

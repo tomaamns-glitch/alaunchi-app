@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ChevronLeft, ChevronRight, Plus, Ghost, X, Trash2 } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
+import { PlayerDecoratedIcon } from "@/components/icon-decoration";
 import { useChatHeads, useVisibleChatBubbles } from "@/hooks/use-chat-heads";
 import { deleteConversationForMe, type ChatIndexEntry } from "@/services/chat";
 import { subscribePresence, sortAllPresence, type PresenceEntry } from "@/services/presence";
@@ -354,14 +355,16 @@ function ContactHead({
   const headUrl = usePlayerHeadUrl(uuid);
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
-      <Avatar className="h-full w-full rounded-md">
-        {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
-        <AvatarFallback className="rounded-md bg-accent/20 text-accent text-[10px] font-bold">
-          {username?.charAt(0)?.toUpperCase() || "?"}
-        </AvatarFallback>
-      </Avatar>
+      <PlayerDecoratedIcon uuid={uuid} size={size} radius={6}>
+        <Avatar className="h-full w-full rounded-md">
+          {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
+          <AvatarFallback className="rounded-md bg-accent/20 text-accent text-[10px] font-bold">
+            {username?.charAt(0)?.toUpperCase() || "?"}
+          </AvatarFallback>
+        </Avatar>
+      </PlayerDecoratedIcon>
       {online && (
-        <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-400 border border-card" />
+        <span className="absolute z-[2] -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-400 border border-card" />
       )}
     </div>
   );

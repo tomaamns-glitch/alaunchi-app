@@ -3,6 +3,7 @@ import { Bell, BellOff } from "lucide-react";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
+import { PlayerDecoratedIcon } from "@/components/icon-decoration";
 import { useChatHeads, useVisibleChatBubbles } from "@/hooks/use-chat-heads";
 import { useBarInvites } from "@/hooks/use-invites";
 import { InviteBubbles, InviteCard } from "@/components/invite-bubbles";
@@ -93,12 +94,14 @@ function ChatBubble({
         active ? "border-accent bg-accent/15" : "border-white/10 bg-white/5 hover:bg-white/10"
       }`}
     >
-      <Avatar className="h-full w-full rounded-md">
-        {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
-        <AvatarFallback className="rounded-md bg-accent/20 text-accent text-xs font-bold">
-          {username?.charAt(0)?.toUpperCase() ?? "?"}
-        </AvatarFallback>
-      </Avatar>
+      <PlayerDecoratedIcon uuid={uuid} className="h-full w-full">
+        <Avatar className="h-full w-full rounded-md">
+          {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
+          <AvatarFallback className="rounded-md bg-accent/20 text-accent text-xs font-bold">
+            {username?.charAt(0)?.toUpperCase() ?? "?"}
+          </AvatarFallback>
+        </Avatar>
+      </PlayerDecoratedIcon>
       <AnimatePresence>
         {unread > 0 && (
           <motion.span
@@ -106,14 +109,14 @@ function ChatBubble({
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.4 }}
             transition={{ duration: 0.15 }}
-            className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none border border-card"
+            className="absolute z-[2] -top-1 -right-1 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none border border-card"
           >
             {unread > 1 ? unread : ""}
           </motion.span>
         )}
       </AnimatePresence>
       {muted && (
-        <span className="absolute -bottom-1 -right-1 h-4 w-4 flex items-center justify-center rounded-full bg-card border border-white/10 text-muted-foreground">
+        <span className="absolute z-[2] -bottom-1 -right-1 h-4 w-4 flex items-center justify-center rounded-full bg-card border border-white/10 text-muted-foreground">
           <BellOff className="h-2.5 w-2.5" />
         </span>
       )}
