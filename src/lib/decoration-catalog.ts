@@ -6,6 +6,7 @@ import type { SkinEffect } from "@/components/skin-viewer-animated";
 //
 //  - avatarDecoration → SkinViewerAnimated's `effect` prop (same ids)
 //  - frame            → <ProfileFrame> around the profile card
+//  - iconDecoration   → <DecoratedIcon> around the player's head icon
 
 export interface AvatarDecoration {
   id: string;
@@ -53,6 +54,17 @@ export const FRAME_DECORATIONS: FrameDecoration[] = [
   { id: "electric", label: "Borde eléctrico", description: "Ondas de corriente naranja recorriendo el borde." },
   { id: "traced", label: "Trazo", description: "Una línea verde y naranja que dibuja el borde y se vuelve a borrar." },
 ];
+
+export const ICON_DECORATIONS: FrameDecoration[] = [
+  { id: "none", label: "Sin decoración", description: "Tu cabeza tal cual." },
+  { id: "traced", label: "Trazo", description: "Una línea verde y naranja que dibuja el borde del icono." },
+  { id: "vines", label: "Enredadera", description: "Una enredadera que crece rodeando tu cabeza." },
+];
+
+/** Narrows a stored id to a known icon decoration ("none" otherwise). */
+export function toIconDecoration(id: string | undefined): string {
+  return id && ICON_DECORATIONS.some((d) => d.id === id) ? id : "none";
+}
 
 export function avatarDecorationLabel(id: string | undefined): string {
   return AVATAR_DECORATIONS.find((d) => d.id === id)?.label ?? AVATAR_DECORATIONS[0].label;

@@ -21,6 +21,7 @@ export function TracedBorder({
   to = "#ff9436",
   duration = 7,
   fill = false,
+  strokeScale = 1,
   children,
 }: {
   borderRadius?: number;
@@ -31,6 +32,8 @@ export function TracedBorder({
   /** Take the parent's full size (e.g. around a fixed-size icon) instead of
    *  sizing to the children. */
   fill?: boolean;
+  /** Multiplies stroke widths and glow blur — thinner for small icons. */
+  strokeScale?: number;
   children: ReactNode;
 }) {
   const gradientId = `traced-${useId().replace(/:/g, "")}`;
@@ -58,13 +61,13 @@ export function TracedBorder({
             pathLength={100}
             fill="none"
             stroke={`url(#${gradientId})`}
-            strokeWidth={l.width}
+            strokeWidth={l.width * strokeScale}
             strokeLinecap="round"
             strokeDasharray="100 100"
             style={{
               width: "calc(100% - 2px)",
               height: "calc(100% - 2px)",
-              filter: l.blur ? `blur(${l.blur}px)` : undefined,
+              filter: l.blur ? `blur(${l.blur * strokeScale}px)` : undefined,
               animation: `traced-border ${duration}s cubic-bezier(0.45, 0, 0.25, 1) ${l.delay}s infinite`,
               strokeDashoffset: 100,
               opacity: 0,

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Check } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -8,9 +8,14 @@ import { ProfileFrame } from "@/components/profile-frame";
 import {
   AVATAR_DECORATIONS,
   FRAME_DECORATIONS,
+  ICON_DECORATIONS,
+  toIconDecoration,
   toSkinEffect,
 } from "@/lib/decoration-catalog";
-import { setProfileAvatarDecoration, setProfileFrame } from "@/services/public-profile";
+import { setProfileAvatarDecoration, setProfileFrame, setProfileIconDecoration } from "@/services/public-profile";
+import { DecoratedIcon, useLiveIconDecoration } from "@/components/icon-decoration";
+import { usePlayerHeadUrl } from "@/hooks/use-player-head";
+import { refreshProfileLook } from "@/hooks/use-profile-look";
 
 // DEV ONLY: preview lab for a third-party decoration pack — lazy + gated on
 // import.meta.env.DEV so it isn't even part of the production bundle.
@@ -75,6 +80,26 @@ export function ProfileCustomizeDialog({
   onChange,
 }: ProfileCustomizeDialogProps) {
   const [busy, setBusy] = useState(false);
+  // Icon decoration: read live here (callers don't pass it), shown optimistically.
+  const savedIcon = useLiveIconDecoration(uuid);
+  const [iconDecoration, setIconDecoration] = useState("none");
+  useEffect(() => setIconDecoration(toIconDecoration(savedIcon)), [savedIcon]);
+  const headUrl = usePlayerHeadUrl(uuid);
+
+  const pickIcon = async (id: string) => {
+    if (id === iconDecoration || busy) return;
+    setIconDecoration(id);
+    setBusy(true);
+    try {
+      await setProfileIconDecoration(uuid, id);
+      refreshProfileLook(uuid);
+    } catch {
+      setIconDecoration(toIconDecoration(savedIcon));
+      toast.error("No se pudo guardar la decoración del icono.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const pickAvatar = async (id: string) => {
     if (id === avatarDecoration || busy) return;
@@ -95,6 +120,7 @@ export function ProfileCustomizeDialog({
     setBusy(true);
     try {
       await setProfileFrame(uuid, id);
+      refreshProfileLook(uuid);
     } catch {
       toast.error("No se pudo guardar el marco.");
     } finally {
@@ -125,11 +151,9 @@ export function ProfileCustomizeDialog({
                 Banner
               </TabsTrigger>
             )}
-            {DevDecoLab && (
-              <TabsTrigger value="icon" className="flex-1 text-amber-400">
-                Icono
-              </TabsTrigger>
-            )}
+            <TabsTrigger value="icon" className="flex-1">
+              Icono
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="avatar" className="pt-4">
@@ -189,15 +213,59 @@ export function ProfileCustomizeDialog({
               </Suspense>
             </TabsContent>
           )}
-          {DevDecoLab && (
-            <TabsContent value="icon" className="pt-4">
-              <Suspense fallback={null}>
-                <DevDecoLab uuid={uuid} />
-              </Suspense>
-            </TabsContent>
-          )}
+          <TabsContent value="icon" className="pt-4">
+            <div className="flex gap-4">
+              {/* Your head at the sizes it's shown at: profile, account menu, lists. */}
+              <div className="shrink-0 w-[170px] rounded-lg bg-black/30 border border-white/10 flex flex-col items-center justify-center gap-5 py-6">
+                <DecoratedIcon key={`${iconDecoration}-64`} decoration={iconDecoration} size={64} radius={10}>
+                  <IconHead url={headUrl} size={64} radius={10} />
+                </DecoratedIcon>
+                <div className="flex items-end gap-5">
+                  <DecoratedIcon key={`${iconDecoration}-40`} decoration={iconDecoration} size={40} radius={8}>
+                    <IconHead url={headUrl} size={40} radius={8} />
+                  </DecoratedIcon>
+                  <DecoratedIcon key={`${iconDecoration}-24`} decoration={iconDecoration} size={24} radius={6}>
+                    <IconHead url={headUrl} size={24} radius={6} />
+                  </DecoratedIcon>
+                </div>
+              </div>
+              <div className="flex-1 space-y-2">
+                {ICON_DECORATIONS.map((d) => (
+                  <OptionCard
+                    key={d.id}
+                    label={d.label}
+                    description={d.description}
+                    selected={iconDecoration === d.id}
+                    onSelect={() => pickIcon(d.id)}
+                  />
+                ))}
+              </div>
+            </div>
+            {/* DEV ONLY: the third-party pack lab, for trying more styles. */}
+            {DevDecoLab && (
+              <details className="mt-4 rounded-lg border border-amber-400/30 p-3">
+                <summary className="cursor-pointer text-xs text-amber-400">Pruebas (pack de terceros, solo dev)</summary>
+                <div className="pt-3">
+                  <Suspense fallback={null}>
+                    <DevDecoLab uuid={uuid} />
+                  </Suspense>
+                </div>
+              </details>
+            )}
+          </TabsContent>
         </Tabs>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function IconHead({ url, size, radius }: { url: string | null; size: number; radius: number }) {
+  return (
+    <div
+      className="overflow-hidden border border-white/10 bg-accent/20"
+      style={{ width: size, height: size, borderRadius: radius }}
+    >
+      {url && <img src={url} alt="" className="h-full w-full" style={{ imageRendering: "pixelated" }} />}
+    </div>
   );
 }

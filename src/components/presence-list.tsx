@@ -5,6 +5,7 @@ import { usePlayerHeadUrl } from "@/hooks/use-player-head";
 import { useChatHeads } from "@/hooks/use-chat-heads";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { ProfileBannerRow } from "@/components/profile-banner-row";
+import { PlayerDecoratedIcon } from "@/components/icon-decoration";
 
 interface PresenceListProps {
   players: [string, PresenceEntry][];
@@ -118,15 +119,17 @@ function PlayerAvatar({
   const headUrl = usePlayerHeadUrl(uuid);
   return (
     <div className="relative shrink-0">
-      <Avatar className={`${large ? "h-8 w-8" : "h-6 w-6"} rounded-md border border-white/10`}>
-        {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
-        <AvatarFallback className="rounded-md bg-accent/20 text-accent text-[10px] font-bold">
-          {username?.charAt(0)?.toUpperCase() ?? "?"}
-        </AvatarFallback>
-      </Avatar>
+      <PlayerDecoratedIcon uuid={uuid} size={large ? 32 : 24} radius={6}>
+        <Avatar className={`${large ? "h-8 w-8" : "h-6 w-6"} rounded-md border border-white/10`}>
+          {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
+          <AvatarFallback className="rounded-md bg-accent/20 text-accent text-[10px] font-bold">
+            {username?.charAt(0)?.toUpperCase() ?? "?"}
+          </AvatarFallback>
+        </Avatar>
+      </PlayerDecoratedIcon>
       {online && (
         <span
-          className={`absolute -bottom-0.5 -right-0.5 rounded-full bg-green-400 border-card ${large ? "h-2.5 w-2.5 border-2" : "h-2 w-2 border"}`}
+          className={`absolute z-[2] -bottom-0.5 -right-0.5 rounded-full bg-green-400 border-card ${large ? "h-2.5 w-2.5 border-2" : "h-2 w-2 border"}`}
           aria-hidden
         />
       )}
