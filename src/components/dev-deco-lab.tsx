@@ -3,6 +3,17 @@ import { Loader2, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
 import { useDevDecoOverride } from "@/lib/dev-deco-override";
+import { TracedBorder } from "@/components/traced-border";
+import { LottieDecoration } from "@/components/lottie-decoration";
+
+/** Our own icon frame (not from the third-party pack): the profile frame
+ *  "Trazo" drawn around the head. Listed first in the lab under this name. */
+export const TRACED_ICON = "__traced";
+/** LottieFiles "framing" (Lottie Simple License, see assets/decorations/NOTICE.md):
+ *  a vine growing into an arch over the head, leaves at its feet. */
+export const VINES_ICON = "__vines";
+const loadVines = () => import("@/assets/decorations/vines.json");
+const OWN_ICONS: Record<string, string> = { [TRACED_ICON]: "Trazo (propio)", [VINES_ICON]: "Enredadera (Lottie)" };
 
 // DEV ONLY — a lab for previewing a third-party avatar-decoration pack (read
 // straight from its zip by main.js, see "dev:deco-list") on your own head, in
@@ -92,17 +103,70 @@ async function decodeFrames(bytes: ArrayBuffer, square: boolean): Promise<Frame[
   return frames;
 }
 
-export function DecoratedHead({
-  name,
-  headUrl,
-  size,
-  square,
-}: {
+interface DecoratedHeadProps {
   name: string;
   headUrl: string | null;
   size: number;
   square: boolean;
-}) {
+}
+
+export function DecoratedHead(props: DecoratedHeadProps) {
+  if (props.name === TRACED_ICON) return <TracedHead {...props} />;
+  if (props.name === VINES_ICON) return <VinesHead {...props} />;
+  return <PackDecoratedHead {...props} />;
+}
+
+/** The head keeps the same size as with any other decoration; the vine is
+ *  scaled up (its opening is only ~half of its 1:1 box) and aligned so the
+ *  arch and its sides run along the head's edges — hugging it instead of
+ *  covering it. It spills a little outside the box, like Discord's
+ *  decorations, and the leaves land by the bottom corners. */
+const VINE_SCALE = 1.45;
+const VINE_TOP = 0.2; // arch height within the animation, as a fraction of it
+
+function VinesHead({ headUrl, size, square }: DecoratedHeadProps) {
+  const inset = size * (0.2 / 2.4);
+  const vine = size * VINE_SCALE;
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <div
+        className={`absolute overflow-hidden bg-accent/20 ${square ? "rounded-[14%]" : "rounded-full"}`}
+        style={{ inset }}
+      >
+        {headUrl && <img src={headUrl} alt="" className="h-full w-full" style={{ imageRendering: "pixelated" }} />}
+      </div>
+      <LottieDecoration
+        load={loadVines}
+        className="absolute"
+        style={{ width: vine, height: vine, left: (size - vine) / 2, top: inset - VINE_TOP * vine }}
+      />
+    </div>
+  );
+}
+
+/** The "Trazo" stroke around the head, in the same footprint as a pack
+ *  decoration (the head at the same size, the ring in the space around it). */
+function TracedHead({ headUrl, size, square }: DecoratedHeadProps) {
+  const inset = size * (0.2 / 2.4);
+  const ring = inset * 0.45; // where the stroke runs: between head and edge
+  const head = size - 2 * inset;
+  const radius = square ? (head + 2 * (inset - ring)) * 0.14 : size;
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <div className="absolute" style={{ inset: ring }}>
+        <TracedBorder fill borderRadius={radius}>
+          <div className="h-full w-full" style={{ padding: inset - ring }}>
+            <div className={`h-full w-full overflow-hidden bg-accent/20 ${square ? "rounded-[14%]" : "rounded-full"}`}>
+              {headUrl && <img src={headUrl} alt="" className="h-full w-full" style={{ imageRendering: "pixelated" }} />}
+            </div>
+          </div>
+        </TracedBorder>
+      </div>
+    </div>
+  );
+}
+
+function PackDecoratedHead({ name, headUrl, size, square }: DecoratedHeadProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -206,19 +270,15 @@ export function DevDecoLab({ uuid }: { uuid: string }) {
     return (names ?? []).filter((n) => n.toLowerCase().includes(q)).slice(0, 60);
   }, [names, query]);
 
-  const label = (n: string) => n.replace(/^.*\//, "").replace(/\.png$/i, "").replace(/_/g, " ");
+  const label = (n: string) =>
+    OWN_ICONS[n] ?? n.replace(/^.*\//, "").replace(/\.png$/i, "").replace(/_/g, " ");
 
   if (names === undefined) {
     return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />;
   }
-  if (names === null) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        {listError ??
-          "No se encontró el pack de pruebas (Descargas/avatar_decoration.zip, o la variable ALAUNCHI_DECO_ZIP)."}
-      </p>
-    );
-  }
+  // Without the third-party pack, our own "Trazo" is still listed.
+  const packMissing = names === null;
+  const listed = [...Object.keys(OWN_ICONS), ...filtered];
 
   return (
     <div className="space-y-3">
@@ -252,7 +312,8 @@ export function DevDecoLab({ uuid }: { uuid: string }) {
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder={`Buscar entre ${names.length}...`}
+                placeholder={packMissing ? "Pack de pruebas no encontrado" : `Buscar entre ${names!.length}...`}
+                disabled={packMissing}
                 className="h-8 pl-8 text-sm"
               />
             </div>
@@ -265,7 +326,7 @@ export function DevDecoLab({ uuid }: { uuid: string }) {
             </button>
           </div>
           <div className="grid grid-cols-2 gap-1 max-h-[210px] overflow-y-auto pr-1">
-            {filtered.map((n) => (
+            {listed.map((n) => (
               <button
                 key={n}
                 type="button"
@@ -280,6 +341,12 @@ export function DevDecoLab({ uuid }: { uuid: string }) {
           </div>
         </div>
       </div>
+      {packMissing && (
+        <p className="text-[10px] text-muted-foreground">
+          {listError ??
+            "No se encontró el pack de pruebas (Descargas/avatar_decoration.zip, o la variable ALAUNCHI_DECO_ZIP)."}
+        </p>
+      )}
       <p className="text-[10px] text-amber-400/80">
         Solo en desarrollo: la elegida se ve temporalmente en tu cabeza del menú de cuenta, pero no se guarda en tu perfil ni se incluye en la app.
       </p>

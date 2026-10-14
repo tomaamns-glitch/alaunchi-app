@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { ElectricBorder } from "@/components/electric-border";
+import { TracedBorder } from "@/components/traced-border";
 
 /** The animated border around a profile card, chosen from decoration-catalog's
  *  FRAME_DECORATIONS. "none" just renders the card as-is. */
@@ -19,6 +20,9 @@ export function ProfileFrame({
         {children}
       </ElectricBorder>
     );
+  }
+  if (frame === "traced") {
+    return <TracedBorder borderRadius={borderRadius}>{children}</TracedBorder>;
   }
   return <>{children}</>;
 }

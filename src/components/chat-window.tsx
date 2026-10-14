@@ -30,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import {
   getConversationId,
   subscribeMessages,
+  deleteChatMessage,
   sendMessage,
   type ChatMessage,
   type SharedInstance,
@@ -56,6 +57,8 @@ import { addToGallery, usePersonalLibrary } from "@/services/personal-library";
 import { cn } from "@/lib/utils";
 import { ChatDaySeparator, startsNewDay } from "@/components/chat-day-separator";
 import { ImageLightbox } from "@/components/image-lightbox";
+import { ChatMessageMenu, DeletedMessageBubble, useMessageMenu } from "@/components/chat-message-menu";
+import { hiddenKey, useHiddenMessages } from "@/lib/hidden-messages";
 // Re-exported for existing imports (chat-content-picker.tsx) — the type now
 // lives in a shared module since PresenceButton/ChatContactRail need it too.
 export type { ChatMode } from "@/lib/instance-context";
@@ -149,7 +152,18 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
   // chats/{conversationId}/messages node — everything at or before it just
   // gets filtered out of view here, for us only.
   const deletedBefore = displayUuid ? chatIndex[displayUuid]?.deletedBefore : undefined;
-  const visibleMessages = deletedBefore ? messages.filter((m) => m.timestamp > deletedBefore) : messages;
+  const conversationId = displayUuid ? getConversationId(myUuid, displayUuid) : "";
+  // Others' messages you deleted "para mí" (lib/hidden-messages.ts).
+  const hiddenMessages = useHiddenMessages((s) => s.hidden);
+  useEffect(() => {
+    useHiddenMessages.getState().init(myUuid);
+  }, [myUuid]);
+  const visibleMessages = messages.filter(
+    (m) =>
+      (!deletedBefore || m.timestamp > deletedBefore) &&
+      !(m.id && hiddenMessages.has(hiddenKey(conversationId, m.id)))
+  );
+  const messageMenu = useMessageMenu();
   const [draft, setDraft] = useState("");
   const [activity, setActivity] = useState<UserActivity | null>(null);
   const [activityColor, setActivityColor] = useState<string | null>(null);
@@ -484,13 +498,25 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                     const tagPack = m.carouselInstanceId ? modpacks.find((p) => p.id === m.carouselInstanceId) : undefined;
                     const tagColor = m.carouselInstanceId ? tagColors[m.carouselInstanceId] : undefined;
                     return (
-                      <Fragment key={i}>
+                      <Fragment key={m.id ?? i}>
                       {startsNewDay(m.timestamp, sorted[i - 1]?.timestamp) && <ChatDaySeparator timestamp={m.timestamp} />}
                       <motion.div
                         initial={{ opacity: 0, y: 6 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.15 }}
                         className={cn("flex flex-col", isMe ? "items-end" : "items-start")}
+                        // Right-click: your own message → deleted for both;
+                        // theirs (or an already-deleted one) → hidden for you.
+                        onContextMenu={(e) => {
+                          const id = m.id;
+                          if (!id || !displayUuid) return;
+                          const forEveryone = isMe && !m.deleted;
+                          messageMenu.open(e, forEveryone, () =>
+                            forEveryone
+                              ? deleteChatMessage(myUuid, displayUuid, id, i === sorted.length - 1)
+                              : useHiddenMessages.getState().hide(myUuid, conversationId, id)
+                          );
+                        }}
                       >
                         {tagPack && (
                           <span
@@ -500,7 +526,9 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                             {tagPack.name}
                           </span>
                         )}
-                        {m.instance ? (
+                        {m.deleted ? (
+                          <DeletedMessageBubble mine={isMe} />
+                        ) : m.instance ? (
                           <SharedInstanceCard instance={m.instance} fromMe={isMe} />
                         ) : m.server ? (
                           <SharedServerCard server={m.server} />
@@ -547,6 +575,7 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
               </div>
             </div>
 
+            <ChatMessageMenu menu={messageMenu.menu} onClose={messageMenu.close} />
             <AnimatePresence>
               {!atBottom && (
                 <motion.button

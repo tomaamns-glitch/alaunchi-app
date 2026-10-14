@@ -1,4 +1,4 @@
-import { limitToLast, onValue, push, query, ref, serverTimestamp, set } from "firebase/database";
+import { limitToLast, onValue, push, query, ref, remove, serverTimestamp, set, update } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 import { grantKey } from "@/services/access-codes";
 import type { SharedContent } from "@/services/content-share";
@@ -16,6 +16,8 @@ export interface GroupMessage {
   /** A mod/shader/texture/emote/schematic/skin/screenshot shared in the room
    *  (same card and install flow as the 1:1 chat); text is "" then. */
   content?: SharedContent;
+  /** Deleted by its sender (tombstone, see deleteGroupMessage). */
+  deleted?: boolean;
 }
 
 const MAX_LOADED = 150;
@@ -46,6 +48,7 @@ export function subscribeGroupMessages(groupKey: string, onChange: (messages: Gr
             text: typeof v.text === "string" ? v.text : "",
             timestamp: Number(v.timestamp) || 0,
             ...(content ? { content } : {}),
+            ...(v.deleted ? { deleted: true } : {}),
           });
         }
       });
@@ -76,6 +79,18 @@ export async function sendGroupContent(groupKey: string, senderUuid: string, sen
     content,
     timestamp: serverTimestamp(),
   });
+}
+
+/** Removes one of your messages for everyone in the room — or, if the rules
+ *  don't allow removing the node, empties it into a "Mensaje eliminado"
+ *  tombstone. */
+export async function deleteGroupMessage(groupKey: string, messageId: string): Promise<void> {
+  const msgRef = ref(rtdb, `groupChats/${groupKey}/messages/${messageId}`);
+  try {
+    await remove(msgRef);
+  } catch {
+    await update(msgRef, { text: "", deleted: true, content: null });
+  }
 }
 
 // Unread = messages from others newer than the last time you had the room
