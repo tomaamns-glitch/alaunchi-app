@@ -19,6 +19,7 @@ export function LottieDecoration({
   load,
   once,
   replayKey = 0,
+  speed = 1,
   className,
   style,
 }: {
@@ -31,6 +32,8 @@ export function LottieDecoration({
   /** Each change replays it now (clicking the icon): `once` → grow again,
    *  looping → restart from the first frame. */
   replayKey?: number;
+  /** Playback speed (e.g. 3 = a 5.7 s animation in ~1.9 s). */
+  speed?: number;
   className?: string;
   style?: React.CSSProperties;
 }) {
@@ -98,6 +101,7 @@ export function LottieDecoration({
           animationData: structuredClone(data.default),
           rendererSettings: { preserveAspectRatio: "xMidYMid meet" },
         }) as unknown as Anim;
+        if (speed !== 1) (anim as any).setSpeed(speed);
         if (io) {
           anim.goToAndStop(0, true);
           io.observe(el);
@@ -111,7 +115,7 @@ export function LottieDecoration({
       if (fadeTimer) clearTimeout(fadeTimer);
       anim?.destroy();
     };
-  }, [load, holdFrame, replayEvery, fade]);
+  }, [load, holdFrame, replayEvery, fade, speed]);
 
   useEffect(() => {
     if (replayKey) replayRef.current();
