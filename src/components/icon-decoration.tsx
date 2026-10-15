@@ -15,9 +15,11 @@ import { cn } from "@/lib/utils";
 
 /** The vine: an arch rather than a ring, drawn as-is (SVG) around the head. */
 const loadVines = () => import("@/assets/decorations/vines.json");
-const VINE_SCALE = 1.74; // vine box / head size
+// Sized so the arch and sides run along the head's edges, over them a little,
+// instead of floating outside.
+const VINE_SCALE = 1.5; // vine box / head size
 const VINE_CX = 0.5; // head centre inside the vine box
-const VINE_CY = 0.487;
+const VINE_CY = 0.49;
 
 /** Frame animations from LottieFiles (Lottie Simple License, see
  *  assets/decorations/NOTICE.md), re-projected as a thin square band around
