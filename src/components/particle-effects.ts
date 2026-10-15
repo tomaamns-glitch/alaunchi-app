@@ -527,7 +527,11 @@ class ParticleLayerSystem {
   private static Z = new THREE.Vector3(0, 0, 1);
   private static Y = new THREE.Vector3(0, 1, 0);
 
-  constructor(private def: ParticleLayer) {
+  /** `lift`: extra world height above the usual frame (a viewer drawn taller
+   *  than its box, see SkinViewerAnimated's `extendTop`). Layers that fall in
+   *  from above the frame spawn that much higher and live long enough to
+   *  still cover the whole way down. */
+  constructor(private def: ParticleLayer, private lift = 0) {
     const n = (this.n = def.count);
     this.pos = new Float32Array(n * 3);
     this.vel = new Float32Array(n * 3);
@@ -611,6 +615,10 @@ class ParticleLayerSystem {
     this.vel[i * 3 + 1] = vy + (Math.random() * 2 - 1) * jy;
     this.vel[i * 3 + 2] = vz + (Math.random() * 2 - 1) * jz;
     this.life[i] = rand(d.life);
+    if (this.lift > 0 && d.spawn.y[0] >= 2.4 && vy < 0) {
+      this.pos[i * 3 + 1] += this.lift;
+      this.life[i] += this.lift / -vy;
+    }
     this.size[i] = rand(d.size);
     this.phase[i] = Math.random() * Math.PI * 2;
     this.spinSpeed[i] = d.spin ? rand(d.spin) : 0;
@@ -735,8 +743,8 @@ export class ParticleEffect {
   private baseIntensity = 0;
   private time = 0;
 
-  constructor(def: ParticleEffectDef) {
-    this.layers = def.layers.map((l) => new ParticleLayerSystem(l));
+  constructor(def: ParticleEffectDef, lift = 0) {
+    this.layers = def.layers.map((l) => new ParticleLayerSystem(l, lift));
     for (const l of this.layers) this.object.add(l.mesh);
     if (def.light) {
       this.baseIntensity = def.light.intensity;

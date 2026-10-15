@@ -17,6 +17,13 @@ interface SkinViewerAnimatedProps {
   height?: number;
   className?: string;
   /**
+   * Draw this many px more ABOVE the box (the canvas grows upward; the
+   * character keeps its size and place). Falling particles then start from
+   * that higher edge — e.g. the account menu's top border — instead of
+   * popping in at the box's top.
+   */
+  extendTop?: number;
+  /**
    * Cosmetic backdrop:
    * - "soul-fire": blue flames rising around the character.
    * - "cherry-petals": pink petals drifting down behind the character.
@@ -638,7 +645,9 @@ class CherryPetals implements SceneEffect {
   private respawn(i: number, startFraction = 0) {
     this.baseX[i] = (Math.random() - 0.5) * 2 * this.spread;
     this.baseZ[i] = -0.3 - Math.random() * 0.6; // clearly behind the character
-    this.span[i] = 4.5 + Math.random() * 3.5; // seconds to fall — slow
+    // seconds to fall — slow; scaled with the drop so a taller viewer
+    // (extendTop) keeps the same falling speed
+    this.span[i] = (4.5 + Math.random() * 3.5) * ((this.topY - this.bottomY) / 4.2);
     this.scale[i] = 0.13 + Math.random() * 0.06;
     this.swayFreq[i] = 0.4 + Math.random() * 0.6;
     this.swayAmp[i] = 0.05 + Math.random() * 0.09;
@@ -732,6 +741,7 @@ export function SkinViewerAnimated({
   height = 210,
   className,
   effect = "none",
+  extendTop = 0,
 }: SkinViewerAnimatedProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -752,7 +762,7 @@ export function SkinViewerAnimated({
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     // updateStyle:true so the canvas' CSS size stays width x height even when
     // the device pixel ratio inflates the drawing buffer.
-    renderer.setSize(width, height, true);
+    renderer.setSize(width, height + extendTop, true);
     renderer.setClearColor(0x000000, 0);
     renderer.toneMapping = THREE.NoToneMapping;
     rendererRef.current = renderer;
@@ -771,7 +781,13 @@ export function SkinViewerAnimated({
     const camera = new THREE.PerspectiveCamera(35, width / height, 0.1, 100);
     camera.position.set(0, 1, 4);
     camera.lookAt(0, 1, 0);
+    // Taller canvas: render the same framing (a width×height view) plus
+    // `extendTop` px above it, so the character doesn't move or shrink.
+    if (extendTop > 0) camera.setViewOffset(width, height, 0, -extendTop, width, height + extendTop);
     cameraRef.current = camera;
+    // World height the extension adds at the character (the model fills ~88%
+    // of `height` and is ~2 units tall), + a margin so spawns stay out of view.
+    const lift = extendTop > 0 ? (extendTop / height) * (2.05 / 0.88) + 0.2 : 0;
 
     // Everything animated hangs off this pivot so drag-to-rotate survives a
     // skin/cape swap (which rebuilds the model but not this group).
@@ -790,7 +806,7 @@ export function SkinViewerAnimated({
     } else if (effect === "cherry-petals") {
       // topY / bottomY sit well outside the framed area at every viewer size;
       // spread is a narrow column ~the character's width so nothing hits the edge.
-      const petals = new CherryPetals(3.5, -0.7, 0.4);
+      const petals = new CherryPetals(3.5 + lift, -0.7, 0.4);
       scene.add(petals.mesh);
       sceneEffect = petals;
     } else if (effect === "fireflies") {
@@ -800,7 +816,7 @@ export function SkinViewerAnimated({
       scene.add(flies.points);
       sceneEffect = flies;
     } else if (isParticleEffectId(effect)) {
-      const particles = new ParticleEffect(PARTICLE_EFFECTS[effect]);
+      const particles = new ParticleEffect(PARTICLE_EFFECTS[effect], lift);
       scene.add(particles.object);
       sceneEffect = particles;
     }
@@ -862,7 +878,7 @@ export function SkinViewerAnimated({
       cameraRef.current = null;
       pivotRef.current = null;
     };
-  }, [width, height, effect]);
+  }, [width, height, effect, extendTop]);
 
   // Load / swap the model + textures whenever the skin, cape or variant change.
   useEffect(() => {
@@ -946,7 +962,7 @@ export function SkinViewerAnimated({
     };
     // width/height/effect are here too: any of them rebuilds the scene in the
     // other effect, which leaves an empty pivot this effect has to repopulate.
-  }, [skinUrl, capeUrl, variant, width, height, effect]);
+  }, [skinUrl, capeUrl, variant, width, height, effect, extendTop]);
 
   return <canvas ref={canvasRef} className={className} />;
 }
