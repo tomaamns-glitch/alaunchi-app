@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 // "Trazo" profile frame — the idea of LottieFiles' free "frame" animation by
 // hugo (Lottie Simple License): a stroke drawing itself around the card, with
@@ -22,6 +22,7 @@ export function TracedBorder({
   duration = 7,
   fill = false,
   strokeScale = 1,
+  replayEvery,
   children,
 }: {
   borderRadius?: number;
@@ -34,11 +35,44 @@ export function TracedBorder({
   fill?: boolean;
   /** Multiplies stroke widths and glow blur — thinner for small icons. */
   strokeScale?: number;
+  /** Seconds. Instead of looping, draw in once each time it comes on screen,
+   *  then stay complete (with its glow) and redraw every `replayEvery` s
+   *  while it's still visible — the icon decoration. */
+  replayEvery?: number;
   children: ReactNode;
 }) {
   const gradientId = `traced-${useId().replace(/:/g, "")}`;
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // Periodic mode: `run` remounts the strokes to restart their one-shot
+  // animation; 0 = not drawn yet (hidden until first on screen).
+  const [run, setRun] = useState(0);
+  useEffect(() => {
+    if (!replayEvery || !rootRef.current) return;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const io = new IntersectionObserver(([e]) => {
+      if (timer) clearInterval(timer);
+      timer = null;
+      if (!e.isIntersecting) return;
+      setRun((r) => r + 1); // (re)appeared on screen → draw now
+      timer = setInterval(() => setRun((r) => r + 1), replayEvery * 1000);
+    });
+    io.observe(rootRef.current);
+    return () => {
+      io.disconnect();
+      if (timer) clearInterval(timer);
+    };
+  }, [replayEvery]);
+  const periodic = !!replayEvery;
+  // First draw: from nothing. Later ones: quick fade of the complete stroke,
+  // then the same draw-in, so it never just blinks out.
+  const strokeAnimation = (delay: number) =>
+    !periodic
+      ? `traced-border ${duration}s cubic-bezier(0.45, 0, 0.25, 1) ${delay}s infinite`
+      : run <= 1
+      ? `traced-border-draw 1.9s cubic-bezier(0.45, 0, 0.25, 1) ${delay}s both`
+      : `traced-border-redraw 2.3s cubic-bezier(0.45, 0, 0.25, 1) ${delay}s both`;
   return (
-    <div className={`relative isolate ${fill ? "h-full w-full" : ""}`} style={{ borderRadius }}>
+    <div ref={rootRef} className={`relative isolate ${fill ? "h-full w-full" : ""}`} style={{ borderRadius }}>
       <svg
         aria-hidden
         className="pointer-events-none absolute inset-0 z-[2] h-full w-full overflow-visible"
@@ -49,10 +83,10 @@ export function TracedBorder({
             <stop offset="100%" stopColor={to} />
           </linearGradient>
         </defs>
-        {LAYERS.map((l, i) => (
+        {(!periodic || run > 0) && LAYERS.map((l, i) => (
           // Base opacity on the <g> so the rect's own animation can fade it
           // out (each layer fades within its own, delayed, cycle).
-          <g key={i} style={{ opacity: l.opacity }}>
+          <g key={`${i}-${run}`} style={{ opacity: l.opacity }}>
           <rect
             x={1}
             y={1}
@@ -68,7 +102,7 @@ export function TracedBorder({
               width: "calc(100% - 2px)",
               height: "calc(100% - 2px)",
               filter: l.blur ? `blur(${l.blur * strokeScale}px)` : undefined,
-              animation: `traced-border ${duration}s cubic-bezier(0.45, 0, 0.25, 1) ${l.delay}s infinite`,
+              animation: strokeAnimation(l.delay),
               strokeDashoffset: 100,
               opacity: 0,
             }}
@@ -85,8 +119,20 @@ export function TracedBorder({
           88% { stroke-dashoffset: 0; opacity: 0; }
           100% { stroke-dashoffset: 0; opacity: 0; }
         }
+        @keyframes traced-border-draw {
+          0% { stroke-dashoffset: 100; opacity: 1; }
+          100% { stroke-dashoffset: 0; opacity: 1; }
+        }
+        @keyframes traced-border-redraw {
+          0% { stroke-dashoffset: 0; opacity: 1; }
+          15% { stroke-dashoffset: 0; opacity: 0; }
+          16% { stroke-dashoffset: 100; opacity: 1; }
+          100% { stroke-dashoffset: 0; opacity: 1; }
+        }
         @media (prefers-reduced-motion: reduce) {
           @keyframes traced-border { 0%, 100% { stroke-dashoffset: 0; opacity: 1; } }
+          @keyframes traced-border-draw { 0%, 100% { stroke-dashoffset: 0; opacity: 1; } }
+          @keyframes traced-border-redraw { 0%, 100% { stroke-dashoffset: 0; opacity: 1; } }
         }
       `}</style>
     </div>
