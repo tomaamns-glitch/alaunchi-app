@@ -137,7 +137,6 @@ const FRAME_ICONS: Record<
     // Flames keep burning (looping; paused while off screen) — no play-then-rest.
     rim: "#ff5a00",
   },
-  "orange-ring": { load: () => import("@/assets/decorations/icon/loading.json"), source: { shape: "round", cx: 0.5, cy: 0.497, rin: 0.09, rout: 0.15 }, band: 0.08 },
 };
 
 export function DecoratedIcon({
@@ -166,7 +165,12 @@ export function DecoratedIcon({
   const frame = decoration ? FRAME_ICONS[decoration] : undefined;
   const round = decoration ? ROUND_ICONS[decoration] : undefined;
   const decorated =
-    decoration === "traced" || decoration === "orange-run" || decoration === "vines" || !!frame || !!round;
+    decoration === "traced" ||
+    decoration === "orange-run" ||
+    decoration === "orange-ring" ||
+    decoration === "vines" ||
+    !!frame ||
+    !!round;
 
   useLayoutEffect(() => {
     if (!decorated || fixedSize || !ref.current) return;
@@ -216,6 +220,9 @@ export function DecoratedIcon({
       {size > 0 && decoration === "traced" && <TracedIcon size={size} radius={radius} replayKey={replay} />}
       {size > 0 && decoration === "orange-run" && (
         <TracedIcon size={size} radius={radius} replayKey={replay} variant="run" />
+      )}
+      {size > 0 && decoration === "orange-ring" && (
+        <TracedIcon size={size} radius={radius} replayKey={replay} variant="ring" />
       )}
       {size > 0 && round && (
         <LottieDecoration
@@ -279,12 +286,15 @@ function TracedIcon({
   radius: number;
   replayKey: number;
   /** "run" = Recorrido: two orange strokes from opposite corners filling the
-   *  border between them (the LottieFiles "square frame" idea, as a fill). */
-  variant?: "traced" | "run";
+   *  border between them (the LottieFiles "square frame" idea, as a fill).
+   *  "ring" = Giro naranja: the LottieFiles "loading" spinner's stroke (its
+   *  #ff8e3a, round caps, blurred glow) going once round the icon until it
+   *  closes, then staying complete. */
+  variant?: "traced" | "run" | "ring";
 }) {
   // Never thinner than ~1.5px: on the 24px account button it used to shrink
   // below a pixel and all but vanish. Recorrido is a bit bolder, like its original.
-  const k = Math.min(1, Math.max(0.75, size / 64)) * (variant === "run" ? 1.3 : 1);
+  const k = Math.min(1, Math.max(0.75, size / 64)) * (variant === "run" ? 1.3 : variant === "ring" ? 1.5 : 1);
   const half = 2 * k / 2; // half of the main stroke's width (2px × k)
   const outset = half - 0.5 + 1; // stroke centre just outside the edge, + the rect's 1px inset
   return (
@@ -296,6 +306,7 @@ function TracedIcon({
         replayEvery={60}
         replayKey={replayKey}
         {...(variant === "run" ? { from: "#ff6f00", to: "#ff6f00", split: true } : {})}
+        {...(variant === "ring" ? { from: "#ff8e3a", to: "#ff8e3a" } : {})}
       >
         <span />
       </TracedBorder>
