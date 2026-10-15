@@ -51,9 +51,12 @@ const ROUND_ICONS: Record<
   // sweep end by frame 99 — so it rests there and replays without fading.
   "gold-stars": {
     load: () => import("@/assets/decorations/icon/wreath.json"),
-    scale: 1.82,
-    cx: 0.5,
-    cy: 0.53,
+    // Measured: the ring's hole has radius 0.245 of the box (Alas: 0.285),
+    // centred at (0.502, 0.50) — scaled so the hole is exactly the head, the
+    // same fit as Alas.
+    scale: 2.04,
+    cx: 0.502,
+    cy: 0.5,
     once: { holdFrame: 99, replayEvery: 60, fade: false },
   },
   // Alas I/II/III (1, 2, 3 stars) share one rig: wings, ring and base grow
