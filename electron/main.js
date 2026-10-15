@@ -3856,6 +3856,21 @@ async function forgeVersionsForMc(mcVersion) {
   }));
 }
 
+// The maven version isn't always "<mc>-<forge>": old branches carry a suffix
+// (1.7.10 → "1.7.10-10.13.4.1614-1.7.10", 1.7.2 → "…-mc172"), while promotions_slim.json
+// gives the bare build number. Look the real one up in maven-metadata.xml.
+async function forgeMavenVersion(mcVersion, loaderVersion) {
+  const plain = `${mcVersion}-${loaderVersion}`;
+  try {
+    const xml = await fetchText("https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml");
+    const all = [...xml.matchAll(/<version>([^<]+)<\/version>/g)].map((m) => m[1]);
+    if (all.includes(plain)) return plain;
+    return all.find((v) => v.startsWith(`${plain}-`)) || plain;
+  } catch {
+    return plain;
+  }
+}
+
 // Fabric's loader-versions-per-MC-version endpoint already carries a real
 // `stable` flag, unlike Forge/NeoForge — no need to infer betas from promotions.
 async function fabricVersionsForMc(mcVersion) {
@@ -3959,7 +3974,7 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
     installerFilename = `neoforge-${loaderVersion}-installer.jar`;
     installerUrl = `https://maven.neoforged.net/releases/net/neoforged/neoforge/${loaderVersion}/${installerFilename}`;
   } else {
-    const fullVersion = `${mcVersion}-${loaderVersion}`;
+    const fullVersion = await forgeMavenVersion(mcVersion, loaderVersion);
     installerFilename = `forge-${fullVersion}-installer.jar`;
     installerUrl = `https://maven.minecraftforge.net/net/minecraftforge/forge/${fullVersion}/${installerFilename}`;
   }
@@ -3972,7 +3987,20 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
   let installProfile, versionJson;
   try {
     installProfile = JSON.parse(readZipEntry(installerPath, "install_profile.json").toString("utf8"));
-    versionJson    = JSON.parse(readZipEntry(installerPath, "version.json").toString("utf8"));
+    // Very old installers (Forge 1.7.10–1.11) have no version.json: the launch profile is
+    // install_profile.json#versionInfo and Forge itself ships as a loose universal jar
+    // (install.filePath) that isn't downloadable from maven under its library coordinate.
+    if (installProfile.versionInfo) {
+      versionJson = installProfile.versionInfo;
+      const { path: forgeCoord, filePath } = installProfile.install || {};
+      if (forgeCoord && filePath) {
+        const dest = path.join(libsDir, mavenCoordToPath(forgeCoord));
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await fs.writeFile(dest, readZipEntry(installerPath, filePath));
+      }
+    } else {
+      versionJson = JSON.parse(readZipEntry(installerPath, "version.json").toString("utf8"));
+    }
   } catch (e) {
     await fs.unlink(installerPath).catch(() => {});
     throw new Error(`No se pudo leer el instalador de ${loaderType}: ${e.message}`);
@@ -4047,12 +4075,17 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
     console.warn(`[${loaderType}] Error preparando cliente vanilla en libsDir:`, e.message);
   }
 
+  const processors = (installProfile.processors || []).filter(
+    (p) => !p.sides || p.sides.includes("client")
+  );
+
   sendStatus?.("Ejecutando procesadores (solo primera vez)...");
   // Processors run under the loader's own required Java major, which can differ
   // from whatever else is already cached — resolve/download it the same way the
   // final launch does instead of assuming a globally-installed JRE.
+  // Old installers have no processors at all — don't download a Java just for nothing.
   const loaderJavaMajor = versionJson.javaVersion?.majorVersion ?? 21;
-  let javaExe = await getJavaPathForMajor(loaderJavaMajor);
+  let javaExe = processors.length ? await getJavaPathForMajor(loaderJavaMajor) : "java";
   if (!javaExe) {
     try {
       const { stdout, stderr } = await execAsync("java -version 2>&1");
@@ -4104,10 +4137,6 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
       resolvedData[key] = raw;
     }
   }
-
-  const processors = (installProfile.processors || []).filter(
-    (p) => !p.sides || p.sides.includes("client")
-  );
 
   for (let i = 0; i < processors.length; i++) {
     const proc = processors[i];
@@ -4199,7 +4228,8 @@ async function extractNatives(libraries, nativesDir) {
 
   for (const lib of libraries) {
     if (!lib.natives) continue;
-    const nativeKey = lib.natives[platform];
+    // Old versions (≤1.8) use "natives-windows-${arch}" keys (e.g. twitch-platform).
+    const nativeKey = lib.natives[platform]?.replace("${arch}", process.arch === "ia32" ? "32" : "64");
     if (!nativeKey) continue;
     const classifierInfo = lib.downloads?.classifiers?.[nativeKey];
     if (!classifierInfo?.path) continue;
@@ -4271,7 +4301,10 @@ async function resolveModloaderLibrary(lib, librariesDir, mavenBases, installLib
             if (fsSync.existsSync(libPath)) { lastErr = null; break; }
           } catch (e) {
             lastErr = e;
-            if (fsSync.existsSync(libPath)) fsSync.unlinkSync(libPath);
+            // force: downloadFile already unlinks asynchronously on failure, so the file can
+            // vanish between an existsSync and an unlinkSync — that ENOENT used to escape and
+            // abort the remaining mirrors (lzma for Forge 1.7.10 404s on Forge's maven first).
+            fsSync.rmSync(libPath, { force: true });
             if (attempt < 3) await new Promise((r) => setTimeout(r, 800 * attempt));
           }
         }
@@ -4313,6 +4346,10 @@ function buildLaunchArgs(versionJson, opts, loaderProfile = null) {
     "${classpath}": opts.classpath,
     "${clientid}": opts.clientId || "",
     "${auth_xuid}": opts.xuid || "",
+    // Pre-1.8 minecraftArguments: --userProperties must be valid JSON or the game
+    // crashes parsing it; ${game_assets} is the pre-1.7.3 name for the assets dir.
+    "${user_properties}": "{}",
+    "${game_assets}": opts.assetsDir,
   };
 
   function resolveArg(arg) {
@@ -4377,7 +4414,12 @@ function buildLaunchArgs(versionJson, opts, loaderProfile = null) {
 
   const classpathArgs = ["-cp", opts.classpath];
 
-  const rawGameArgs = versionJson.arguments?.game || versionJson.minecraftArguments?.split(" ") || [];
+  // Old-format (pre-1.13) Forge profiles carry a full minecraftArguments string that
+  // REPLACES vanilla's (it adds --tweakClass for launchwrapper), like the official launcher's
+  // inheritsFrom does — appending would duplicate every flag.
+  const rawGameArgs = versionJson.arguments?.game
+    || (loaderProfile?.minecraftArguments || versionJson.minecraftArguments)?.split(" ")
+    || [];
   const gameArgs = expandArgs(rawGameArgs);
   const loaderGameArgs = loaderProfile?.arguments?.game
     ? expandArgs(loaderProfile.arguments.game)
