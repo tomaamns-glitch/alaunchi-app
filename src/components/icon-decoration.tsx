@@ -90,6 +90,29 @@ const ROUND_ICONS: Record<
     speed: 3,
     rounded: true,
   },
+  // Interfaz azul: HUD rings spinning (no build-up — the rings are always
+  // there). Measured: first ring at 0.365 of the box, centred → the head
+  // fills it. ×2 so its 4.4 s plays in ~2 s; rests on the last frame.
+  "blue-hud": {
+    load: () => import("@/assets/decorations/icon/blue-border.json"),
+    scale: 1.39,
+    cx: 0.5,
+    cy: 0.5,
+    once: { holdFrame: 108, replayEvery: 60, fade: false },
+    speed: 2,
+  },
+  // Circuito: circuit face + ripples, drawn behind: the head covers the face
+  // and reaches the dotted ring (measured at 0.42–0.45 of the box), which
+  // hugs it. ×1.5 (3.1 s → ~2 s); rests on the last frame.
+  circuit: {
+    load: () => import("@/assets/decorations/icon/back-forth.json"),
+    scale: 1.24,
+    cx: 0.5,
+    cy: 0.5,
+    once: { holdFrame: 91, replayEvery: 60, fade: false },
+    speed: 1.5,
+    behind: true, // the face stays under the head; only the rings show
+  },
 };
 
 const FRAME_ICONS: Record<
@@ -114,8 +137,6 @@ const FRAME_ICONS: Record<
     // Flames keep burning (looping; paused while off screen) — no play-then-rest.
     rim: "#ff5a00",
   },
-  "blue-hud": { load: () => import("@/assets/decorations/icon/blue-border.json"), source: { shape: "round", cx: 0.5, cy: 0.5, rin: 0.33, rout: 0.45 }, band: 0.13 },
-  circuit: { load: () => import("@/assets/decorations/icon/back-forth.json"), source: { shape: "round", cx: 0.5, cy: 0.5, rin: 0.38, rout: 0.45 }, band: 0.12 },
   "orange-ring": { load: () => import("@/assets/decorations/icon/loading.json"), source: { shape: "round", cx: 0.5, cy: 0.497, rin: 0.09, rout: 0.15 }, band: 0.08 },
 };
 
