@@ -16,7 +16,9 @@ export function ProfileFrame({
 }) {
   if (frame === "electric") {
     return (
-      <ElectricBorder borderRadius={borderRadius} color="#ff9436" chaos={0.09} speed={0.9}>
+      // Calmer than the component's defaults: slower crackle, gentler wobble
+      // and about half the glow — at full strength it saturated the card.
+      <ElectricBorder borderRadius={borderRadius} color="#ff9436" chaos={0.065} speed={0.38} intensity={0.5}>
         {children}
       </ElectricBorder>
     );
