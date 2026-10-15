@@ -68,7 +68,6 @@ const ROUND_ICONS: Record<
 };
 
 const FRAME_ICONS: Record<string, { load: () => Promise<{ default: unknown }>; source: RingSource; band: number }> = {
-  "orange-run": { load: () => import("@/assets/decorations/icon/square.json"), source: { shape: "square", cx: 0.5, cy: 0.5, rin: 0.24, rout: 0.27 }, band: 0.1 },
   flames: { load: () => import("@/assets/decorations/icon/flames.json"), source: { shape: "square", cx: 0.507, cy: 0.503, rin: 0.26, rout: 0.37 }, band: 0.15 },
   shapes: { load: () => import("@/assets/decorations/icon/frame-1x1.json"), source: { shape: "square", cx: 0.5, cy: 0.5, rin: 0.3, rout: 0.5 }, band: 0.11 },
   pastel: { load: () => import("@/assets/decorations/icon/yeye.json"), source: { shape: "square", cx: 0.5, cy: 0.5, rin: [0.43, 0.37], rout: [0.5, 0.43] }, band: 0.1 },
@@ -102,7 +101,8 @@ export function DecoratedIcon({
   const [measured, setMeasured] = useState(0);
   const frame = decoration ? FRAME_ICONS[decoration] : undefined;
   const round = decoration ? ROUND_ICONS[decoration] : undefined;
-  const decorated = decoration === "traced" || decoration === "vines" || !!frame || !!round;
+  const decorated =
+    decoration === "traced" || decoration === "orange-run" || decoration === "vines" || !!frame || !!round;
 
   useLayoutEffect(() => {
     if (!decorated || fixedSize || !ref.current) return;
@@ -150,6 +150,9 @@ export function DecoratedIcon({
         children
       )}
       {size > 0 && decoration === "traced" && <TracedIcon size={size} radius={radius} replayKey={replay} />}
+      {size > 0 && decoration === "orange-run" && (
+        <TracedIcon size={size} radius={radius} replayKey={replay} variant="run" />
+      )}
       {size > 0 && round && (
         <LottieDecoration
           load={round.load}
@@ -188,15 +191,34 @@ export function DecoratedIcon({
 /** "Trazo" hugging the head: the stroke's inner edge sits half a pixel over
  *  the head's edge (no gap) and its corners follow the head's rounding.
  *  TracedBorder draws its rect 1px inside its box, centred on that line. */
-function TracedIcon({ size, radius, replayKey }: { size: number; radius: number; replayKey: number }) {
+function TracedIcon({
+  size,
+  radius,
+  replayKey,
+  variant = "traced",
+}: {
+  size: number;
+  radius: number;
+  replayKey: number;
+  /** "run" = Recorrido: two orange strokes from opposite corners filling the
+   *  border between them (the LottieFiles "square frame" idea, as a fill). */
+  variant?: "traced" | "run";
+}) {
   // Never thinner than ~1.5px: on the 24px account button it used to shrink
-  // below a pixel and all but vanish.
-  const k = Math.min(1, Math.max(0.75, size / 64));
+  // below a pixel and all but vanish. Recorrido is a bit bolder, like its original.
+  const k = Math.min(1, Math.max(0.75, size / 64)) * (variant === "run" ? 1.3 : 1);
   const half = 2 * k / 2; // half of the main stroke's width (2px × k)
   const outset = half - 0.5 + 1; // stroke centre just outside the edge, + the rect's 1px inset
   return (
     <div className="pointer-events-none absolute z-[2]" style={{ inset: -outset }}>
-      <TracedBorder fill borderRadius={radius + half - 0.5} strokeScale={k} replayEvery={60} replayKey={replayKey}>
+      <TracedBorder
+        fill
+        borderRadius={radius + half - 0.5}
+        strokeScale={k}
+        replayEvery={60}
+        replayKey={replayKey}
+        {...(variant === "run" ? { from: "#ff6f00", to: "#ff6f00", split: true } : {})}
+      >
         <span />
       </TracedBorder>
     </div>
