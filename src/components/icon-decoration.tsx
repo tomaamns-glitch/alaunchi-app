@@ -114,7 +114,6 @@ const FRAME_ICONS: Record<
     // Flames keep burning (looping; paused while off screen) — no play-then-rest.
     rim: "#ff5a00",
   },
-  pastel: { load: () => import("@/assets/decorations/icon/yeye.json"), source: { shape: "square", cx: 0.5, cy: 0.5, rin: [0.43, 0.37], rout: [0.5, 0.43] }, band: 0.1 },
   "blue-hud": { load: () => import("@/assets/decorations/icon/blue-border.json"), source: { shape: "round", cx: 0.5, cy: 0.5, rin: 0.33, rout: 0.45 }, band: 0.13 },
   circuit: { load: () => import("@/assets/decorations/icon/back-forth.json"), source: { shape: "round", cx: 0.5, cy: 0.5, rin: 0.38, rout: 0.45 }, band: 0.12 },
   "orange-ring": { load: () => import("@/assets/decorations/icon/loading.json"), source: { shape: "round", cx: 0.5, cy: 0.497, rin: 0.09, rout: 0.15 }, band: 0.08 },
