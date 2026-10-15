@@ -75,10 +75,21 @@ const FRAME_ICONS: Record<
     band: number;
     /** Play-then-rest cycle like Trazo (otherwise it loops). */
     once?: { loops: number; replayEvery: number };
+    /** Draw this colour's glowing line hugging the icon's own edge. */
+    rim?: string;
   }
 > = {
   // Burns for two of its 1 s loops, then rests (like the others).
-  flames: { load: () => import("@/assets/decorations/icon/flames.json"), source: { shape: "square", cx: 0.507, cy: 0.503, rin: 0.26, rout: 0.37 }, band: 0.15, once: { loops: 2, replayEvery: 60 } },
+  flames: {
+    load: () => import("@/assets/decorations/icon/flames.json"),
+    // Only the flames, from just outside the original's own frame line (which
+    // never matched the icon's rounding at the corners) — that line is drawn
+    // by us instead (`rim`), exactly on the icon's edge.
+    source: { shape: "square", cx: 0.501, cy: 0.496, rin: 0.27, rout: 0.4 },
+    band: 0.17,
+    once: { loops: 2, replayEvery: 60 },
+    rim: "#ff5a00",
+  },
   shapes: { load: () => import("@/assets/decorations/icon/frame-1x1.json"), source: { shape: "square", cx: 0.5, cy: 0.5, rin: 0.3, rout: 0.5 }, band: 0.11 },
   pastel: { load: () => import("@/assets/decorations/icon/yeye.json"), source: { shape: "square", cx: 0.5, cy: 0.5, rin: [0.43, 0.37], rout: [0.5, 0.43] }, band: 0.1 },
   "blue-hud": { load: () => import("@/assets/decorations/icon/blue-border.json"), source: { shape: "round", cx: 0.5, cy: 0.5, rin: 0.33, rout: 0.45 }, band: 0.13 },
@@ -177,6 +188,7 @@ export function DecoratedIcon({
           }}
         />
       )}
+      {size > 0 && frame?.rim && <RimLine size={size} radius={radius} color={frame.rim} />}
       {size > 0 && frame && (
         <RemappedLottie
           load={frame.load}
@@ -240,6 +252,24 @@ function TracedIcon({
         <span />
       </TracedBorder>
     </div>
+  );
+}
+
+/** A glowing line exactly on the icon's edge, following its rounding — same
+ *  geometry as TracedIcon (half a pixel over the edge, never under ~1.5px). */
+function RimLine({ size, radius, color }: { size: number; radius: number; color: string }) {
+  const k = Math.min(1, Math.max(0.75, size / 64)) * 1.4;
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none absolute z-[3]"
+      style={{
+        inset: -(k + 0.5),
+        border: `${2 * k}px solid ${color}`,
+        borderRadius: radius + k + 0.5,
+        boxShadow: `0 0 ${4 * k}px ${color}, inset 0 0 ${2 * k}px ${color}88`,
+      }}
+    />
   );
 }
 
