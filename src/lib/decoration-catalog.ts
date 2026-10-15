@@ -59,7 +59,7 @@ export const ICON_DECORATIONS: FrameDecoration[] = [
   { id: "none", label: "Sin decoración", description: "Tu cabeza tal cual." },
   { id: "traced", label: "Trazo", description: "Una línea verde y naranja que dibuja el borde del icono." },
   { id: "vines", label: "Enredadera", description: "Una enredadera que crece rodeando tu cabeza." },
-  { id: "gold-stars", label: "Estrellas doradas", description: "Marco dorado con estrellas encima." },
+  { id: "gold-stars", label: "Estrellas doradas", description: "Aro dorado con estrellas; tu cabeza se ve redonda dentro." },
   { id: "wings-1", label: "Alas I", description: "Marco dorado con alas y una estrella." },
   { id: "wings-2", label: "Alas II", description: "Marco dorado con alas y dos estrellas." },
   { id: "wings-3", label: "Alas III", description: "Marco dorado con alas y tres estrellas." },

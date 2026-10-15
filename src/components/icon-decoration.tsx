@@ -30,8 +30,14 @@ const VINE_ONCE = { holdFrame: 90, replayEvery: 60 };
  *  the head (remapped-lottie.tsx). `source` = where each one's ring sits in
  *  its own box (measured per animation); `band` = how thick it ends up on
  *  each side, × head size. */
+/** Frames kept exactly as the original animation (not re-projected): a ring
+ *  around the head, which is clipped to a circle to sit inside it. `scale` =
+ *  animation box ÷ head size; `cx`/`cy` = where the head's centre falls in it. */
+const ROUND_ICONS: Record<string, { load: () => Promise<{ default: unknown }>; scale: number; cx: number; cy: number }> = {
+  "gold-stars": { load: () => import("@/assets/decorations/icon/wreath.json"), scale: 1.92, cx: 0.517, cy: 0.547 },
+};
+
 const FRAME_ICONS: Record<string, { load: () => Promise<{ default: unknown }>; source: RingSource; band: number }> = {
-  "gold-stars": { load: () => import("@/assets/decorations/icon/wreath.json"), source: { shape: "round", cx: 0.517, cy: 0.547, rin: 0.25, rout: 0.4 }, band: 0.18 },
   "wings-1": { load: () => import("@/assets/decorations/icon/avatar-b.json"), source: { shape: "round", cx: 0.497, cy: 0.547, rin: 0.265, rout: 0.45 }, band: 0.18 },
   "wings-2": { load: () => import("@/assets/decorations/icon/avatar-c.json"), source: { shape: "round", cx: 0.497, cy: 0.547, rin: 0.265, rout: 0.45 }, band: 0.18 },
   "wings-3": { load: () => import("@/assets/decorations/icon/avatar-a.json"), source: { shape: "round", cx: 0.497, cy: 0.547, rin: 0.265, rout: 0.45 }, band: 0.18 },
@@ -68,7 +74,8 @@ export function DecoratedIcon({
   const ref = useRef<HTMLDivElement | null>(null);
   const [measured, setMeasured] = useState(0);
   const frame = decoration ? FRAME_ICONS[decoration] : undefined;
-  const decorated = decoration === "traced" || decoration === "vines" || !!frame;
+  const round = decoration ? ROUND_ICONS[decoration] : undefined;
+  const decorated = decoration === "traced" || decoration === "vines" || !!frame || !!round;
 
   useLayoutEffect(() => {
     if (!decorated || fixedSize || !ref.current) return;
@@ -104,8 +111,31 @@ export function DecoratedIcon({
       className={cn("relative shrink-0", fixedSize ? undefined : "inline-flex", className)}
       style={fixedSize ? { width: fixedSize, height: fixedSize } : undefined}
     >
-      {children}
+      {round ? (
+        // The head, clipped to a circle to sit inside the ring.
+        <div
+          className={cn("flex", fixedSize || className ? "h-full w-full" : undefined)}
+          style={{ clipPath: "circle(50% at 50% 50%)" }}
+        >
+          {children}
+        </div>
+      ) : (
+        children
+      )}
       {size > 0 && decoration === "traced" && <TracedIcon size={size} radius={radius} replayKey={replay} />}
+      {size > 0 && round && (
+        <LottieDecoration
+          load={round.load}
+          replayKey={replay}
+          className="absolute z-[2]"
+          style={{
+            width: size * round.scale,
+            height: size * round.scale,
+            left: size / 2 - round.cx * size * round.scale,
+            top: size / 2 - round.cy * size * round.scale,
+          }}
+        />
+      )}
       {size > 0 && frame && (
         <RemappedLottie load={frame.load} source={frame.source} head={size} band={frame.band} replayKey={replay} />
       )}
