@@ -33,8 +33,27 @@ const VINE_ONCE = { holdFrame: 90, replayEvery: 60 };
 /** Frames kept exactly as the original animation (not re-projected): a ring
  *  around the head, which is clipped to a circle to sit inside it. `scale` =
  *  animation box ÷ head size; `cx`/`cy` = where the head's centre falls in it. */
-const ROUND_ICONS: Record<string, { load: () => Promise<{ default: unknown }>; scale: number; cx: number; cy: number }> = {
-  "gold-stars": { load: () => import("@/assets/decorations/icon/wreath.json"), scale: 1.82, cx: 0.5, cy: 0.53 },
+const ROUND_ICONS: Record<
+  string,
+  {
+    load: () => Promise<{ default: unknown }>;
+    scale: number;
+    cx: number;
+    cy: number;
+    /** Like Trazo/Enredadera: plays when it comes on screen, every minute and
+     *  on click, then rests on `holdFrame`. */
+    once: { holdFrame: number; replayEvery: number; fade?: boolean };
+  }
+> = {
+  // The ring and stars are there from frame 0; the sparkles and the shine
+  // sweep end by frame 99 — so it rests there and replays without fading.
+  "gold-stars": {
+    load: () => import("@/assets/decorations/icon/wreath.json"),
+    scale: 1.82,
+    cx: 0.5,
+    cy: 0.53,
+    once: { holdFrame: 99, replayEvery: 60, fade: false },
+  },
 };
 
 const FRAME_ICONS: Record<string, { load: () => Promise<{ default: unknown }>; source: RingSource; band: number }> = {
@@ -126,6 +145,7 @@ export function DecoratedIcon({
       {size > 0 && round && (
         <LottieDecoration
           load={round.load}
+          once={round.once}
           replayKey={replay}
           className="absolute z-[2]"
           style={{

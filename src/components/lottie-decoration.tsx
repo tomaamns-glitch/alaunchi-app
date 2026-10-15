@@ -27,7 +27,7 @@ export function LottieDecoration({
   /** Instead of looping: play frames 0 → `holdFrame` each time it comes on
    *  screen, stay on that frame, and replay every `replayEvery` seconds while
    *  it's still visible (fading the finished one out first). */
-  once?: { holdFrame: number; replayEvery: number };
+  once?: { holdFrame: number; replayEvery: number; fade?: boolean };
   /** Each change replays it now (clicking the icon): `once` → grow again,
    *  looping → restart from the first frame. */
   replayKey?: number;
@@ -38,6 +38,9 @@ export function LottieDecoration({
   const replayRef = useRef<() => void>(() => {});
   const holdFrame = once?.holdFrame;
   const replayEvery = once?.replayEvery;
+  // Fade the finished one out before replaying — for animations that grow
+  // from nothing. false = just restart (the frame is already there at frame 0).
+  const fade = once?.fade ?? true;
 
   useEffect(() => {
     const el = ref.current;
@@ -58,6 +61,7 @@ export function LottieDecoration({
         start();
         return;
       }
+      if (!fade) return start();
       el.style.opacity = "0"; // quick fade of the finished one, then grow again
       fadeTimer = setTimeout(start, 350);
     };
@@ -107,7 +111,7 @@ export function LottieDecoration({
       if (fadeTimer) clearTimeout(fadeTimer);
       anim?.destroy();
     };
-  }, [load, holdFrame, replayEvery]);
+  }, [load, holdFrame, replayEvery, fade]);
 
   useEffect(() => {
     if (replayKey) replayRef.current();
