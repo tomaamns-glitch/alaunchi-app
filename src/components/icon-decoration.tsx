@@ -52,6 +52,9 @@ const ROUND_ICONS: Record<
     behind?: boolean;
     /** Playback speed, to bring long animations to the others' ~2 s. */
     speed?: number;
+    /** Square frames: cut the animation's box to the head's rounded square
+     *  (grown by what it sticks out), so it doesn't read as a square picture. */
+    rounded?: boolean;
   }
 > = {
   // The ring and stars are there from frame 0; the sparkles and the shine
@@ -85,6 +88,7 @@ const ROUND_ICONS: Record<
     circle: false,
     behind: true,
     speed: 3,
+    rounded: true,
   },
 };
 
@@ -199,12 +203,16 @@ export function DecoratedIcon({
           once={round.once}
           speed={round.speed}
           replayKey={replay}
-          className={cn("absolute", round.behind ? "z-0" : "z-[2]")}
+          className={cn("absolute", round.behind ? "z-0" : "z-[2]", round.rounded && "overflow-hidden")}
           style={{
             width: size * round.scale,
             height: size * round.scale,
             left: size / 2 - round.cx * size * round.scale,
             top: size / 2 - round.cy * size * round.scale,
+            ...(round.rounded
+              ? // Same rounding as the head, plus how far the frame sticks out.
+                { borderRadius: radius + (size * round.scale - size) / 2 }
+              : {}),
           }}
         />
       )}
