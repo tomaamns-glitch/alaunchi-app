@@ -288,8 +288,8 @@ function TracedIcon({
   /** "run" = Recorrido: two orange strokes from opposite corners filling the
    *  border between them (the LottieFiles "square frame" idea, as a fill).
    *  "ring" = Giro naranja: the LottieFiles "loading" spinner's stroke (its
-   *  #ff8e3a, round caps, blurred glow) going once round the icon until it
-   *  closes, then staying complete. */
+   *  #ff8e3a, round caps, blurred glow), in separate pieces appearing one by
+   *  one round the icon until it closes, then staying complete. */
   variant?: "traced" | "run" | "ring";
 }) {
   // Never thinner than ~1.5px: on the 24px account button it used to shrink
@@ -306,7 +306,7 @@ function TracedIcon({
         replayEvery={60}
         replayKey={replayKey}
         {...(variant === "run" ? { from: "#ff6f00", to: "#ff6f00", split: true } : {})}
-        {...(variant === "ring" ? { from: "#ff8e3a", to: "#ff8e3a" } : {})}
+        {...(variant === "ring" ? { from: "#ff8e3a", to: "#ff8e3a", segments: 16 } : {})}
       >
         <span />
       </TracedBorder>
