@@ -79,7 +79,6 @@ const FRAME_ICONS: Record<
     rim?: string;
   }
 > = {
-  // Burns for two of its 1 s loops, then rests (like the others).
   flames: {
     load: () => import("@/assets/decorations/icon/flames.json"),
     // Only the flames, from just outside the original's own frame line (which
@@ -87,7 +86,7 @@ const FRAME_ICONS: Record<
     // by us instead (`rim`), exactly on the icon's edge.
     source: { shape: "square", cx: 0.501, cy: 0.496, rin: 0.27, rout: 0.4 },
     band: 0.17,
-    once: { loops: 2, replayEvery: 60 },
+    // Flames keep burning (looping; paused while off screen) — no play-then-rest.
     rim: "#ff5a00",
   },
   shapes: { load: () => import("@/assets/decorations/icon/frame-1x1.json"), source: { shape: "square", cx: 0.5, cy: 0.5, rin: 0.3, rout: 0.5 }, band: 0.11 },
