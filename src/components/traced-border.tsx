@@ -23,6 +23,7 @@ export function TracedBorder({
   fill = false,
   strokeScale = 1,
   replayEvery,
+  replayKey = 0,
   children,
 }: {
   borderRadius?: number;
@@ -39,6 +40,8 @@ export function TracedBorder({
    *  then stay complete (with its glow) and redraw every `replayEvery` s
    *  while it's still visible — the icon decoration. */
   replayEvery?: number;
+  /** Periodic mode: each change redraws it now (clicking the icon). */
+  replayKey?: number;
   children: ReactNode;
 }) {
   const gradientId = `traced-${useId().replace(/:/g, "")}`;
@@ -62,6 +65,10 @@ export function TracedBorder({
       if (timer) clearInterval(timer);
     };
   }, [replayEvery]);
+  useEffect(() => {
+    // Only once it's been drawn (on screen) — the first draw comes from the observer.
+    if (replayKey) setRun((r) => (r > 0 ? r + 1 : r));
+  }, [replayKey]);
   const periodic = !!replayEvery;
   // First draw: from nothing. Later ones: quick fade of the complete stroke,
   // then the same draw-in, so it never just blinks out.

@@ -66,6 +66,7 @@ export function RemappedLottie({
   source,
   head,
   band,
+  replayKey = 0,
 }: {
   load: () => Promise<{ default: unknown }>;
   source: RingSource;
@@ -73,8 +74,11 @@ export function RemappedLottie({
   head: number;
   /** Band thickness on each side, × head size. */
   band: number;
+  /** Each change restarts the animation from its first frame (clicking the icon). */
+  replayKey?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const animRef = useRef<{ goToAndPlay: (f: number, isFrame: boolean) => void } | null>(null);
   const dpr = typeof window !== "undefined" ? Math.min(2, window.devicePixelRatio || 1) : 1;
   const cssOut = head * (1 + 2 * band);
   const out = Math.max(8, Math.round(cssOut * dpr));
@@ -132,15 +136,21 @@ export function RemappedLottie({
         } as any) as any;
         // Fired right after each frame is rendered on the source canvas.
         anim!.addEventListener("enterFrame", draw);
+        animRef.current = anim as any;
       })
       .catch((e) => console.warn("[remapped-lottie]", e));
 
     return () => {
       cancelled = true;
       io.disconnect();
+      animRef.current = null;
       anim?.destroy();
     };
   }, [load, source, headPx, band, out]);
+
+  useEffect(() => {
+    if (replayKey) animRef.current?.goToAndPlay(0, true);
+  }, [replayKey]);
 
   return (
     <canvas
