@@ -34,7 +34,7 @@ const VINE_ONCE = { holdFrame: 90, replayEvery: 60 };
  *  around the head, which is clipped to a circle to sit inside it. `scale` =
  *  animation box ÷ head size; `cx`/`cy` = where the head's centre falls in it. */
 const ROUND_ICONS: Record<string, { load: () => Promise<{ default: unknown }>; scale: number; cx: number; cy: number }> = {
-  "gold-stars": { load: () => import("@/assets/decorations/icon/wreath.json"), scale: 1.92, cx: 0.517, cy: 0.547 },
+  "gold-stars": { load: () => import("@/assets/decorations/icon/wreath.json"), scale: 1.82, cx: 0.5, cy: 0.53 },
 };
 
 const FRAME_ICONS: Record<string, { load: () => Promise<{ default: unknown }>; source: RingSource; band: number }> = {
