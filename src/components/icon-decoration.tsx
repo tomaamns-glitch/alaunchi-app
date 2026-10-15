@@ -49,9 +49,12 @@ export function DecoratedIcon({
   size: fixedSize,
   radius: fixedRadius,
   className,
+  replayKey,
   children,
 }: {
   decoration: string | undefined;
+  /** Each change replays the decoration (e.g. the chat contact just selected). */
+  replayKey?: number;
   /** The head's size in px — measured from the wrapper when omitted. */
   size?: number;
   /** The head's corner radius in px (for "Trazo"); ~rounded-md by default. */
@@ -77,6 +80,20 @@ export function DecoratedIcon({
     return () => ro.disconnect();
   }, [decorated, fixedSize]);
 
+  // Replays: clicking the button/link the icon sits in, or a new `replayKey`.
+  const [replay, setReplay] = useState(0);
+  useEffect(() => {
+    if (!decorated) return;
+    const target = ref.current?.closest("button, a, [role='button']");
+    if (!target) return;
+    const onClick = () => setReplay((r) => r + 1);
+    target.addEventListener("click", onClick);
+    return () => target.removeEventListener("click", onClick);
+  }, [decorated]);
+  useEffect(() => {
+    if (replayKey) setReplay((r) => r + 1);
+  }, [replayKey]);
+
   if (!decorated && !className) return <>{children}</>;
   const size = fixedSize ?? measured;
   const radius = fixedRadius ?? size * 0.17;
@@ -88,12 +105,15 @@ export function DecoratedIcon({
       style={fixedSize ? { width: fixedSize, height: fixedSize } : undefined}
     >
       {children}
-      {size > 0 && decoration === "traced" && <TracedIcon size={size} radius={radius} />}
-      {size > 0 && frame && <RemappedLottie load={frame.load} source={frame.source} head={size} band={frame.band} />}
+      {size > 0 && decoration === "traced" && <TracedIcon size={size} radius={radius} replayKey={replay} />}
+      {size > 0 && frame && (
+        <RemappedLottie load={frame.load} source={frame.source} head={size} band={frame.band} replayKey={replay} />
+      )}
       {size > 0 && decoration === "vines" && (
         <LottieDecoration
           load={loadVines}
           once={VINE_ONCE}
+          replayKey={replay}
           className="absolute z-[2]"
           style={{
             width: size * VINE_SCALE,
@@ -110,7 +130,7 @@ export function DecoratedIcon({
 /** "Trazo" hugging the head: the stroke's inner edge sits half a pixel over
  *  the head's edge (no gap) and its corners follow the head's rounding.
  *  TracedBorder draws its rect 1px inside its box, centred on that line. */
-function TracedIcon({ size, radius }: { size: number; radius: number }) {
+function TracedIcon({ size, radius, replayKey }: { size: number; radius: number; replayKey: number }) {
   // Never thinner than ~1.5px: on the 24px account button it used to shrink
   // below a pixel and all but vanish.
   const k = Math.min(1, Math.max(0.75, size / 64));
@@ -118,7 +138,7 @@ function TracedIcon({ size, radius }: { size: number; radius: number }) {
   const outset = half - 0.5 + 1; // stroke centre just outside the edge, + the rect's 1px inset
   return (
     <div className="pointer-events-none absolute z-[2]" style={{ inset: -outset }}>
-      <TracedBorder fill borderRadius={radius + half - 0.5} strokeScale={k} replayEvery={60}>
+      <TracedBorder fill borderRadius={radius + half - 0.5} strokeScale={k} replayEvery={60} replayKey={replayKey}>
         <span />
       </TracedBorder>
     </div>
@@ -133,16 +153,18 @@ export function PlayerDecoratedIcon({
   size,
   radius,
   className,
+  replayKey,
   children,
 }: {
   uuid: string | null | undefined;
   size?: number;
   radius?: number;
   className?: string;
+  replayKey?: number;
   children: ReactNode;
 }) {
   return uuid ? (
-    <LookDecoratedIcon uuid={uuid} size={size} radius={radius} className={className}>
+    <LookDecoratedIcon uuid={uuid} size={size} radius={radius} className={className} replayKey={replayKey}>
       {children}
     </LookDecoratedIcon>
   ) : (
@@ -161,6 +183,7 @@ function LookDecoratedIcon({
   size?: number;
   radius?: number;
   className?: string;
+  replayKey?: number;
   children: ReactNode;
 }) {
   const look = useProfileLook(uuid);

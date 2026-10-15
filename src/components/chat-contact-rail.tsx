@@ -261,6 +261,7 @@ export function ChatContactRail({
               username={entry.otherUsername}
               online={!!activity[uuid] && activity[uuid].status !== "offline"}
               size={28}
+              active={uuid === selectedUuid}
             />
             {expanded && (
               <div className="min-w-0 flex-1">
@@ -346,16 +347,24 @@ function ContactHead({
   username,
   online,
   size,
+  active = false,
 }: {
   uuid: string;
   username: string;
   online?: boolean;
   size: number;
+  /** The open conversation — becoming it (e.g. its chat bubble was clicked)
+   *  replays the icon decoration. */
+  active?: boolean;
 }) {
   const headUrl = usePlayerHeadUrl(uuid);
+  const [replayKey, setReplayKey] = useState(0);
+  useEffect(() => {
+    if (active) setReplayKey((k) => k + 1);
+  }, [active]);
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
-      <PlayerDecoratedIcon uuid={uuid} size={size} radius={6}>
+      <PlayerDecoratedIcon uuid={uuid} size={size} radius={6} replayKey={replayKey}>
         <Avatar className="h-full w-full rounded-md">
           {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
           <AvatarFallback className="rounded-md bg-accent/20 text-accent text-[10px] font-bold">

@@ -18,6 +18,7 @@ type Anim = {
 export function LottieDecoration({
   load,
   once,
+  replayKey = 0,
   className,
   style,
 }: {
@@ -27,10 +28,14 @@ export function LottieDecoration({
    *  screen, stay on that frame, and replay every `replayEvery` seconds while
    *  it's still visible (fading the finished one out first). */
   once?: { holdFrame: number; replayEvery: number };
+  /** Each change replays it now (clicking the icon): `once` → grow again,
+   *  looping → restart from the first frame. */
+  replayKey?: number;
   className?: string;
   style?: React.CSSProperties;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const replayRef = useRef<() => void>(() => {});
   const holdFrame = once?.holdFrame;
   const replayEvery = once?.replayEvery;
 
@@ -55,6 +60,15 @@ export function LottieDecoration({
       }
       el.style.opacity = "0"; // quick fade of the finished one, then grow again
       fadeTimer = setTimeout(start, 350);
+    };
+
+    replayRef.current = () => {
+      if (!anim) return;
+      if (holdFrame !== undefined) {
+        if (played) play();
+      } else {
+        (anim as any).goToAndPlay(0, true);
+      }
     };
 
     const io =
@@ -94,6 +108,10 @@ export function LottieDecoration({
       anim?.destroy();
     };
   }, [load, holdFrame, replayEvery]);
+
+  useEffect(() => {
+    if (replayKey) replayRef.current();
+  }, [replayKey]);
 
   return (
     <div
