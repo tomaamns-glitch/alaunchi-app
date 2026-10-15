@@ -20,6 +20,10 @@ const loadVines = () => import("@/assets/decorations/vines.json");
 const VINE_SCALE = 1.5; // vine box / head size
 const VINE_CX = 0.5; // head centre inside the vine box
 const VINE_CY = 0.49;
+// Like "Trazo": grows when it comes on screen and every minute, and stays
+// grown in between. The animation is fully grown from ~frame 76 until it
+// starts retracting at 108 — it stops at 90.
+const VINE_ONCE = { holdFrame: 90, replayEvery: 60 };
 
 /** Frame animations from LottieFiles (Lottie Simple License, see
  *  assets/decorations/NOTICE.md), re-projected as a thin square band around
@@ -89,6 +93,7 @@ export function DecoratedIcon({
       {size > 0 && decoration === "vines" && (
         <LottieDecoration
           load={loadVines}
+          once={VINE_ONCE}
           className="absolute z-[2]"
           style={{
             width: size * VINE_SCALE,

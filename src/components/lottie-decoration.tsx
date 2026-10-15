@@ -9,40 +9,98 @@ let lottiePromise: Promise<LottieModule["default"]> | null = null;
 const loadLottie = () =>
   (lottiePromise ??= import("lottie-web/build/player/lottie_light").then((m) => m.default));
 
+type Anim = {
+  destroy: () => void;
+  playSegments: (segment: [number, number], forceFlag: boolean) => void;
+  goToAndStop: (frame: number, isFrame: boolean) => void;
+};
+
 export function LottieDecoration({
   load,
+  once,
   className,
   style,
 }: {
   /** Returns the animation JSON — e.g. `() => import("@/assets/decorations/vines.json")`. */
   load: () => Promise<{ default: unknown }>;
+  /** Instead of looping: play frames 0 → `holdFrame` each time it comes on
+   *  screen, stay on that frame, and replay every `replayEvery` seconds while
+   *  it's still visible (fading the finished one out first). */
+  once?: { holdFrame: number; replayEvery: number };
   className?: string;
   style?: React.CSSProperties;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const holdFrame = once?.holdFrame;
+  const replayEvery = once?.replayEvery;
 
   useEffect(() => {
-    let anim: { destroy: () => void } | null = null;
+    const el = ref.current;
+    let anim: Anim | null = null;
     let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let fadeTimer: ReturnType<typeof setTimeout> | null = null;
+    let played = false;
+
+    const play = () => {
+      if (!anim || holdFrame === undefined || !el) return;
+      const start = () => {
+        el.style.opacity = "1";
+        anim!.playSegments([0, holdFrame], true);
+      };
+      if (!played) {
+        played = true;
+        start();
+        return;
+      }
+      el.style.opacity = "0"; // quick fade of the finished one, then grow again
+      fadeTimer = setTimeout(start, 350);
+    };
+
+    const io =
+      holdFrame !== undefined && el
+        ? new IntersectionObserver(([e]) => {
+            if (timer) clearInterval(timer);
+            timer = null;
+            if (!e.isIntersecting) return;
+            play(); // (re)appeared on screen
+            timer = setInterval(play, (replayEvery ?? 60) * 1000);
+          })
+        : null;
+
     Promise.all([loadLottie(), load()])
       .then(([lottie, data]) => {
-        if (cancelled || !ref.current) return;
+        if (cancelled || !el) return;
         anim = lottie.loadAnimation({
-          container: ref.current,
+          container: el,
           renderer: "svg",
-          loop: true,
-          autoplay: true,
+          loop: holdFrame === undefined,
+          autoplay: holdFrame === undefined,
           // Each player mutates its data while playing — never share one object.
           animationData: structuredClone(data.default),
           rendererSettings: { preserveAspectRatio: "xMidYMid meet" },
-        });
+        }) as unknown as Anim;
+        if (io) {
+          anim.goToAndStop(0, true);
+          io.observe(el);
+        }
       })
       .catch((e) => console.warn("[lottie-decoration]", e));
     return () => {
       cancelled = true;
+      io?.disconnect();
+      if (timer) clearInterval(timer);
+      if (fadeTimer) clearTimeout(fadeTimer);
       anim?.destroy();
     };
-  }, [load]);
+  }, [load, holdFrame, replayEvery]);
 
-  return <div ref={ref} aria-hidden className={className} style={{ pointerEvents: "none", ...style }} />;
+  return (
+    <div
+      ref={ref}
+      aria-hidden
+      className={className}
+      style={{ pointerEvents: "none", transition: "opacity 300ms ease", ...style }}
+    />
+  );
 }
