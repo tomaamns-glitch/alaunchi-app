@@ -59,6 +59,17 @@ export const ICON_DECORATIONS: FrameDecoration[] = [
   { id: "none", label: "Sin decoración", description: "Tu cabeza tal cual." },
   { id: "traced", label: "Trazo", description: "Una línea verde y naranja que dibuja el borde del icono." },
   { id: "vines", label: "Enredadera", description: "Una enredadera que crece rodeando tu cabeza." },
+  { id: "gold-stars", label: "Aro de estrellas", description: "Aro dorado con cuatro estrellas." },
+  { id: "wings-1", label: "Alas I", description: "Aro con alas y una estrella." },
+  { id: "wings-2", label: "Alas II", description: "Aro con alas y dos estrellas." },
+  { id: "wings-3", label: "Alas III", description: "Aro con alas y tres estrellas." },
+  { id: "orange-run", label: "Recorrido", description: "Dos destellos naranjas recorriendo el borde." },
+  { id: "flames", label: "Fuego", description: "Un marco en llamas." },
+  { id: "shapes", label: "Formas", description: "Formas de colores creciendo desde los bordes." },
+  { id: "pastel", label: "Pastel", description: "Marco de colores pastel en movimiento." },
+  { id: "blue-hud", label: "Interfaz azul", description: "Aros azules de interfaz futurista girando." },
+  { id: "circuit", label: "Circuito", description: "Aro de circuitos detrás de tu cabeza." },
+  { id: "orange-ring", label: "Aro naranja", description: "Un aro naranja girando alrededor." },
 ];
 
 /** Narrows a stored id to a known icon decoration ("none" otherwise). */
