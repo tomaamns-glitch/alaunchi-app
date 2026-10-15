@@ -87,7 +87,9 @@ export function DecoratedIcon({
           <TracedBorder
             fill
             borderRadius={radius + Math.max(2, size * 0.08)}
-            strokeScale={Math.min(1, Math.max(0.45, size / 80))}
+            // Never thinner than ~1.5px: on the 24px account button it used to
+            // shrink below a pixel and all but vanish.
+            strokeScale={Math.min(1, Math.max(0.75, size / 64))}
             replayEvery={60}
           >
             <span />
