@@ -19,7 +19,7 @@ export function TracedBorder({
   borderRadius = 12,
   from = "#4ade80",
   to = "#ff9436",
-  duration = 7,
+  duration = 16,
   fill = false,
   strokeScale = 1,
   replayEvery,
@@ -31,7 +31,8 @@ export function TracedBorder({
   borderRadius?: number;
   from?: string;
   to?: string;
-  /** Seconds for one cycle: draw in (~1.9 s), hold (~3.5 s), fade, pause. */
+  /** Seconds for one loop cycle (banner frame): draw in (~2.4 s), stay
+   *  complete (~9.6 s), fade out slowly (~1.6 s), stay hidden (~2.4 s). */
   duration?: number;
   /** Take the parent's full size (e.g. around a fixed-size icon) instead of
    *  sizing to the children. */
@@ -169,16 +170,16 @@ export function TracedBorder({
       <style>{`
         @keyframes traced-border {
           0% { stroke-dashoffset: 100; opacity: 1; }
-          27% { stroke-dashoffset: 0; opacity: 1; }
-          77% { stroke-dashoffset: 0; opacity: 1; }
-          88% { stroke-dashoffset: 0; opacity: 0; }
+          15% { stroke-dashoffset: 0; opacity: 1; }
+          75% { stroke-dashoffset: 0; opacity: 1; }
+          85% { stroke-dashoffset: 0; opacity: 0; }
           100% { stroke-dashoffset: 0; opacity: 0; }
         }
         @keyframes traced-half {
           0% { stroke-dashoffset: 50; opacity: 1; }
-          27% { stroke-dashoffset: 0; opacity: 1; }
-          77% { stroke-dashoffset: 0; opacity: 1; }
-          88% { stroke-dashoffset: 0; opacity: 0; }
+          15% { stroke-dashoffset: 0; opacity: 1; }
+          75% { stroke-dashoffset: 0; opacity: 1; }
+          85% { stroke-dashoffset: 0; opacity: 0; }
           100% { stroke-dashoffset: 0; opacity: 0; }
         }
         @keyframes traced-half-draw {
