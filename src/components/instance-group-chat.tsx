@@ -29,6 +29,12 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { ChatContentPicker } from "@/components/lazy-heavy";
 import { SharedContentCard } from "@/components/chat-window";
 
+function newestFromOthers(messages: GroupMessage[], myUuid: string): number {
+  let newest = 0;
+  for (const m of messages) if (m.senderUuid !== myUuid && m.timestamp > newest) newest = m.timestamp;
+  return newest;
+}
+
 /** State of one online instance's group chat room: messages, members, unread
  *  count. `open` = the room is on screen (everything shown counts as read, no
  *  notification sound). Shared by the footer popup and the inline panel. */
@@ -49,7 +55,9 @@ function useGroupRoom(pack: Modpack, myUuid: string, open: boolean) {
   const [lastRead, setLastRead] = useState(0);
   const [nicknames] = useState(() => getNicknames());
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const initialLoad = useRef(true);
+  // Newest message from someone else already accounted for — only messages
+  // after it are "new" and worth a sound.
+  const newestSeen = useRef(0);
 
   useEffect(() => {
     // First time ever in this room: start from "now", not with its whole history unread.
@@ -59,22 +67,29 @@ function useGroupRoom(pack: Modpack, myUuid: string, open: boolean) {
       setGroupLastRead(myUuid, groupKey, read);
     }
     setLastRead(read);
-    initialLoad.current = true;
-    return subscribeGroupMessages(groupKey, setMessages);
+    setMessages([]);
+    // The first snapshot of a room is its existing history, not new messages:
+    // it only sets the baseline. (Doing this in the effect below instead used
+    // to fire on the empty initial state, so every remount — e.g. coming back
+    // to Inicio — played the sound for old messages.)
+    let first = true;
+    return subscribeGroupMessages(groupKey, (msgs) => {
+      if (first) {
+        first = false;
+        newestSeen.current = newestFromOthers(msgs, myUuid);
+      }
+      setMessages(msgs);
+    });
   }, [myUuid, groupKey]);
 
   useEffect(() => subscribePresence(pack.id, setMembers), [pack.id]);
 
   // A new message from someone else while the room is closed → the usual sound.
-  const lastSeenCount = useRef(0);
   useEffect(() => {
-    const fromOthers = messages.filter((m) => m.senderUuid !== myUuid).length;
-    if (initialLoad.current) {
-      initialLoad.current = false;
-    } else if (fromOthers > lastSeenCount.current && !open) {
-      playNotificationSound();
-    }
-    lastSeenCount.current = fromOthers;
+    const newest = newestFromOthers(messages, myUuid);
+    if (newest <= newestSeen.current) return;
+    newestSeen.current = newest;
+    if (!open) playNotificationSound();
   }, [messages, myUuid, open]);
 
   // While open, everything shown counts as read.
