@@ -25,6 +25,7 @@ export function TracedBorder({
   replayEvery,
   replayKey = 0,
   split = false,
+  segments,
   children,
 }: {
   borderRadius?: number;
@@ -46,6 +47,9 @@ export function TracedBorder({
   /** Two strokes from opposite corners, each filling half the border, instead
    *  of one going all the way round ("Recorrido"). */
   split?: boolean;
+  /** Draw the border as this many separate pieces that appear one by one
+   *  going round until it's complete ("Giro naranja", like its original). */
+  segments?: number;
   children: ReactNode;
 }) {
   const gradientId = `traced-${useId().replace(/:/g, "")}`;
@@ -87,6 +91,13 @@ export function TracedBorder({
   // repeats), growing from the path's start; the second copy is turned 180°
   // so it starts at the opposite corner.
   const halves = split ? [false, true] : [false];
+  // Segments: the pieces are a fixed dash pattern, revealed by a mask whose
+  // stroke draws round in `segments` discrete steps (one more piece each).
+  const maskId = `${gradientId}-mask`;
+  const period = segments ? 100 / segments : 0;
+  const maskAnimation = segments
+    ? `traced-border-draw 1.9s steps(${segments}, jump-start) 0s both`
+    : undefined;
   return (
     <div ref={rootRef} className={`relative isolate ${fill ? "h-full w-full" : ""}`} style={{ borderRadius }}>
       <svg
@@ -98,11 +109,32 @@ export function TracedBorder({
             <stop offset="0%" stopColor={from} />
             <stop offset="100%" stopColor={to} />
           </linearGradient>
+          {segments && (!periodic || run > 0) && (
+            <mask id={maskId} key={run} maskUnits="userSpaceOnUse" x="-50%" y="-50%" width="200%" height="200%">
+              <rect
+                x={1}
+                y={1}
+                rx={borderRadius}
+                ry={borderRadius}
+                pathLength={100}
+                fill="none"
+                stroke="white"
+                strokeWidth={16 * strokeScale}
+                strokeDasharray="100 100"
+                style={{
+                  width: "calc(100% - 2px)",
+                  height: "calc(100% - 2px)",
+                  animation: maskAnimation,
+                  strokeDashoffset: 100,
+                }}
+              />
+            </mask>
+          )}
         </defs>
         {(!periodic || run > 0) && LAYERS.map((l, i) => (
           // Base opacity on the <g> so the rect's own animation can fade it
           // out (each layer fades within its own, delayed, cycle).
-          <g key={`${i}-${run}`} style={{ opacity: l.opacity }}>
+          <g key={`${i}-${run}`} style={{ opacity: l.opacity }} mask={segments ? `url(#${maskId})` : undefined}>
           {halves.map((turned) => (
           <rect
             key={String(turned)}
@@ -115,14 +147,17 @@ export function TracedBorder({
             stroke={`url(#${gradientId})`}
             strokeWidth={l.width * strokeScale}
             strokeLinecap="round"
-            strokeDasharray={split ? "50 150" : "100 100"}
+            strokeDasharray={
+              segments ? `${period * 0.4} ${period * 0.6}` : split ? "50 150" : "100 100"
+            }
             style={{
               width: "calc(100% - 2px)",
               height: "calc(100% - 2px)",
               filter: l.blur ? `blur(${l.blur * strokeScale}px)` : undefined,
-              animation: strokeAnimation(l.delay),
-              strokeDashoffset: split ? 50 : 100,
-              opacity: 0,
+              ...(segments
+                ? // Static pieces; the mask above does the revealing.
+                  { strokeDashoffset: period * 0.2 }
+                : { animation: strokeAnimation(l.delay), strokeDashoffset: split ? 50 : 100, opacity: 0 }),
               ...(turned ? { transformBox: "fill-box" as const, transformOrigin: "center", transform: "rotate(180deg)" } : {}),
             }}
           />
