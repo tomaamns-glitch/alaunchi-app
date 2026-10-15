@@ -82,20 +82,7 @@ export function DecoratedIcon({
       style={fixedSize ? { width: fixedSize, height: fixedSize } : undefined}
     >
       {children}
-      {size > 0 && decoration === "traced" && (
-        <div className="pointer-events-none absolute z-[2]" style={{ inset: -Math.max(2, size * 0.08) }}>
-          <TracedBorder
-            fill
-            borderRadius={radius + Math.max(2, size * 0.08)}
-            // Never thinner than ~1.5px: on the 24px account button it used to
-            // shrink below a pixel and all but vanish.
-            strokeScale={Math.min(1, Math.max(0.75, size / 64))}
-            replayEvery={60}
-          >
-            <span />
-          </TracedBorder>
-        </div>
-      )}
+      {size > 0 && decoration === "traced" && <TracedIcon size={size} radius={radius} />}
       {size > 0 && frame && <RemappedLottie load={frame.load} source={frame.source} head={size} band={frame.band} />}
       {size > 0 && decoration === "vines" && (
         <LottieDecoration
@@ -109,6 +96,24 @@ export function DecoratedIcon({
           }}
         />
       )}
+    </div>
+  );
+}
+
+/** "Trazo" hugging the head: the stroke's inner edge sits half a pixel over
+ *  the head's edge (no gap) and its corners follow the head's rounding.
+ *  TracedBorder draws its rect 1px inside its box, centred on that line. */
+function TracedIcon({ size, radius }: { size: number; radius: number }) {
+  // Never thinner than ~1.5px: on the 24px account button it used to shrink
+  // below a pixel and all but vanish.
+  const k = Math.min(1, Math.max(0.75, size / 64));
+  const half = 2 * k / 2; // half of the main stroke's width (2px × k)
+  const outset = half - 0.5 + 1; // stroke centre just outside the edge, + the rect's 1px inset
+  return (
+    <div className="pointer-events-none absolute z-[2]" style={{ inset: -outset }}>
+      <TracedBorder fill borderRadius={radius + half - 0.5} strokeScale={k} replayEvery={60}>
+        <span />
+      </TracedBorder>
     </div>
   );
 }
