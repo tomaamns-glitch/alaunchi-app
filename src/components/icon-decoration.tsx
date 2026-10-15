@@ -30,6 +30,8 @@ const VINE_ONCE = { holdFrame: 90, replayEvery: 60 };
  *  the head (remapped-lottie.tsx). `source` = where each one's ring sits in
  *  its own box (measured per animation); `band` = how thick it ends up on
  *  each side, × head size. */
+const WINGS = { scale: 1.73, cx: 0.5, cy: 0.51, once: { holdFrame: 52, replayEvery: 60 } };
+
 /** Frames kept exactly as the original animation (not re-projected): a ring
  *  around the head, which is clipped to a circle to sit inside it. `scale` =
  *  animation box ÷ head size; `cx`/`cy` = where the head's centre falls in it. */
@@ -54,12 +56,15 @@ const ROUND_ICONS: Record<
     cy: 0.53,
     once: { holdFrame: 99, replayEvery: 60, fade: false },
   },
+  // Alas I/II/III (1, 2, 3 stars) share one rig: wings, ring and base grow
+  // from nothing by frame 40, the stars pop at 20–33, and from 52 on only the
+  // blue wings sway — so they rest on 52, fading out before each replay.
+  "wings-1": { load: () => import("@/assets/decorations/icon/avatar-b.json"), ...WINGS },
+  "wings-2": { load: () => import("@/assets/decorations/icon/avatar-c.json"), ...WINGS },
+  "wings-3": { load: () => import("@/assets/decorations/icon/avatar-a.json"), ...WINGS },
 };
 
 const FRAME_ICONS: Record<string, { load: () => Promise<{ default: unknown }>; source: RingSource; band: number }> = {
-  "wings-1": { load: () => import("@/assets/decorations/icon/avatar-b.json"), source: { shape: "round", cx: 0.497, cy: 0.547, rin: 0.265, rout: 0.45 }, band: 0.18 },
-  "wings-2": { load: () => import("@/assets/decorations/icon/avatar-c.json"), source: { shape: "round", cx: 0.497, cy: 0.547, rin: 0.265, rout: 0.45 }, band: 0.18 },
-  "wings-3": { load: () => import("@/assets/decorations/icon/avatar-a.json"), source: { shape: "round", cx: 0.497, cy: 0.547, rin: 0.265, rout: 0.45 }, band: 0.18 },
   "orange-run": { load: () => import("@/assets/decorations/icon/square.json"), source: { shape: "square", cx: 0.5, cy: 0.5, rin: 0.24, rout: 0.27 }, band: 0.1 },
   flames: { load: () => import("@/assets/decorations/icon/flames.json"), source: { shape: "square", cx: 0.507, cy: 0.503, rin: 0.26, rout: 0.37 }, band: 0.15 },
   shapes: { load: () => import("@/assets/decorations/icon/frame-1x1.json"), source: { shape: "square", cx: 0.5, cy: 0.5, rin: 0.3, rout: 0.5 }, band: 0.11 },
