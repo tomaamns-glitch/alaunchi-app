@@ -14,6 +14,7 @@ import {
   setProfileVisibility,
   type ProfileVisibility,
 } from "@/services/public-profile";
+import { BannerMedia } from "@/components/banner-media";
 
 const BIO_MAX = 160;
 // Roughly the shape of the banner strip behind the profile card, so the crop
@@ -62,7 +63,7 @@ function BannerThumb({
         selected ? "border-accent" : "border-transparent hover:border-white/30"
       }`}
     >
-      <img src={url} alt="" className="h-full w-full object-cover" />
+      <BannerMedia src={url} className="h-full w-full object-cover" />
       {selected && (
         <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-accent text-accent-foreground">
           <Check className="h-3 w-3" />

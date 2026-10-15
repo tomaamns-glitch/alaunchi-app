@@ -49,6 +49,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { BannerMedia } from "@/components/banner-media";
 
 function Stat({ icon, value, label }: { icon: React.ReactNode; value: string; label: string }) {
   return (
@@ -261,7 +262,7 @@ export default function Profile() {
                 // DEV ONLY: nameplate being tried from Personalizar → Pruebas → Banners
                 <video src={devBannerVideo} autoPlay loop muted playsInline className="w-full h-full object-cover" />
               ) : (
-                <img src={bannerUrl || DEFAULT_PROFILE_BANNER} alt="" className="w-full h-full object-cover" />
+                <BannerMedia src={bannerUrl || DEFAULT_PROFILE_BANNER} className="w-full h-full object-cover" />
               )}
               <div className="absolute inset-0 bg-gradient-to-r from-background via-background/85 to-background/25" />
             </div>

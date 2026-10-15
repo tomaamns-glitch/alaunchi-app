@@ -3,6 +3,7 @@ import { useProfileLook } from "@/hooks/use-profile-look";
 import { ProfileFrame } from "@/components/profile-frame";
 import { DEFAULT_PROFILE_BANNER } from "@/services/banner";
 import { cn } from "@/lib/utils";
+import { BannerMedia } from "@/components/banner-media";
 
 /**
  * A list row styled like someone's profile card: their banner behind it
@@ -37,9 +38,8 @@ export function ProfileBannerRow({
         )}
       >
         {look && (
-          <img
+          <BannerMedia
             src={look.bannerUrl || DEFAULT_PROFILE_BANNER}
-            alt=""
             draggable={false}
             className={cn(
               "absolute inset-0 w-full h-full object-cover",

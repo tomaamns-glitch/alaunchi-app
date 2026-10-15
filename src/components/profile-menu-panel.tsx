@@ -24,6 +24,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { BannerMedia } from "@/components/banner-media";
 
 type Tab = "online" | "private" | "favorites";
 
@@ -143,7 +144,7 @@ export function ProfileBannerCard({ uuid, username, onNavigate }: ProfileMenuPan
             {devBannerVideo ? (
               <video src={devBannerVideo} autoPlay loop muted playsInline className="w-full h-full object-cover" />
             ) : (
-              <img src={bannerUrl || DEFAULT_PROFILE_BANNER} alt="" className="w-full h-full object-cover" />
+              <BannerMedia src={bannerUrl || DEFAULT_PROFILE_BANNER} className="w-full h-full object-cover" />
             )}
             <div className="absolute inset-0 bg-gradient-to-r from-background via-background/80 to-background/20" />
           </div>
