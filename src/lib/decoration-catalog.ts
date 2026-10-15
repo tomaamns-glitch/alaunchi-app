@@ -68,7 +68,7 @@ export const ICON_DECORATIONS: FrameDecoration[] = [
   { id: "shapes", label: "Formas", description: "Un marco de formas de colores que se dibuja alrededor de tu cabeza." },
   { id: "blue-hud", label: "Interfaz azul", description: "Aros azules de interfaz futurista; tu cabeza se ve redonda dentro." },
   { id: "circuit", label: "Circuito", description: "Aros de circuitos alrededor; tu cabeza se ve redonda dentro." },
-  { id: "orange-ring", label: "Giro naranja", description: "Un trazo naranja que gira alrededor." },
+  { id: "orange-ring", label: "Giro naranja", description: "Un trazo naranja que da la vuelta al icono hasta cerrarlo." },
 ];
 
 /** Narrows a stored id to a known icon decoration ("none" otherwise). */
