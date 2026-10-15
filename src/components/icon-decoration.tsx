@@ -32,9 +32,10 @@ const VINE_ONCE = { holdFrame: 90, replayEvery: 60 };
  *  each side, × head size. */
 const WINGS = { scale: 1.73, cx: 0.5, cy: 0.51, once: { holdFrame: 52, replayEvery: 60 } };
 
-/** Frames kept exactly as the original animation (not re-projected): a ring
- *  around the head, which is clipped to a circle to sit inside it. `scale` =
- *  animation box ÷ head size; `cx`/`cy` = where the head's centre falls in it. */
+/** Frames kept exactly as the original animation (not re-projected). Rings
+ *  clip the head to a circle to sit inside them (`circle`, default on).
+ *  `scale` = animation box ÷ head size; `cx`/`cy` = where the head's centre
+ *  falls in it. */
 const ROUND_ICONS: Record<
   string,
   {
@@ -45,6 +46,12 @@ const ROUND_ICONS: Record<
     /** Like Trazo/Enredadera: plays when it comes on screen, every minute and
      *  on click, then rests on `holdFrame`. */
     once: { holdFrame: number; replayEvery: number; fade?: boolean };
+    /** false = keep the head's own (rounded-square) shape. */
+    circle?: boolean;
+    /** Drawn behind the head (frames whose middle would cover the face). */
+    behind?: boolean;
+    /** Playback speed, to bring long animations to the others' ~2 s. */
+    speed?: number;
   }
 > = {
   // The ring and stars are there from frame 0; the sparkles and the shine
@@ -65,6 +72,20 @@ const ROUND_ICONS: Record<
   "wings-1": { load: () => import("@/assets/decorations/icon/avatar-b.json"), ...WINGS },
   "wings-2": { load: () => import("@/assets/decorations/icon/avatar-c.json"), ...WINGS },
   "wings-3": { load: () => import("@/assets/decorations/icon/avatar-a.json"), ...WINGS },
+  // Formas: the coloured shapes are revealed round the frame by a trim-path
+  // matte, complete at frame 343 (5.7 s → ×3 ≈ 1.9 s). Behind the head, its
+  // measured hole (0.37–0.42 of the box, centred at 0.496, 0.4925) sized to
+  // the head so the shapes hug its edge.
+  shapes: {
+    load: () => import("@/assets/decorations/icon/frame-1x1.json"),
+    scale: 1.22,
+    cx: 0.496,
+    cy: 0.4925,
+    once: { holdFrame: 343, replayEvery: 60 },
+    circle: false,
+    behind: true,
+    speed: 3,
+  },
 };
 
 const FRAME_ICONS: Record<
@@ -89,7 +110,6 @@ const FRAME_ICONS: Record<
     // Flames keep burning (looping; paused while off screen) — no play-then-rest.
     rim: "#ff5a00",
   },
-  shapes: { load: () => import("@/assets/decorations/icon/frame-1x1.json"), source: { shape: "square", cx: 0.5, cy: 0.5, rin: 0.3, rout: 0.5 }, band: 0.11 },
   pastel: { load: () => import("@/assets/decorations/icon/yeye.json"), source: { shape: "square", cx: 0.5, cy: 0.5, rin: [0.43, 0.37], rout: [0.5, 0.43] }, band: 0.1 },
   "blue-hud": { load: () => import("@/assets/decorations/icon/blue-border.json"), source: { shape: "round", cx: 0.5, cy: 0.5, rin: 0.33, rout: 0.45 }, band: 0.13 },
   circuit: { load: () => import("@/assets/decorations/icon/back-forth.json"), source: { shape: "round", cx: 0.5, cy: 0.5, rin: 0.38, rout: 0.45 }, band: 0.12 },
@@ -159,10 +179,10 @@ export function DecoratedIcon({
       style={fixedSize ? { width: fixedSize, height: fixedSize } : undefined}
     >
       {round ? (
-        // The head, clipped to a circle to sit inside the ring.
+        // The head (above a frame drawn behind it); clipped to a circle in rings.
         <div
-          className={cn("flex", fixedSize || className ? "h-full w-full" : undefined)}
-          style={{ clipPath: "circle(50% at 50% 50%)" }}
+          className={cn("relative z-[1] flex", fixedSize || className ? "h-full w-full" : undefined)}
+          style={round.circle === false ? undefined : { clipPath: "circle(50% at 50% 50%)" }}
         >
           {children}
         </div>
@@ -177,8 +197,9 @@ export function DecoratedIcon({
         <LottieDecoration
           load={round.load}
           once={round.once}
+          speed={round.speed}
           replayKey={replay}
-          className="absolute z-[2]"
+          className={cn("absolute", round.behind ? "z-0" : "z-[2]")}
           style={{
             width: size * round.scale,
             height: size * round.scale,
