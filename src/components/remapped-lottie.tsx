@@ -28,8 +28,17 @@ export interface RingSource {
 const OVERLAP = 0.05; // the band starts a hair inside the head's edge (× half head)
 
 const mapCache = new Map<string, Int32Array>();
-function bandMap(src: RingSource, S: number, head: number, band: number, out: number): Int32Array {
-  const key = `${JSON.stringify(src)}|${S}|${head}|${band}|${out}`;
+/**
+ * For every pixel of the output band: which source pixel to copy. The band
+ * follows the head's ROUNDED square (corner radius `corner`, in half-head
+ * units): each pixel is located by its closest point on the head's straight
+ * "core" plus its outward distance from the head's edge, and the same is done
+ * in the source ring (a square ring gets the same rounding, scaled to it; a
+ * round ring is sampled along the direction). So corners curve with the head
+ * instead of leaving a square gap there.
+ */
+function bandMap(src: RingSource, S: number, head: number, band: number, out: number, corner: number): Int32Array {
+  const key = `${JSON.stringify(src)}|${S}|${head}|${band}|${out}|${corner.toFixed(3)}`;
   const cached = mapCache.get(key);
   if (cached) return cached;
   const map = new Int32Array(out * out).fill(-1);
@@ -37,24 +46,41 @@ function bandMap(src: RingSource, S: number, head: number, band: number, out: nu
   const c = out / 2;
   const [rinX, rinY] = Array.isArray(src.rin) ? src.rin : [src.rin, src.rin];
   const [routX, routY] = Array.isArray(src.rout) ? src.rout : [src.rout, src.rout];
-  const depth = (2 * band) + OVERLAP; // band thickness in half-head units
+  const depth = 2 * band + OVERLAP; // band thickness in half-head units
+  const core = 1 - corner; // half-size of the head's straight part
   for (let y = 0; y < out; y++) {
     for (let x = 0; x < out; x++) {
       const u = (x + 0.5 - c) / half;
       const v = (y + 0.5 - c) / half;
-      const q = (Math.max(Math.abs(u), Math.abs(v)) - (1 - OVERLAP)) / depth;
+      // Closest point on the core square, and the way out from it.
+      const cu = Math.max(-core, Math.min(core, u));
+      const cv = Math.max(-core, Math.min(core, v));
+      let nu = u - cu;
+      let nv = v - cv;
+      const len = Math.hypot(nu, nv);
+      if (len === 0) continue; // inside the core: under the head
+      const q = (len - corner + OVERLAP) / depth; // 0 = head edge, 1 = band edge
       if (q < 0 || q > 1) continue;
-      const a = Math.atan2(v, u);
-      let dx = Math.cos(a);
-      let dy = Math.sin(a);
+      nu /= len;
+      nv /= len;
+      let sx: number;
+      let sy: number;
       if (src.shape === "square") {
-        const m = Math.max(Math.abs(dx), Math.abs(dy));
-        dx /= m;
-        dy /= m;
+        // Same construction in the source ring, its rounding scaled to it.
+        const rx = rinX + q * (routX - rinX);
+        const ry = rinY + q * (routY - rinY);
+        const sCornerX = corner * rinX;
+        const sCornerY = corner * rinY;
+        sx = src.cx + (cu / core || 0) * (rinX - sCornerX) + nu * (sCornerX + (rx - rinX));
+        sy = src.cy + (cv / core || 0) * (rinY - sCornerY) + nv * (sCornerY + (ry - rinY));
+      } else {
+        const a = Math.atan2(v, u);
+        sx = src.cx + Math.cos(a) * (rinX + q * (routX - rinX));
+        sy = src.cy + Math.sin(a) * (rinY + q * (routY - rinY));
       }
-      const sx = Math.floor((src.cx + dx * (rinX + q * (routX - rinX))) * S);
-      const sy = Math.floor((src.cy + dy * (rinY + q * (routY - rinY))) * S);
-      if (sx >= 0 && sy >= 0 && sx < S && sy < S) map[y * out + x] = sy * S + sx;
+      const px = Math.floor(sx * S);
+      const py = Math.floor(sy * S);
+      if (px >= 0 && py >= 0 && px < S && py < S) map[y * out + x] = py * S + px;
     }
   }
   mapCache.set(key, map);
@@ -65,24 +91,35 @@ export function RemappedLottie({
   load,
   source,
   head,
+  radius,
   band,
+  once,
   replayKey = 0,
 }: {
   load: () => Promise<{ default: unknown }>;
   source: RingSource;
   /** The head's size in CSS px. */
   head: number;
+  /** The head's corner radius in CSS px — the band curves with it. */
+  radius: number;
+  /** Instead of looping forever: play `loops` times each time it comes on
+   *  screen, then rest on the last frame; again every `replayEvery` s while
+   *  visible (and on click, via replayKey). */
+  once?: { loops: number; replayEvery: number };
   /** Band thickness on each side, × head size. */
   band: number;
   /** Each change restarts the animation from its first frame (clicking the icon). */
   replayKey?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const animRef = useRef<{ goToAndPlay: (f: number, isFrame: boolean) => void } | null>(null);
+  const animRef = useRef<{ goToAndPlay: (f: number, isFrame: boolean) => void; playCount: number } | null>(null);
+  const loops = once?.loops;
+  const replayEvery = once?.replayEvery;
   const dpr = typeof window !== "undefined" ? Math.min(2, window.devicePixelRatio || 1) : 1;
   const cssOut = head * (1 + 2 * band);
   const out = Math.max(8, Math.round(cssOut * dpr));
   const headPx = head * dpr;
+  const corner = Math.min(1, Math.max(0, radius / (head / 2)));
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -96,7 +133,7 @@ export function RemappedLottie({
     const sctx = src.getContext("2d", { willReadFrequently: true });
     const octx = canvas.getContext("2d");
     if (!sctx || !octx) return;
-    const map = bandMap(source, S, headPx, band, out);
+    const map = bandMap(source, S, headPx, band, out, corner);
     const img = octx.createImageData(out, out);
 
     const draw = () => {
@@ -115,21 +152,37 @@ export function RemappedLottie({
       octx.putImageData(img, 0, 0);
     };
 
-    // Off-screen icons (long lists, hidden panels) don't animate.
+    // Looping: off-screen icons (long lists, hidden panels) don't animate.
+    // `once`: play when (re)appearing on screen and every `replayEvery` s.
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const replay = () => {
+      const a = animRef.current;
+      if (!a) return;
+      a.playCount = 0;
+      a.goToAndPlay(0, true);
+    };
     const io = new IntersectionObserver(([e]) => {
       if (!anim) return;
-      if (e.isIntersecting) anim.play();
-      else anim.pause();
+      if (loops === undefined) {
+        if (e.isIntersecting) anim.play();
+        else anim.pause();
+        return;
+      }
+      if (timer) clearInterval(timer);
+      timer = null;
+      if (!e.isIntersecting) return;
+      replay();
+      timer = setInterval(replay, (replayEvery ?? 60) * 1000);
     });
-    io.observe(canvas);
 
     Promise.all([loadLottie(), load()])
       .then(([lottie, data]) => {
         if (cancelled) return;
         anim = lottie.loadAnimation({
           renderer: "canvas",
-          loop: true,
-          autoplay: true,
+          // A number = play that many times, then stay on the last frame.
+          loop: loops ?? true,
+          autoplay: loops === undefined,
           // Each player mutates its data while playing — never share one object.
           animationData: structuredClone(data.default),
           rendererSettings: { context: sctx, clearCanvas: true, preserveAspectRatio: "xMidYMid meet" },
@@ -137,19 +190,24 @@ export function RemappedLottie({
         // Fired right after each frame is rendered on the source canvas.
         anim!.addEventListener("enterFrame", draw);
         animRef.current = anim as any;
+        io.observe(canvas);
       })
       .catch((e) => console.warn("[remapped-lottie]", e));
 
     return () => {
       cancelled = true;
       io.disconnect();
+      if (timer) clearInterval(timer);
       animRef.current = null;
       anim?.destroy();
     };
-  }, [load, source, headPx, band, out]);
+  }, [load, source, headPx, band, out, corner, loops, replayEvery]);
 
   useEffect(() => {
-    if (replayKey) animRef.current?.goToAndPlay(0, true);
+    const a = animRef.current;
+    if (!replayKey || !a) return;
+    a.playCount = 0;
+    a.goToAndPlay(0, true);
   }, [replayKey]);
 
   return (
