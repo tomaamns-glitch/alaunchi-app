@@ -156,6 +156,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
             animate={{ clipPath: CLIP_OPEN, opacity: 1 }}
             exit={{ clipPath: collapsedClip, opacity: 0 }}
             transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            data-account-panel
             className="absolute bottom-0 left-0 z-50 min-w-[32rem] rounded-[14px] bg-card/95 backdrop-blur-xl border border-white/10 shadow-2xl flex flex-col"
           >
             <AnimatePresence mode="wait" initial={false} custom={viewDir}>
@@ -430,20 +431,44 @@ function CharacterColumn({
   effect: ReturnType<typeof useAvatarDecoration>;
   children?: React.ReactNode;
 }) {
+  // The panel is much taller than the character's box, so falling particles
+  // (leaves, petals, snow…) used to pop in mid-air at the box's top. The
+  // viewer now draws up to the panel's top border (which clips it, rounded)
+  // and they start from there. Measured, rounded to 8px so it doesn't rebuild
+  // the scene on every pixel of change.
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const [extendTop, setExtendTop] = useState(0);
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    const panel = box?.closest<HTMLElement>("[data-account-panel]");
+    if (!box || !panel) return;
+    const measure = () => {
+      const gap = box.getBoundingClientRect().top - panel.getBoundingClientRect().top;
+      setExtendTop(Math.max(0, Math.round(gap / 8) * 8));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(panel);
+    return () => ro.disconnect();
+  }, []);
   return (
     <div className="flex flex-col items-center gap-2 shrink-0 self-end">
-      <div className="rounded-xl bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.18),transparent_70%)]">
-        {skinUrl ? (
+      <div
+        ref={boxRef}
+        className="relative w-[190px] h-[254px] rounded-xl bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.18),transparent_70%)]"
+      >
+        {skinUrl && (
           <SkinViewerAnimated
             skinUrl={skinUrl}
             variant="auto-detect"
             width={190}
             height={254}
+            extendTop={effect === "none" ? 0 : extendTop}
             effect={effect}
-            className="cursor-grab active:cursor-grabbing"
+            // Anchored to the box's bottom, growing upward out of it (the
+            // extension is empty panel space above the column).
+            className="absolute bottom-0 left-0 cursor-grab active:cursor-grabbing"
           />
-        ) : (
-          <div className="w-[190px] h-[254px]" />
         )}
       </div>
       {children}
