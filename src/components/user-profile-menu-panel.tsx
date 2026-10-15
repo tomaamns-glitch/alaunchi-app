@@ -38,6 +38,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { BannerMedia } from "@/components/banner-media";
 
 type Tab = "online" | "private" | "favorites";
 
@@ -201,7 +202,7 @@ function UserProfileBody({
       <ProfileFrame frame={profile.frame}>
         <div className="relative rounded-xl border border-white/10 overflow-hidden shrink-0">
           <div className="absolute inset-0">
-            <img src={profile.bannerUrl || DEFAULT_PROFILE_BANNER} alt="" className="w-full h-full object-cover" />
+            <BannerMedia src={profile.bannerUrl || DEFAULT_PROFILE_BANNER} className="w-full h-full object-cover" />
             <div className="absolute inset-0 bg-gradient-to-r from-background via-background/80 to-background/20" />
           </div>
 

@@ -25,6 +25,7 @@ import type { FavoriteEntry } from "@/services/favorites";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { BannerMedia } from "@/components/banner-media";
 
 function Stat({ icon, value, label }: { icon: React.ReactNode; value: string; label: string }) {
   return (
@@ -354,7 +355,7 @@ function ProfileContent({
           <ProfileFrame frame={profile.frame}>
           <div className="relative rounded-xl border border-white/10 bg-card/40 overflow-hidden">
             <div className="absolute inset-0">
-              <img src={profile.bannerUrl || DEFAULT_PROFILE_BANNER} alt="" className="w-full h-full object-cover" />
+              <BannerMedia src={profile.bannerUrl || DEFAULT_PROFILE_BANNER} className="w-full h-full object-cover" />
               <div className="absolute inset-0 bg-gradient-to-r from-background via-background/85 to-background/25" />
             </div>
 
