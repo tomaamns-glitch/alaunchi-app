@@ -88,6 +88,7 @@ export function DecoratedIcon({
             fill
             borderRadius={radius + Math.max(2, size * 0.08)}
             strokeScale={Math.min(1, Math.max(0.45, size / 80))}
+            replayEvery={60}
           >
             <span />
           </TracedBorder>
