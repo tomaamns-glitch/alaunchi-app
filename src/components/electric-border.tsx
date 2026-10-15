@@ -35,6 +35,9 @@ interface ElectricBorderProps {
   chaos?: number;
   /** Corner radius in px — match the wrapped card. */
   borderRadius?: number;
+  /** 0..1 — strength of the static glow (the two blurred borders and the
+   *  outer halo) under the crackling line. 1 = the original look. */
+  intensity?: number;
   className?: string;
   style?: CSSProperties;
 }
@@ -45,6 +48,7 @@ export function ElectricBorder({
   speed = 1,
   chaos = 0.1,
   borderRadius = 24,
+  intensity = 1,
   className,
   style,
 }: ElectricBorderProps) {
@@ -211,17 +215,19 @@ export function ElectricBorder({
       <div className="pointer-events-none absolute inset-0 z-0 rounded-[inherit]">
         <div
           className="absolute inset-0 rounded-[inherit]"
-          style={{ border: `2px solid ${hexToRgba(color, 0.6)}`, filter: "blur(1px)" }}
+          style={{ border: `2px solid ${hexToRgba(color, 0.6 * intensity)}`, filter: "blur(1px)" }}
         />
         <div
           className="absolute inset-0 rounded-[inherit]"
-          style={{ border: `2px solid ${color}`, filter: "blur(4px)" }}
+          style={{ border: `2px solid ${hexToRgba(color, intensity)}`, filter: "blur(4px)" }}
         />
       </div>
       {/* box-shadow ambient glow — ink-only, so it can't push a scrollbar */}
       <div
         className="relative z-[1] rounded-[inherit]"
-        style={{ boxShadow: `0 0 22px ${hexToRgba(color, 0.22)}, 0 0 4px ${hexToRgba(color, 0.35)}` }}
+        style={{
+          boxShadow: `0 0 22px ${hexToRgba(color, 0.22 * intensity)}, 0 0 4px ${hexToRgba(color, 0.35 * intensity)}`,
+        }}
       >
         {children}
       </div>
