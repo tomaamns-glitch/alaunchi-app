@@ -24,6 +24,7 @@ export function TracedBorder({
   strokeScale = 1,
   replayEvery,
   replayKey = 0,
+  split = false,
   children,
 }: {
   borderRadius?: number;
@@ -42,6 +43,9 @@ export function TracedBorder({
   replayEvery?: number;
   /** Periodic mode: each change redraws it now (clicking the icon). */
   replayKey?: number;
+  /** Two strokes from opposite corners, each filling half the border, instead
+   *  of one going all the way round ("Recorrido"). */
+  split?: boolean;
   children: ReactNode;
 }) {
   const gradientId = `traced-${useId().replace(/:/g, "")}`;
@@ -72,12 +76,17 @@ export function TracedBorder({
   const periodic = !!replayEvery;
   // First draw: from nothing. Later ones: quick fade of the complete stroke,
   // then the same draw-in, so it never just blinks out.
+  const kf = split ? "traced-half" : "traced-border";
   const strokeAnimation = (delay: number) =>
     !periodic
-      ? `traced-border ${duration}s cubic-bezier(0.45, 0, 0.25, 1) ${delay}s infinite`
+      ? `${kf} ${duration}s cubic-bezier(0.45, 0, 0.25, 1) ${delay}s infinite`
       : run <= 1
-      ? `traced-border-draw 1.9s cubic-bezier(0.45, 0, 0.25, 1) ${delay}s both`
-      : `traced-border-redraw 2.3s cubic-bezier(0.45, 0, 0.25, 1) ${delay}s both`;
+      ? `${kf}-draw 1.9s cubic-bezier(0.45, 0, 0.25, 1) ${delay}s both`
+      : `${kf}-redraw 2.3s cubic-bezier(0.45, 0, 0.25, 1) ${delay}s both`;
+  // Split: one dash of half the border (pathLength 100 → "50 150" never
+  // repeats), growing from the path's start; the second copy is turned 180°
+  // so it starts at the opposite corner.
+  const halves = split ? [false, true] : [false];
   return (
     <div ref={rootRef} className={`relative isolate ${fill ? "h-full w-full" : ""}`} style={{ borderRadius }}>
       <svg
@@ -94,7 +103,9 @@ export function TracedBorder({
           // Base opacity on the <g> so the rect's own animation can fade it
           // out (each layer fades within its own, delayed, cycle).
           <g key={`${i}-${run}`} style={{ opacity: l.opacity }}>
+          {halves.map((turned) => (
           <rect
+            key={String(turned)}
             x={1}
             y={1}
             rx={borderRadius}
@@ -104,16 +115,18 @@ export function TracedBorder({
             stroke={`url(#${gradientId})`}
             strokeWidth={l.width * strokeScale}
             strokeLinecap="round"
-            strokeDasharray="100 100"
+            strokeDasharray={split ? "50 150" : "100 100"}
             style={{
               width: "calc(100% - 2px)",
               height: "calc(100% - 2px)",
               filter: l.blur ? `blur(${l.blur * strokeScale}px)` : undefined,
               animation: strokeAnimation(l.delay),
-              strokeDashoffset: 100,
+              strokeDashoffset: split ? 50 : 100,
               opacity: 0,
+              ...(turned ? { transformBox: "fill-box" as const, transformOrigin: "center", transform: "rotate(180deg)" } : {}),
             }}
           />
+          ))}
           </g>
         ))}
       </svg>
@@ -125,6 +138,23 @@ export function TracedBorder({
           77% { stroke-dashoffset: 0; opacity: 1; }
           88% { stroke-dashoffset: 0; opacity: 0; }
           100% { stroke-dashoffset: 0; opacity: 0; }
+        }
+        @keyframes traced-half {
+          0% { stroke-dashoffset: 50; opacity: 1; }
+          27% { stroke-dashoffset: 0; opacity: 1; }
+          77% { stroke-dashoffset: 0; opacity: 1; }
+          88% { stroke-dashoffset: 0; opacity: 0; }
+          100% { stroke-dashoffset: 0; opacity: 0; }
+        }
+        @keyframes traced-half-draw {
+          0% { stroke-dashoffset: 50; opacity: 1; }
+          100% { stroke-dashoffset: 0; opacity: 1; }
+        }
+        @keyframes traced-half-redraw {
+          0% { stroke-dashoffset: 0; opacity: 1; }
+          15% { stroke-dashoffset: 0; opacity: 0; }
+          16% { stroke-dashoffset: 50; opacity: 1; }
+          100% { stroke-dashoffset: 0; opacity: 1; }
         }
         @keyframes traced-border-draw {
           0% { stroke-dashoffset: 100; opacity: 1; }
@@ -140,6 +170,9 @@ export function TracedBorder({
           @keyframes traced-border { 0%, 100% { stroke-dashoffset: 0; opacity: 1; } }
           @keyframes traced-border-draw { 0%, 100% { stroke-dashoffset: 0; opacity: 1; } }
           @keyframes traced-border-redraw { 0%, 100% { stroke-dashoffset: 0; opacity: 1; } }
+          @keyframes traced-half { 0%, 100% { stroke-dashoffset: 0; opacity: 1; } }
+          @keyframes traced-half-draw { 0%, 100% { stroke-dashoffset: 0; opacity: 1; } }
+          @keyframes traced-half-redraw { 0%, 100% { stroke-dashoffset: 0; opacity: 1; } }
         }
       `}</style>
     </div>

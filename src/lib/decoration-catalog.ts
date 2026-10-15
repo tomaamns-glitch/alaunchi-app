@@ -63,7 +63,7 @@ export const ICON_DECORATIONS: FrameDecoration[] = [
   { id: "wings-1", label: "Alas I", description: "Aro dorado con alas y una estrella; tu cabeza se ve redonda dentro." },
   { id: "wings-2", label: "Alas II", description: "Aro dorado con alas y dos estrellas; tu cabeza se ve redonda dentro." },
   { id: "wings-3", label: "Alas III", description: "Aro dorado con alas y tres estrellas; tu cabeza se ve redonda dentro." },
-  { id: "orange-run", label: "Recorrido", description: "Dos destellos naranjas recorriendo el borde." },
+  { id: "orange-run", label: "Recorrido", description: "Dos trazos naranjas que rellenan el borde desde esquinas opuestas." },
   { id: "flames", label: "Fuego", description: "Un marco en llamas." },
   { id: "shapes", label: "Formas", description: "Formas de colores creciendo desde los bordes." },
   { id: "pastel", label: "Pastel", description: "Marco de colores pastel en movimiento." },
