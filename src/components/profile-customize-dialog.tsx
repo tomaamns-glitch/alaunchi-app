@@ -229,7 +229,7 @@ export function ProfileCustomizeDialog({
                   </DecoratedIcon>
                 </div>
               </div>
-              <div className="flex-1 space-y-2">
+              <div className="flex-1 grid grid-cols-2 gap-2 content-start max-h-[300px] overflow-y-auto pr-1">
                 {ICON_DECORATIONS.map((d) => (
                   <OptionCard
                     key={d.id}
