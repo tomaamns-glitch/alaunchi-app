@@ -67,8 +67,18 @@ const ROUND_ICONS: Record<
   "wings-3": { load: () => import("@/assets/decorations/icon/avatar-a.json"), ...WINGS },
 };
 
-const FRAME_ICONS: Record<string, { load: () => Promise<{ default: unknown }>; source: RingSource; band: number }> = {
-  flames: { load: () => import("@/assets/decorations/icon/flames.json"), source: { shape: "square", cx: 0.507, cy: 0.503, rin: 0.26, rout: 0.37 }, band: 0.15 },
+const FRAME_ICONS: Record<
+  string,
+  {
+    load: () => Promise<{ default: unknown }>;
+    source: RingSource;
+    band: number;
+    /** Play-then-rest cycle like Trazo (otherwise it loops). */
+    once?: { loops: number; replayEvery: number };
+  }
+> = {
+  // Burns for two of its 1 s loops, then rests (like the others).
+  flames: { load: () => import("@/assets/decorations/icon/flames.json"), source: { shape: "square", cx: 0.507, cy: 0.503, rin: 0.26, rout: 0.37 }, band: 0.15, once: { loops: 2, replayEvery: 60 } },
   shapes: { load: () => import("@/assets/decorations/icon/frame-1x1.json"), source: { shape: "square", cx: 0.5, cy: 0.5, rin: 0.3, rout: 0.5 }, band: 0.11 },
   pastel: { load: () => import("@/assets/decorations/icon/yeye.json"), source: { shape: "square", cx: 0.5, cy: 0.5, rin: [0.43, 0.37], rout: [0.5, 0.43] }, band: 0.1 },
   "blue-hud": { load: () => import("@/assets/decorations/icon/blue-border.json"), source: { shape: "round", cx: 0.5, cy: 0.5, rin: 0.33, rout: 0.45 }, band: 0.13 },
@@ -168,7 +178,15 @@ export function DecoratedIcon({
         />
       )}
       {size > 0 && frame && (
-        <RemappedLottie load={frame.load} source={frame.source} head={size} band={frame.band} replayKey={replay} />
+        <RemappedLottie
+          load={frame.load}
+          source={frame.source}
+          head={size}
+          radius={radius}
+          band={frame.band}
+          once={frame.once}
+          replayKey={replay}
+        />
       )}
       {size > 0 && decoration === "vines" && (
         <LottieDecoration
