@@ -3492,11 +3492,7 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   if (loaderType === "fabric" || loaderType === "quilt") {
     try {
       win?.webContents.send("launch-status", { modpackId, stage: "installing_loader" });
-      const loaderMeta = await fetchJson("https://meta.fabricmc.net/v2/versions/loader");
-      const latestLoader = loaderMeta[0].version;
-      const fabricProfile = await fetchJson(
-        `https://meta.fabricmc.net/v2/versions/loader/${mcVersion}/${latestLoader}/profile/json`
-      );
+      const fabricProfile = await resolveFabricProfile(mcVersion);
       loaderProfile = fabricProfile;
       mainClass = fabricProfile.mainClass;
       for (const lib of fabricProfile.libraries || []) {
@@ -3868,6 +3864,33 @@ async function forgeMavenVersion(mcVersion, loaderVersion) {
     return all.find((v) => v.startsWith(`${plain}-`)) || plain;
   } catch {
     return plain;
+  }
+}
+
+// The launch profile for the latest Fabric Loader, cached per MC version. meta/maven.fabricmc.net
+// sit behind Cloudflare, which some networks can't reach at times (Spanish ISPs block Cloudflare
+// IPs during LaLiga matches) — Mojang still answers and every library is already on disk, so
+// falling back to the last profile that worked keeps Fabric instances launchable.
+async function resolveFabricProfile(mcVersion) {
+  const cachePath = path.join(CACHE_DIR, "fabric-profiles", `${mcVersion}.json`);
+  const withTimeout = (p) => Promise.race([
+    p,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("tiempo de espera agotado")), 10000)),
+  ]);
+  try {
+    const loaderMeta = await withTimeout(fetchJson("https://meta.fabricmc.net/v2/versions/loader"));
+    const latestLoader = loaderMeta[0].version;
+    const profile = await withTimeout(fetchJson(
+      `https://meta.fabricmc.net/v2/versions/loader/${encodeURIComponent(mcVersion)}/${latestLoader}/profile/json`
+    ));
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.writeFile(cachePath, JSON.stringify(profile));
+    return profile;
+  } catch (e) {
+    const cached = await fs.readFile(cachePath, "utf8").then(JSON.parse, () => null);
+    if (!cached) throw new Error(`no se pudo contactar con meta.fabricmc.net (${e.message})`);
+    console.warn(`[Fabric] meta.fabricmc.net no responde (${e.message}) — usando el perfil cacheado de ${mcVersion}`);
+    return cached;
   }
 }
 
