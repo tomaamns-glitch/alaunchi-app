@@ -201,4 +201,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
   deleteServerDirectory: (args) => ipcRenderer.invoke("servers:delete-directory", args),
   createServerDirectory: (args) => ipcRenderer.invoke("servers:create-directory", args),
   renameServerPath: (args) => ipcRenderer.invoke("servers:rename", args),
+
+  // In-game overlay (overlay.html) + its settings
+  getOverlayState: () => ipcRenderer.invoke("overlay:get-state"),
+  onOverlayState: (callback) => {
+    const handler = (_, state) => callback(state);
+    ipcRenderer.on("overlay:state", handler);
+    return () => ipcRenderer.removeListener("overlay:state", handler);
+  },
+  closeOverlay: () => ipcRenderer.send("overlay:close"),
+  openOverlayPanel: () => ipcRenderer.send("overlay:open-panel"),
+  overlayNotify: (payload) => ipcRenderer.send("overlay:notify", payload),
+  checkOverlayShortcut: (accelerator) => ipcRenderer.invoke("overlay:check-shortcut", accelerator),
 });

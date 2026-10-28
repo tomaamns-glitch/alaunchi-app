@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, Tray, Menu, nativeImage, safeStorage } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, dialog, Tray, Menu, nativeImage, safeStorage, globalShortcut, screen } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs/promises");
@@ -366,6 +366,7 @@ function broadcastRunState() {
     mainWindow.webContents.send("instances:run-state", runStateSnapshot());
   }
   updateDiscordPresence();
+  updateIngameOverlay();
 }
 
 // ─── DISCORD RICH PRESENCE ──────────────────────────────────────────────────
@@ -430,6 +431,352 @@ function updateDiscordPresence() {
     discordPresence.setActivity(null);
   }
 }
+
+// ─── OVERLAY EN EL JUEGO ────────────────────────────────────────────────────
+// Off by default (settings.json ingameOverlay). While a game window is open
+// (state "running"), a small always-on-top window shows a notice in the bottom
+// corner once per session, and the global shortcut (ingameOverlayShortcut)
+// toggles the panel over Minecraft. The shortcut is only registered while a
+// game is running, so it never steals those keys from other apps the rest of
+// the time. The overlay is its own Vite page (overlay.html), not the full app.
+const DEFAULT_OVERLAY_SHORTCUT = "F10"; // F12 can't be a global hotkey on Windows (reserved for debuggers)
+const OVERLAY_TOAST_SIZE = { width: 392, height: 112 };
+const OVERLAY_PANEL_SIZE = { width: 480, height: 680 };
+const OVERLAY_TOAST_MS = 6000;
+const OVERLAY_SCREENSHOT_TOAST_MS = 10000;
+const OVERLAY_MARGIN = 16;
+let overlayEnabled = false;
+let overlayShortcut = DEFAULT_OVERLAY_SHORTCUT;
+let registeredOverlayShortcut = null;
+let overlayWindow = null;
+let overlayReady = false;
+let overlayMode = "hidden"; // "hidden" | "toast" | "panel"
+let overlayToastTimer = null;
+let overlayInstanceKey = null; // `${modpackId}:${pid}` the notice was already shown for
+// What the corner notice shows: null = "ALaunchi está activo", a chat message
+// the overlay page asked to announce ({ kind: "message", uuid, title, body }),
+// or a screenshot just taken with F2 ({ kind: "screenshot", fileName, ... }).
+let overlayToast = null;
+// The newest F2 screenshot of this game session — the panel offers to share it.
+let overlayScreenshot = null;
+// iconDataUrl from the running instance's alaunchi-meta.json (a small data URL).
+let overlayInstanceIcon = null;
+let screenshotWatch = null; // { modpackId, watcher, seen: Set<fileName> }
+
+function applyOverlaySetting(settings) {
+  overlayEnabled = settings?.ingameOverlay === true;
+  const shortcut = typeof settings?.ingameOverlayShortcut === "string" ? settings.ingameOverlayShortcut.trim() : "";
+  overlayShortcut = shortcut || DEFAULT_OVERLAY_SHORTCUT;
+  updateIngameOverlay();
+}
+
+/** Newest instance whose game window is actually open. */
+function overlayGameInstance() {
+  let best = null;
+  for (const [modpackId, r] of runningInstances) {
+    if (r.state !== "running") continue;
+    if (!best || (r.info?.startedAt || 0) > (best.info?.startedAt || 0)) best = { modpackId, ...r };
+  }
+  return best;
+}
+
+function overlayState() {
+  const game = overlayGameInstance();
+  return {
+    mode: overlayMode,
+    shortcut: registeredOverlayShortcut || overlayShortcut,
+    shortcutActive: !!registeredOverlayShortcut,
+    toast: overlayToast,
+    // So the notice can draw how long it stays up.
+    toastMs: overlayToast?.kind === "screenshot" ? OVERLAY_SCREENSHOT_TOAST_MS : OVERLAY_TOAST_MS,
+    screenshot: overlayScreenshot,
+    // Bloqueo de contenido: the panel mustn't offer installs main would delete.
+    contentLocked: game ? contentLocks.has(game.modpackId) : false,
+    instance: game
+      ? {
+          modpackId: game.modpackId,
+          name: game.info?.name || game.modpackId,
+          mcVersion: game.info?.mcVersion || null,
+          loaderType: game.info?.loaderType || null,
+          // Catalog picture, else the instance's own icon (custom instances).
+          imageUrl: game.info?.imageUrl || overlayInstanceIcon || null,
+          // Online instances only: their group chat room (grantKey) — and
+          // presence/{modpackId} holds who plays them.
+          groupKey: game.info?.groupKey || null,
+        }
+      : null,
+  };
+}
+
+function sendOverlayState() {
+  if (overlayWindow && !overlayWindow.isDestroyed() && overlayReady) {
+    overlayWindow.webContents.send("overlay:state", overlayState());
+  }
+}
+
+function ensureOverlayWindow() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) return overlayWindow;
+  overlayReady = false;
+  const win = new BrowserWindow({
+    ...OVERLAY_TOAST_SIZE,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    focusable: false,
+    show: false,
+    hasShadow: false,
+    backgroundColor: "#00000000",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  // "screen-saver" is the highest level: stays above a borderless/fullscreen game.
+  win.setAlwaysOnTop(true, "screen-saver");
+  win.webContents.on("will-navigate", (event) => event.preventDefault());
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalSafe(url);
+    return { action: "deny" };
+  });
+  // Clicking back into the game closes the panel, like any game overlay.
+  win.on("blur", () => {
+    if (overlayMode === "panel") hideOverlay();
+  });
+  win.on("closed", () => {
+    if (overlayWindow === win) {
+      overlayWindow = null;
+      overlayReady = false;
+      overlayMode = "hidden";
+    }
+  });
+  win.webContents.on("did-finish-load", () => {
+    overlayReady = true;
+    sendOverlayState();
+    if (overlayMode !== "hidden") revealOverlayWindow();
+  });
+  if (isDev) win.loadURL("http://localhost:5173/overlay.html");
+  else win.loadFile(path.join(__dirname, "..", "dist", "overlay.html"));
+  overlayWindow = win;
+  return win;
+}
+
+/** Bottom-right corner of the screen the game is on (the cursor is locked to
+ *  the game window while playing, so its position picks the right monitor). */
+function placeOverlay(win, wanted) {
+  const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const size = { width: wanted.width, height: Math.min(wanted.height, area.height - OVERLAY_MARGIN * 2) };
+  win.setBounds({
+    x: Math.round(area.x + area.width - size.width - OVERLAY_MARGIN),
+    y: Math.round(area.y + area.height - size.height - OVERLAY_MARGIN),
+    ...size,
+  });
+}
+
+function revealOverlayWindow() {
+  const win = overlayWindow;
+  if (!win || win.isDestroyed() || !overlayReady) return;
+  if (overlayMode === "toast") {
+    placeOverlay(win, OVERLAY_TOAST_SIZE);
+    // The notice never takes focus (the game would pause) and lets clicks
+    // through — except the screenshot one, whose "Compartir" button is clicked
+    // (a non-focusable window still gets the click without activating).
+    win.setIgnoreMouseEvents(overlayToast?.kind !== "screenshot");
+    win.setFocusable(false);
+    win.showInactive();
+  } else if (overlayMode === "panel") {
+    placeOverlay(win, OVERLAY_PANEL_SIZE);
+    win.setIgnoreMouseEvents(false);
+    win.setFocusable(true);
+    win.show();
+    win.focus();
+  }
+  win.setAlwaysOnTop(true, "screen-saver");
+}
+
+function showOverlay(mode) {
+  clearTimeout(overlayToastTimer);
+  overlayToastTimer = null;
+  overlayMode = mode;
+  ensureOverlayWindow();
+  sendOverlayState();
+  revealOverlayWindow();
+  if (mode === "toast") {
+    overlayToastTimer = setTimeout(() => {
+      if (overlayMode === "toast") hideOverlay();
+    }, overlayToast?.kind === "screenshot" ? OVERLAY_SCREENSHOT_TOAST_MS : OVERLAY_TOAST_MS);
+  }
+}
+
+function hideOverlay() {
+  clearTimeout(overlayToastTimer);
+  overlayToastTimer = null;
+  overlayMode = "hidden";
+  sendOverlayState();
+  if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide();
+}
+
+function toggleOverlayPanel() {
+  if (!overlayGameInstance()) return;
+  if (overlayMode === "panel") hideOverlay();
+  else showOverlay("panel");
+}
+
+function unregisterOverlayShortcut() {
+  if (!registeredOverlayShortcut) return;
+  try { globalShortcut.unregister(registeredOverlayShortcut); } catch {}
+  registeredOverlayShortcut = null;
+}
+
+function syncOverlayShortcut(active) {
+  if (!active) return unregisterOverlayShortcut();
+  if (registeredOverlayShortcut === overlayShortcut) return;
+  unregisterOverlayShortcut();
+  try {
+    if (globalShortcut.register(overlayShortcut, toggleOverlayPanel)) registeredOverlayShortcut = overlayShortcut;
+    else console.warn(`[Overlay] El atajo ${overlayShortcut} ya lo usa otra aplicación.`);
+  } catch (e) {
+    console.warn(`[Overlay] Atajo no válido (${overlayShortcut}):`, e?.message || e);
+  }
+}
+
+function updateIngameOverlay() {
+  const game = overlayEnabled ? overlayGameInstance() : null;
+  syncOverlayShortcut(!!game);
+  syncScreenshotWatch(game?.modpackId || null);
+  if (!game) {
+    overlayInstanceKey = null;
+    overlayScreenshot = null;
+    clearTimeout(overlayToastTimer);
+    overlayToastTimer = null;
+    overlayMode = "hidden";
+    if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.destroy();
+    overlayWindow = null;
+    return;
+  }
+  const key = `${game.modpackId}:${game.pid}`;
+  if (key !== overlayInstanceKey) {
+    overlayInstanceKey = key;
+    overlayToast = null;
+    overlayScreenshot = null;
+    overlayInstanceIcon = null;
+    loadOverlayInstanceIcon(game.modpackId, key);
+    showOverlay("toast");
+  } else {
+    sendOverlayState();
+  }
+}
+
+async function loadOverlayInstanceIcon(modpackId, key) {
+  try {
+    const meta = JSON.parse(await fs.readFile(path.join(instanceDirFor(modpackId), "alaunchi-meta.json"), "utf8"));
+    const icon = typeof meta.iconDataUrl === "string" && meta.iconDataUrl.startsWith("data:image/") ? meta.iconDataUrl : null;
+    if (icon && overlayInstanceKey === key) {
+      overlayInstanceIcon = icon;
+      sendOverlayState();
+    }
+  } catch {}
+}
+
+// F2 screenshots: the game writes them to <instancia>/screenshots, so watching
+// that folder is how the overlay notices one — no need to hook F2 itself (a
+// global shortcut on F2 would take the key away from the game).
+function syncScreenshotWatch(modpackId) {
+  if (screenshotWatch?.modpackId === modpackId) return;
+  if (screenshotWatch) {
+    try { screenshotWatch.watcher.close(); } catch {}
+    screenshotWatch = null;
+  }
+  if (!modpackId) return;
+  const dir = path.join(instanceDirFor(modpackId), "screenshots");
+  try {
+    fsSync.mkdirSync(dir, { recursive: true });
+    // Only what appears from now on counts, not the screenshots already there.
+    const seen = new Set(fsSync.readdirSync(dir));
+    const watcher = fsSync.watch(dir, (_, fileName) => {
+      if (!fileName || !/\.png$/i.test(fileName) || seen.has(fileName)) return;
+      seen.add(fileName);
+      announceScreenshot(modpackId, path.join(dir, fileName)).catch((e) =>
+        console.warn("[Overlay] Captura no disponible:", e?.message || e)
+      );
+    });
+    watcher.on("error", () => {});
+    screenshotWatch = { modpackId, watcher, seen };
+  } catch (e) {
+    console.warn("[Overlay] No se pudo vigilar la carpeta de capturas:", e?.message || e);
+  }
+}
+
+/** Waits until the game has finished writing the PNG (its size stops
+ *  changing), then shows it in the corner. */
+async function announceScreenshot(modpackId, filePath) {
+  let stat = null;
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    let next;
+    try {
+      next = await fs.stat(filePath);
+    } catch {
+      continue;
+    }
+    if (stat && next.size > 0 && next.size === stat.size && next.mtimeMs === stat.mtimeMs) break;
+    stat = next;
+  }
+  if (!stat?.size) return;
+  stat = await fs.stat(filePath);
+  if (screenshotWatch?.modpackId !== modpackId) return;
+  const [thumbnailDataUrl, sha1] = await Promise.all([
+    cachedThumbnail(filePath, 320, stat).catch(() => null),
+    cachedSha1(filePath, stat),
+  ]);
+  overlayScreenshot = { modpackId, fileName: path.basename(filePath), size: stat.size, sha1, thumbnailDataUrl, takenAt: Date.now() };
+  if (overlayMode === "panel") return sendOverlayState();
+  overlayToast = { kind: "screenshot", fileName: overlayScreenshot.fileName, thumbnailDataUrl };
+  showOverlay("toast");
+}
+
+ipcMain.handle("overlay:get-state", () => overlayState());
+ipcMain.on("overlay:close", () => hideOverlay());
+// "Compartir" on the screenshot notice: open the panel (the page goes
+// straight to sharing that screenshot).
+ipcMain.on("overlay:open-panel", () => {
+  if (overlayGameInstance()) showOverlay("panel");
+});
+// The overlay page watches the chat itself; a new message while playing shows
+// in the corner (never over the open panel, which already shows the chat).
+ipcMain.on("overlay:notify", (_, payload) => {
+  if (!overlayGameInstance() || overlayMode === "panel") return;
+  overlayToast = {
+    kind: "message",
+    uuid: String(payload?.uuid || ""),
+    // Which conversation the shortcut opens: a player uuid, or the group chat.
+    chat: String(payload?.chat || payload?.uuid || "").slice(0, 80),
+    title: String(payload?.title || "").slice(0, 80),
+    body: String(payload?.body || "").slice(0, 200),
+  };
+  showOverlay("toast");
+});
+// Ajustes: is this accelerator valid and free? (register + release right away;
+// the one we already hold ourselves counts as free.)
+ipcMain.handle("overlay:check-shortcut", (_, accelerator) => {
+  const accel = String(accelerator || "").trim();
+  if (!accel) return { ok: false, reason: "invalid" };
+  if (accel === registeredOverlayShortcut) return { ok: true };
+  try {
+    if (!globalShortcut.register(accel, () => {})) return { ok: false, reason: "taken" };
+    globalShortcut.unregister(accel);
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "invalid" };
+  }
+});
 
 function setRunningState(modpackId, pid, state) {
   const r = runningInstances.get(modpackId);
@@ -1125,6 +1472,7 @@ app.whenReady().then(async () => {
     const settings = JSON.parse(await fs.readFile(path.join(APP_DATA_DIR, "settings.json"), "utf8"));
     applyCloseToTraySetting(settings);
     applyDiscordSetting(settings);
+    applyOverlaySetting(settings);
   } catch {}
   try {
     reconcileDanglingPlaytimeSessions();
@@ -1679,12 +2027,14 @@ async function reconcileDanglingPlaytimeSessions() {
         try {
           const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
           if (!meta.activeSession) continue;
-          const { pid, startedAt, displayName, mcVersion, loaderType } = meta.activeSession;
+          const { pid, startedAt, displayName, mcVersion, loaderType, imageUrl, groupKey } = meta.activeSession;
           if (isPidAlive(pid)) {
             watchProcessForPlaytime(entry.name, pid, startedAt, "running", {
               name: displayName || meta.name || entry.name,
               mcVersion,
               loaderType,
+              imageUrl: imageUrl || null,
+              groupKey: groupKey || null,
             });
           } else {
             delete meta.activeSession;
@@ -3362,15 +3712,24 @@ ipcMain.handle("mc:get-loader-icons", async () => {
   return out;
 });
 
-ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, authToken, username, uuid, xuid, clientId, displayName }) => {
+ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, authToken, username, uuid, xuid, clientId, displayName, imageUrl, groupKey }) => {
   // Refuse to spawn a second JVM against the same instance/world if one's already
   // running. Nothing else guarantees this: the renderer's "disabled while launching"
   // guards are per-component React state, and the same modpack has independent Play
   // buttons on the home carousel, the instance manager page and each hub tile.
   let existingSession = null;
+  // The loader build the instance was created/imported with (instances:create,
+  // CurseForge/.mrpack import). Online modpacks don't store one — their
+  // manifest has no loader version — so they keep resolving it below.
+  let pinnedLoaderVersion = null;
   try {
     const meta = JSON.parse(await fs.readFile(path.join(instanceDirFor(modpackId), "alaunchi-meta.json"), "utf8"));
     existingSession = meta.activeSession || null;
+    if (typeof meta.loaderVersion === "string" && meta.loaderVersion.trim()) {
+      // Forge builds are stored bare ("47.2.0"); drop an "<mc>-" prefix in case
+      // one slipped in, since forgeMavenVersion adds it back itself.
+      pinnedLoaderVersion = meta.loaderVersion.trim().replace(`${mcVersion}-`, "");
+    }
   } catch {}
   if (existingSession && isPidAlive(existingSession.pid)) {
     throw new Error("Minecraft ya está en marcha para este modpack.");
@@ -3492,7 +3851,7 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   if (loaderType === "fabric" || loaderType === "quilt") {
     try {
       win?.webContents.send("launch-status", { modpackId, stage: "installing_loader" });
-      const fabricProfile = await resolveFabricProfile(mcVersion);
+      const fabricProfile = await resolveFabricProfile(mcVersion, pinnedLoaderVersion);
       loaderProfile = fabricProfile;
       mainClass = fabricProfile.mainClass;
       for (const lib of fabricProfile.libraries || []) {
@@ -3523,7 +3882,7 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   if (loaderType === "neoforge") {
     try {
       win?.webContents.send("launch-status", { modpackId, stage: "installing_loader" });
-      const neoforgeVersion = await resolveNeoforgeVersion(mcVersion);
+      const neoforgeVersion = pinnedLoaderVersion || await resolveNeoforgeVersion(mcVersion);
       if (!neoforgeVersion) throw new Error(`No se encontró NeoForge para MC ${mcVersion}`);
       console.log(`[NeoForge] Usando versión ${neoforgeVersion}`);
       const { profile, installLibsDir } = await runForgeInstallerDirect(
@@ -3553,7 +3912,7 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   if (loaderType === "forge") {
     try {
       win?.webContents.send("launch-status", { modpackId, stage: "installing_loader" });
-      const forgeVersion = await resolveForgeVersion(mcVersion);
+      const forgeVersion = pinnedLoaderVersion || await resolveForgeVersion(mcVersion);
       if (!forgeVersion) throw new Error(`No se encontró Forge para MC ${mcVersion}`);
       console.log(`[Forge] Usando versión ${forgeVersion}`);
       const { profile, installLibsDir } = await runForgeInstallerDirect(
@@ -3752,11 +4111,16 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
     name: typeof displayName === "string" && displayName.trim() ? displayName.trim().slice(0, 120) : modpackId,
     mcVersion,
     loaderType,
+    // Picture + accent color of the in-game overlay. Only web links: a data URL
+    // could be megabytes, and this is also written to alaunchi-meta.json.
+    imageUrl: typeof imageUrl === "string" && /^https:\/\//i.test(imageUrl) && imageUrl.length < 2048 ? imageUrl : null,
+    // Online instances: group chat + Participantes in the overlay.
+    groupKey: typeof groupKey === "string" && /^[^.#$[\]/]{1,300}$/.test(groupKey) ? groupKey : null,
   };
   try {
     const metaPath = path.join(instanceDir, "alaunchi-meta.json");
     const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
-    meta.activeSession = { pid: child.pid, startedAt: playtimeStartedAt, displayName: sessionInfo.name, mcVersion, loaderType };
+    meta.activeSession = { pid: child.pid, startedAt: playtimeStartedAt, displayName: sessionInfo.name, mcVersion, loaderType, imageUrl: sessionInfo.imageUrl, groupKey: sessionInfo.groupKey };
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
   } catch (e) {
     console.warn("[Playtime] No se pudo iniciar el seguimiento de tiempo jugado:", e.message);
@@ -3867,21 +4231,27 @@ async function forgeMavenVersion(mcVersion, loaderVersion) {
   }
 }
 
-// The launch profile for the latest Fabric Loader, cached per MC version. meta/maven.fabricmc.net
+// The launch profile for a Fabric Loader — the instance's pinned one (alaunchi-meta.json
+// loaderVersion), else the latest — cached per MC version (+ pinned loader). meta/maven.fabricmc.net
 // sit behind Cloudflare, which some networks can't reach at times (Spanish ISPs block Cloudflare
 // IPs during LaLiga matches) — Mojang still answers and every library is already on disk, so
 // falling back to the last profile that worked keeps Fabric instances launchable.
-async function resolveFabricProfile(mcVersion) {
-  const cachePath = path.join(CACHE_DIR, "fabric-profiles", `${mcVersion}.json`);
+async function resolveFabricProfile(mcVersion, pinnedLoaderVersion = null) {
+  const cacheName = pinnedLoaderVersion ? `${mcVersion}-${pinnedLoaderVersion}` : mcVersion;
+  const cachePath = path.join(CACHE_DIR, "fabric-profiles", `${cacheName.replace(/[^\w.+-]/g, "_")}.json`);
   const withTimeout = (p) => Promise.race([
     p,
     new Promise((_, reject) => setTimeout(() => reject(new Error("tiempo de espera agotado")), 10000)),
   ]);
   try {
-    const loaderMeta = await withTimeout(fetchJson("https://meta.fabricmc.net/v2/versions/loader"));
-    const latestLoader = loaderMeta[0].version;
+    let latestLoader = pinnedLoaderVersion;
+    if (!latestLoader) {
+      const loaderMeta = await withTimeout(fetchJson("https://meta.fabricmc.net/v2/versions/loader"));
+      latestLoader = loaderMeta[0].version;
+    }
+    console.log(`[Fabric] Usando versión ${latestLoader}`);
     const profile = await withTimeout(fetchJson(
-      `https://meta.fabricmc.net/v2/versions/loader/${encodeURIComponent(mcVersion)}/${latestLoader}/profile/json`
+      `https://meta.fabricmc.net/v2/versions/loader/${encodeURIComponent(mcVersion)}/${encodeURIComponent(latestLoader)}/profile/json`
     ));
     await fs.mkdir(path.dirname(cachePath), { recursive: true });
     await fs.writeFile(cachePath, JSON.stringify(profile));
@@ -4978,6 +5348,7 @@ ipcMain.handle("fs:write-settings", async (_, settings) => {
   await fs.writeFile(path.join(APP_DATA_DIR, "settings.json"), JSON.stringify(settings, null, 2));
   applyCloseToTraySetting(settings);
   applyDiscordSetting(settings);
+  applyOverlaySetting(settings);
   return { success: true };
 });
 
@@ -5197,6 +5568,7 @@ ipcMain.handle("mc:set-content-locks", async (_, { modpackIds }) => {
     const deleted = await enforceContentLock(id).catch(() => []);
     if (deleted.length) deletedById[id] = deleted;
   }
+  sendOverlayState();
   return deletedById;
 });
 
@@ -5559,6 +5931,7 @@ function getLiveConnection(id) {
 // dangling when the app actually exits.
 app.on("will-quit", () => {
   discordPresence.destroy();
+  globalShortcut.unregisterAll();
   for (const id of Array.from(liveServerConnections.keys())) {
     disconnectServerConnection(id).catch(() => {});
   }

@@ -28,11 +28,12 @@ import {
   Sparkles,
   Compass,
   Gamepad2,
+  Joystick,
   type LucideIcon,
 } from "lucide-react";
 import { useTour } from "@/components/onboarding-tour";
 import { Switch } from "@/components/ui/switch";
-import { readSettings, writeSettings, isElectron, getDataDir, chooseDataDir, openDataDir } from "@/services/electron";
+import { readSettings, writeSettings, isElectron, getDataDir, chooseDataDir, openDataDir, checkOverlayShortcut, DEFAULT_OVERLAY_SHORTCUT } from "@/services/electron";
 import {
   NOTIFICATION_SOUNDS,
   getNotificationSound,
@@ -272,6 +273,7 @@ function PersonalizationSection() {
     <AnimatedBackgroundPanel />
     <BackgroundPanel />
     <DiscordPanel />
+    <IngameOverlayPanel />
     <Panel
       icon={Bell}
       title="Notificaciones"
@@ -431,6 +433,119 @@ function DiscordPanel() {
           Mostrar en Discord
         </Label>
         <Switch id="discord-presence" checked={enabled} disabled={!loaded || !isElectron} onCheckedChange={handleChange} />
+      </div>
+    </Panel>
+  );
+}
+
+/** Turns a keydown into an Electron accelerator ("Alt+X", "Ctrl+Shift+F8"...),
+ *  or null while only modifiers are held / for keys we don't map. */
+function acceleratorFromEvent(e: React.KeyboardEvent): string | null {
+  const { code } = e;
+  let key: string | null = null;
+  if (/^Key[A-Z]$/.test(code)) key = code.slice(3);
+  else if (/^Digit[0-9]$/.test(code)) key = code.slice(5);
+  else if (/^F([1-9]|1[0-2])$/.test(code)) key = code;
+  else if (/^Numpad[0-9]$/.test(code)) key = `num${code.slice(6)}`;
+  else key = ({ Space: "Space", Insert: "Insert", Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown" } as Record<string, string>)[code] ?? null;
+  if (!key) return null;
+  const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift"].filter(Boolean) as string[];
+  // A bare letter/number would be stolen from the game itself (movement, hotbar...).
+  if (!mods.length && !/^F\d+$/.test(key)) return null;
+  return [...mods, key].join("+");
+}
+
+/** Overlay over Minecraft (notice in the corner + panel on a shortcut) —
+ *  settings.json `ingameOverlay` (off by default) and `ingameOverlayShortcut`,
+ *  read by electron/main.js. */
+function IngameOverlayPanel() {
+  const [enabled, setEnabled] = useState(false);
+  const [shortcut, setShortcut] = useState(DEFAULT_OVERLAY_SHORTCUT);
+  const [recording, setRecording] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    readSettings()
+      .then((s) => {
+        setEnabled(s.ingameOverlay === true);
+        if (typeof s.ingameOverlayShortcut === "string" && s.ingameOverlayShortcut.trim()) setShortcut(s.ingameOverlayShortcut);
+      })
+      .finally(() => setLoaded(true));
+  }, []);
+
+  const save = async (patch: Record<string, unknown>) => {
+    const current = await readSettings();
+    await writeSettings({ ...current, ...patch });
+  };
+
+  const handleToggle = async (on: boolean) => {
+    setEnabled(on);
+    try {
+      await save({ ingameOverlay: on });
+    } catch {
+      setEnabled(!on);
+      toast.error("No se pudo guardar el ajuste.");
+    }
+  };
+
+  const handleKeyDown = async (e: React.KeyboardEvent) => {
+    e.preventDefault();
+    if (e.key === "Escape") return setRecording(false);
+    const accel = acceleratorFromEvent(e);
+    if (!accel) return;
+    setRecording(false);
+    if (accel === shortcut) return;
+    if (/(^|\+)F12$/.test(accel)) {
+      toast.error("Windows reserva F12 para depuradores: elige otra tecla.");
+      return;
+    }
+    const check = await checkOverlayShortcut(accel);
+    if (!check.ok) {
+      toast.error(check.reason === "taken" ? `${accel} ya lo usa otra aplicación.` : `${accel} no se puede usar como atajo.`);
+      return;
+    }
+    const previous = shortcut;
+    setShortcut(accel);
+    try {
+      await save({ ingameOverlayShortcut: accel });
+    } catch {
+      setShortcut(previous);
+      toast.error("No se pudo guardar el atajo.");
+    }
+  };
+
+  return (
+    <Panel
+      icon={Joystick}
+      title="ALaunchi dentro del juego"
+      description="Al abrir Minecraft aparece un aviso en la esquina, y con el atajo se abre una ventana de ALaunchi encima del juego. Funciona en modo ventana o pantalla completa sin bordes."
+    >
+      <div className="flex items-center justify-between gap-3">
+        <Label htmlFor="ingame-overlay" className="text-sm text-gray-100">
+          Activar en el juego
+        </Label>
+        <Switch id="ingame-overlay" checked={enabled} disabled={!loaded || !isElectron} onCheckedChange={handleToggle} />
+      </div>
+      <div className={cn("flex items-center justify-between gap-3", !enabled && "opacity-50")}>
+        <div className="min-w-0">
+          <p className="text-sm text-gray-100">Atajo</p>
+          <p className="text-xs text-muted-foreground">
+            {recording ? "Pulsa la combinación (Esc para cancelar)" : "Combina Ctrl, Alt o Shift con una tecla, o usa F1–F12."}
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={!enabled || !loaded || !isElectron}
+          onClick={() => setRecording(true)}
+          onKeyDown={recording ? handleKeyDown : undefined}
+          onBlur={() => setRecording(false)}
+          className={cn(
+            "shrink-0 min-w-24 rounded-md border px-3 py-1.5 font-mono text-xs transition-colors",
+            recording ? "border-accent text-accent animate-pulse" : "border-white/15 text-gray-100 hover:border-white/30",
+          )}
+        >
+          {recording ? "…" : shortcut}
+        </button>
       </div>
     </Panel>
   );

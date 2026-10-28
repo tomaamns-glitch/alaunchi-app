@@ -14,6 +14,11 @@ export interface LaunchOptions {
   clientId: string;
   /** Instance name shown in the Discord presence. */
   displayName?: string;
+  /** Instance picture (https only) — icon and accent color of the in-game overlay. */
+  imageUrl?: string;
+  /** Online instances: their group chat room (group-chat.ts groupKeyFor) —
+   *  the overlay shows that chat and the instance's Participantes. */
+  groupKey?: string;
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -65,6 +70,45 @@ export async function readSettings(): Promise<Record<string, any>> {
 
 export async function writeSettings(settings: Record<string, any>): Promise<void> {
   if (isElectron) await eAPI.writeSettings(settings);
+}
+
+export const DEFAULT_OVERLAY_SHORTCUT = "F10";
+
+export interface OverlayState {
+  mode: "hidden" | "toast" | "panel";
+  shortcut: string;
+  shortcutActive: boolean;
+  /** null = the "ALaunchi está activo" notice. */
+  toast:
+    | { kind: "message"; uuid: string; chat: string; title: string; body: string }
+    | { kind: "screenshot"; fileName: string; thumbnailDataUrl: string | null }
+    | null;
+  toastMs: number;
+  /** Newest F2 screenshot of this game session (screenshots/ of the instance). */
+  screenshot: {
+    modpackId: string;
+    fileName: string;
+    size: number;
+    sha1: string;
+    thumbnailDataUrl: string | null;
+    takenAt: number;
+  } | null;
+  contentLocked: boolean;
+  instance: {
+    modpackId: string;
+    name: string;
+    mcVersion: string | null;
+    loaderType: string | null;
+    imageUrl: string | null;
+    /** Set only for online instances. */
+    groupKey: string | null;
+  } | null;
+}
+
+/** Whether an Electron accelerator is valid and not already taken by another app. */
+export async function checkOverlayShortcut(accelerator: string): Promise<{ ok: boolean; reason?: "invalid" | "taken" }> {
+  if (!isElectron) return { ok: false, reason: "invalid" };
+  return eAPI.checkOverlayShortcut(accelerator);
 }
 
 export async function getDataDir(): Promise<{ dataDir: string; isCustom: boolean } | null> {

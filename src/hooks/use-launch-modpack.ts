@@ -3,6 +3,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { installSnapshot, launchMinecraft } from "@/services/electron";
 import { markOnline } from "@/services/presence";
+import { groupKeyFor } from "@/services/group-chat";
 import { markPlayingInstance } from "@/services/user-activity";
 import { getAzureClientId } from "@/services/auth";
 import { Modpack, fetchSnapshot, snapshotBaseUrl } from "@/services/github";
@@ -92,6 +93,8 @@ export function useLaunchModpack(pack: Modpack | undefined) {
         xuid: auth.xuid,
         clientId: getAzureClientId(),
         displayName: pack.name,
+        imageUrl: pack.imageUrl || undefined,
+        groupKey: pack.repoUrl && !pack.outOfNetwork && pack.source !== "custom" ? groupKeyFor(pack) : undefined,
       });
       // Out-of-network (past) instances have no instance presence anymore.
       if (!pack.outOfNetwork) markOnline(pack.id, auth.uuid, auth.username).catch(() => {});
