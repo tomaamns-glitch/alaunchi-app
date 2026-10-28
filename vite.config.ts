@@ -16,6 +16,13 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist"),
     emptyOutDir: true,
+    // Two pages: the launcher and the window shown over Minecraft (src/overlay).
+    rollupOptions: {
+      input: {
+        main: path.resolve(import.meta.dirname, "index.html"),
+        overlay: path.resolve(import.meta.dirname, "overlay.html"),
+      },
+    },
   },
   server: {
     port: 5173,
