@@ -457,6 +457,14 @@ let overlayInstanceKey = null; // `${modpackId}:${pid}` the notice was already s
 // the overlay page asked to announce ({ kind: "message", uuid, title, body }),
 // or a screenshot just taken with F2 ({ kind: "screenshot", fileName, ... }).
 let overlayToast = null;
+// Fullscreen games minimize themselves as soon as another window takes the
+// focus (GLFW's auto-iconify — nothing outside the game can turn it off). So
+// with the game in fullscreen the panel opens WITHOUT the focus ("passive":
+// clicks and the wheel still work, the game stays up), and only takes it when
+// the player clicks somewhere to type — then the game minimizes, and closing
+// the panel brings it back (restoreGameWindow).
+let overlayPassive = false;
+let overlayFocusTaken = false;
 // The newest F2 screenshot of this game session — the panel offers to share it.
 let overlayScreenshot = null;
 // iconDataUrl from the running instance's alaunchi-meta.json (a small data URL).
@@ -486,6 +494,9 @@ function overlayState() {
     mode: overlayMode,
     shortcut: registeredOverlayShortcut || overlayShortcut,
     shortcutActive: !!registeredOverlayShortcut,
+    // Panel open without the focus (fullscreen game) — and whether it took it to type.
+    passive: overlayMode === "panel" && overlayPassive,
+    focusTaken: overlayFocusTaken,
     toast: overlayToast,
     // So the notice can draw how long it stays up.
     toastMs: overlayToast?.kind === "screenshot" ? OVERLAY_SCREENSHOT_TOAST_MS : OVERLAY_TOAST_MS,
@@ -548,7 +559,7 @@ function ensureOverlayWindow() {
   });
   // Clicking back into the game closes the panel, like any game overlay.
   win.on("blur", () => {
-    if (overlayMode === "panel") hideOverlay();
+    if (overlayMode === "panel" && (!overlayPassive || overlayFocusTaken)) hideOverlay();
   });
   win.on("closed", () => {
     if (overlayWindow === win) {
@@ -594,9 +605,14 @@ function revealOverlayWindow() {
   } else if (overlayMode === "panel") {
     placeOverlay(win, OVERLAY_PANEL_SIZE);
     win.setIgnoreMouseEvents(false);
-    win.setFocusable(true);
-    win.show();
-    win.focus();
+    if (overlayPassive && !overlayFocusTaken) {
+      win.setFocusable(false);
+      win.showInactive();
+    } else {
+      win.setFocusable(true);
+      win.show();
+      win.focus();
+    }
   }
   win.setAlwaysOnTop(true, "screen-saver");
 }
@@ -604,6 +620,11 @@ function revealOverlayWindow() {
 function showOverlay(mode) {
   clearTimeout(overlayToastTimer);
   overlayToastTimer = null;
+  if (mode === "panel" && overlayMode !== "panel") {
+    const game = overlayGameInstance();
+    overlayPassive = !!game && isGameFullscreen(game.modpackId);
+    overlayFocusTaken = false;
+  }
   overlayMode = mode;
   ensureOverlayWindow();
   sendOverlayState();
@@ -618,9 +639,51 @@ function showOverlay(mode) {
 function hideOverlay() {
   clearTimeout(overlayToastTimer);
   overlayToastTimer = null;
+  // The panel took the focus over a fullscreen game, which minimized it.
+  const restore = overlayMode === "panel" && overlayPassive && overlayFocusTaken;
   overlayMode = "hidden";
+  overlayPassive = false;
+  overlayFocusTaken = false;
   sendOverlayState();
+  if (restore) restoreGameWindow();
   if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide();
+}
+
+/** Minecraft writes "fullscreen:true" to the instance's options.txt (also when
+ *  toggled with F11 in game). */
+function isGameFullscreen(modpackId) {
+  try {
+    const options = fsSync.readFileSync(path.join(instanceDirFor(modpackId), "options.txt"), "utf8");
+    return /^fullscreen:true\s*$/m.test(options);
+  } catch {
+    return false;
+  }
+}
+
+/** Brings the (minimized) game window back to the front. Electron can't touch
+ *  another process' window, so a hidden PowerShell does it through user32.
+ *  Started while ALaunchi still has the focus, which lets it activate the game. */
+function restoreGameWindow() {
+  const game = overlayGameInstance();
+  if (!game?.pid) return;
+  const script =
+    `$p = Get-Process -Id ${Number(game.pid)} -ErrorAction SilentlyContinue; ` +
+    "if ($p -and $p.MainWindowHandle -ne 0) { " +
+    "Add-Type -Namespace ALaunchi -Name Win -MemberDefinition '" +
+    '[DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr h, int c); ' +
+    '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);' +
+    "'; [ALaunchi.Win]::ShowWindowAsync($p.MainWindowHandle, 9) | Out-Null; " +
+    "[ALaunchi.Win]::SetForegroundWindow($p.MainWindowHandle) | Out-Null }";
+  try {
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    child.on("error", (e) => console.warn("[Overlay] No se pudo restaurar el juego:", e?.message || e));
+    child.unref();
+  } catch (e) {
+    console.warn("[Overlay] No se pudo restaurar el juego:", e?.message || e);
+  }
 }
 
 function toggleOverlayPanel() {
@@ -744,6 +807,17 @@ async function announceScreenshot(modpackId, filePath) {
 
 ipcMain.handle("overlay:get-state", () => overlayState());
 ipcMain.on("overlay:close", () => hideOverlay());
+// Passive panel (fullscreen game): the player clicked a text field — take the
+// focus so the keyboard reaches it (the game minimizes until the panel closes).
+ipcMain.on("overlay:request-focus", () => {
+  const win = overlayWindow;
+  if (overlayMode !== "panel" || !overlayPassive || overlayFocusTaken || !win || win.isDestroyed()) return;
+  overlayFocusTaken = true;
+  win.setFocusable(true);
+  win.show();
+  win.focus();
+  sendOverlayState();
+});
 // "Compartir" on the screenshot notice: open the panel (the page goes
 // straight to sharing that screenshot).
 ipcMain.on("overlay:open-panel", () => {
@@ -4113,14 +4187,18 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
     loaderType,
     // Picture + accent color of the in-game overlay. Only web links: a data URL
     // could be megabytes, and this is also written to alaunchi-meta.json.
-    imageUrl: typeof imageUrl === "string" && /^https:\/\//i.test(imageUrl) && imageUrl.length < 2048 ? imageUrl : null,
+    imageUrl:
+      typeof imageUrl === "string" &&
+      ((/^https:\/\//i.test(imageUrl) && imageUrl.length < 2048) || (/^data:image\//i.test(imageUrl) && imageUrl.length < 400_000))
+        ? imageUrl
+        : null,
     // Online instances: group chat + Participantes in the overlay.
     groupKey: typeof groupKey === "string" && /^[^.#$[\]/]{1,300}$/.test(groupKey) ? groupKey : null,
   };
   try {
     const metaPath = path.join(instanceDir, "alaunchi-meta.json");
     const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
-    meta.activeSession = { pid: child.pid, startedAt: playtimeStartedAt, displayName: sessionInfo.name, mcVersion, loaderType, imageUrl: sessionInfo.imageUrl, groupKey: sessionInfo.groupKey };
+    meta.activeSession = { pid: child.pid, startedAt: playtimeStartedAt, displayName: sessionInfo.name, mcVersion, loaderType, imageUrl: sessionInfo.imageUrl?.startsWith("https:") ? sessionInfo.imageUrl : null, groupKey: sessionInfo.groupKey };
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
   } catch (e) {
     console.warn("[Playtime] No se pudo iniciar el seguimiento de tiempo jugado:", e.message);

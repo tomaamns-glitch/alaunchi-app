@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Toaster } from "sonner";
-import { X, Package, MessageCircle, Camera, Send, Users } from "lucide-react";
+import { X, Package, MessageCircle, Camera, Send, Users, Maximize } from "lucide-react";
 import { LoaderIcon } from "@/components/loader-icon";
 import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
 import type { OverlayState } from "@/services/electron";
@@ -163,6 +163,12 @@ function Panel({ state }: { state: OverlayState }) {
             ...(online ? [{ id: "members" as const, label: "Participantes", icon: Users }] : []),
           ]}
         />
+        {state.passive && !state.focusTaken && (
+          <p className="mt-2 flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.03] px-2.5 py-1.5 text-[10px] leading-snug text-gray-400">
+            <Maximize className="h-3 w-3 shrink-0 text-gray-500" />
+            Pantalla completa: pulsa Esc en el juego para usar el ratón. Al escribir, Minecraft se minimiza hasta que cierres el panel.
+          </p>
+        )}
       </nav>
 
       <AnimatePresence mode="wait" initial={false}>
@@ -259,6 +265,23 @@ export function OverlayApp() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Passive panel (fullscreen game, no focus): clicking a text field asks main
+  // for the focus, then puts the caret back in that field once it arrives.
+  const needsFocus = !!state?.passive && !state.focusTaken;
+  useEffect(() => {
+    if (!needsFocus) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const field = (e.target as HTMLElement | null)?.closest("input, textarea") as HTMLInputElement | null;
+      if (!field) return;
+      const refocus = () => field.focus();
+      window.addEventListener("focus", refocus, { once: true });
+      setTimeout(() => window.removeEventListener("focus", refocus), 3000);
+      eAPI?.requestOverlayFocus();
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => window.removeEventListener("pointerdown", onPointerDown, true);
+  }, [needsFocus]);
 
   if (!state) return null;
   return (

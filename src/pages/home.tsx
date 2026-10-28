@@ -61,6 +61,7 @@ import {
 } from "@/hooks/use-instance-run-state";
 import { useInstanceProgress } from "@/hooks/use-instance-progress";
 import { InstanceProgressChip } from "@/components/instance-progress-chip";
+import { overlayLaunchInfo } from "@/lib/overlay-launch";
 
 const api = (window as any).electronAPI;
 
@@ -337,6 +338,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
         xuid: auth.xuid,
         clientId: getAzureClientId(),
         displayName: pack.name,
+        ...overlayLaunchInfo(pack),
       });
       // Out-of-network (past) instances have no instance presence anymore.
       if (!pack.outOfNetwork) markOnline(pack.id, auth.uuid, auth.username).catch(() => {});
