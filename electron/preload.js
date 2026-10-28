@@ -211,6 +211,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
   closeOverlay: () => ipcRenderer.send("overlay:close"),
   openOverlayPanel: () => ipcRenderer.send("overlay:open-panel"),
+  requestOverlayFocus: () => ipcRenderer.send("overlay:request-focus"),
   overlayNotify: (payload) => ipcRenderer.send("overlay:notify", payload),
   checkOverlayShortcut: (accelerator) => ipcRenderer.invoke("overlay:check-shortcut", accelerator),
 });

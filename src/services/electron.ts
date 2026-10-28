@@ -78,6 +78,10 @@ export interface OverlayState {
   mode: "hidden" | "toast" | "panel";
   shortcut: string;
   shortcutActive: boolean;
+  /** Panel open without the focus because the game is fullscreen (it would
+   *  minimize otherwise); focusTaken = the player clicked to type anyway. */
+  passive: boolean;
+  focusTaken: boolean;
   /** null = the "ALaunchi está activo" notice. */
   toast:
     | { kind: "message"; uuid: string; chat: string; title: string; body: string }
