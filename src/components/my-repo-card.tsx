@@ -97,7 +97,7 @@ export function MyRepoCard() {
     (isPrivate && readToken !== stored.readToken);
 
   return (
-    <Card className="rounded-xl border-white/10 bg-card/40 shadow-none">
+    <Card className="rounded-md border-transparent bg-gray-500/10 backdrop-blur-md shadow-none">
       <CardHeader>
         <CardTitle className="text-white flex items-center gap-2">
           <Github className="h-5 w-5 text-accent" /> Mi repositorio

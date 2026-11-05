@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { motion } from "framer-motion";
 import { Copy, FolderMinus, FolderOpen, Loader2, Play, RotateCcw, Share2, Square, Star, Trash2 } from "lucide-react";
 import { ShareInstanceDialog } from "@/components/share-instance-dialog";
 import { DuplicateInstanceDialog } from "@/components/duplicate-instance-dialog";
@@ -97,7 +98,7 @@ export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onR
           onDragLeave={drag.onDragLeave}
           onDrop={drag.onDrop}
           onDragEnd={drag.onDragEnd}
-          className={`rounded-xl border border-white/10 bg-card/40 overflow-hidden hover:border-accent/40 transition-colors cursor-grab active:cursor-grabbing ${dragClasses(drag)}`}
+          className={`group rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden hover:border-accent/40 transition-colors cursor-grab active:cursor-grabbing ${dragClasses(drag)}`}
         >
           <button type="button" onClick={onClick} className="block w-full text-left">
             <div className="relative aspect-square bg-black/50">
@@ -108,17 +109,11 @@ export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onR
               )}
               <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/25" />
 
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onTogglePin();
-                }}
-                aria-label={pinned ? "Quitar de destacadas" : "Destacar instancia"}
-                className="absolute top-1.5 left-1.5 h-6 w-6 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center hover:bg-black/80 transition-colors"
-              >
-                <Star className={`h-3.5 w-3.5 ${pinned ? "fill-amber-400 text-amber-400" : "text-gray-300"}`} />
-              </button>
+              <FavoriteStar
+                pinned={pinned}
+                onToggle={onTogglePin}
+                className="absolute top-1.5 left-1.5"
+              />
 
               {instance.isCopy && (
                 <span
@@ -154,8 +149,14 @@ export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onR
             ) : (
             <Button
               size="sm"
-              variant={running ? "destructive" : "default"}
-              className="w-full h-8 font-bold"
+              // Quiet until you're on the tile (15 solid buttons were a wall of color);
+              // then it takes the accent, like Jugar in the instance manager.
+              variant={running ? "destructive" : "ghost"}
+              className={`w-full h-8 font-bold ${
+                running
+                  ? ""
+                  : "bg-white/[0.06] text-muted-foreground group-hover:bg-accent group-hover:text-accent-foreground hover:bg-accent hover:text-accent-foreground"
+              }`}
               onClick={toggle}
               disabled={busy}
             >
@@ -258,5 +259,59 @@ export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onR
       </AlertDialogContent>
     </AlertDialog>
     </>
+  );
+}
+
+const BURST_DOTS = 8;
+
+/**
+ * The favorite star of a tile. Marking it: the star pops in with a spin and a
+ * ring of amber sparks bursts out. Unmarking: it shrinks back and loses its color.
+ * No animation on first render (only on a real change). Unmarked, it only
+ * shows while hovering the tile (the tile root is the `group`).
+ */
+function FavoriteStar({ pinned, onToggle, className }: { pinned: boolean; onToggle: () => void; className?: string }) {
+  const [burst, setBurst] = useState(0);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+  }, []);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!pinned) setBurst((b) => b + 1);
+        onToggle();
+      }}
+      aria-label={pinned ? "Quitar de destacadas" : "Destacar instancia"}
+      className={`h-6 w-6 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center hover:bg-black/80 transition-[opacity,background-color] duration-200 ${pinned ? "" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"} ${className ?? ""}`}
+    >
+      <motion.span
+        key={pinned ? "on" : "off"}
+        initial={!mounted.current ? false : pinned ? { scale: 0.2, rotate: -72 } : { scale: 1.3, rotate: 0 }}
+        animate={{ scale: 1, rotate: 0 }}
+        transition={pinned ? { type: "spring", stiffness: 520, damping: 13 } : { duration: 0.22, ease: "easeOut" }}
+        className="flex"
+      >
+        <Star className={`h-3.5 w-3.5 transition-colors duration-200 ${pinned ? "fill-amber-400 text-amber-400" : "text-gray-300"}`} />
+      </motion.span>
+      {burst > 0 && pinned && (
+        <span key={burst} aria-hidden className="pointer-events-none absolute inset-0">
+          {Array.from({ length: BURST_DOTS }, (_, i) => {
+            const angle = (i / BURST_DOTS) * Math.PI * 2;
+            return (
+              <motion.span
+                key={i}
+                className="absolute left-1/2 top-1/2 -ml-[2px] -mt-[2px] h-1 w-1 rounded-full bg-amber-300"
+                initial={{ x: 0, y: 0, opacity: 1, scale: 1 }}
+                animate={{ x: Math.cos(angle) * 16, y: Math.sin(angle) * 16, opacity: 0, scale: 0.4 }}
+                transition={{ duration: 0.5, ease: "easeOut" }}
+              />
+            );
+          })}
+        </span>
+      )}
+    </button>
   );
 }

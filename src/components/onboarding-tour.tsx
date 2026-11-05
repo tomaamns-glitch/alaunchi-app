@@ -315,11 +315,12 @@ const STEPS: TourStep[] = [
   {
     chapter: CH_CHAT,
     target: "presence-button",
-    title: "Habla con tus amigos",
+    title: "Actividad",
     body: (
       <>
-        Este botón muestra qué amigos están conectados. {b("Pulsa el nombre de un amigo")} para abrir su chat. También
-        puedes hacerlo desde tu menú → Amigos.
+        Aquí tienes tus notificaciones (solicitudes de amistad, mensajes sin leer, instancias que fallan) y qué
+        están haciendo tus amigos. {b("Pulsa el nombre de un amigo")} para abrir su chat. También puedes hacerlo desde
+        tu menú → Amigos.
       </>
     ),
     enter: closeMenu,
@@ -328,7 +329,7 @@ const STEPS: TourStep[] = [
     chapter: CH_CHAT,
     target: "presence-button",
     title: "Tus chats se quedan en la barra",
-    body: "Cuando abres el chat de un amigo, su cabeza se queda fijada aquí abajo, al lado de este botón, para volver a él con un clic. El número rojo son mensajes sin leer.",
+    body: "Cuando abres el chat de un amigo, su cabeza se queda fijada en esta barra, a la izquierda junto a tu nombre, para volver a él con un clic. El número rojo son mensajes sin leer.",
     sample: <ChatBubblesSample />,
     enter: closeMenu,
   },

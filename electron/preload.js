@@ -29,6 +29,19 @@ contextBridge.exposeInMainWorld("electronAPI", {
   listInstanceFiles: (args) => ipcRenderer.invoke("mc:list-instance-files", args),
   deleteInstanceFile: (args) => ipcRenderer.invoke("mc:delete-instance-file", args),
   setModEnabled: (args) => ipcRenderer.invoke("mc:set-mod-enabled", args),
+  // Diagnóstico de crasheos (electron/crash-diagnosis.js)
+  diagnoseCrash: (args) => ipcRenderer.invoke("crash:diagnose", args),
+  applyCrashFix: (args) => ipcRenderer.invoke("crash:apply-fix", args),
+  onCrashDiagnoseProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("crash:diagnose-progress", handler);
+    return () => ipcRenderer.removeListener("crash:diagnose-progress", handler);
+  },
+  onInstanceCrashed: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("instance:crashed", handler);
+    return () => ipcRenderer.removeListener("instance:crashed", handler);
+  },
   updateInstanceFile: (args) => ipcRenderer.invoke("mc:update-instance-file", args),
   downloadInstanceFile: (args) => ipcRenderer.invoke("mc:download-instance-file", args),
   readInstanceFile: (args) => ipcRenderer.invoke("mc:read-instance-file", args),

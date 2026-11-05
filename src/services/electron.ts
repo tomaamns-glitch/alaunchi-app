@@ -48,6 +48,35 @@ export async function installSnapshot(
   return { totalFiles: manifest.files.length };
 }
 
+/**
+ * An `install-progress` / `launch-status` event: which phase is running (main's
+ * createPhaseProgress). `stage` "done" (install), "launched" and "error"
+ * (launch) close the operation. `progress` (0..100) is only sent by the older
+ * instance flows (mc:install-modpack, mc:sync-modpack…) without phases.
+ */
+export interface InstanceProgressEvent {
+  modpackId: string;
+  stage: string;
+  /** "Descargando Minecraft 1.20.1", "Instalando Forge"… */
+  label?: string;
+  /** 0..1 of the current phase, null when it has no real measure. */
+  phaseProgress?: number | null;
+  /** 0..1 of the whole operation; never goes backwards. */
+  overallProgress?: number;
+  progress?: number;
+  message?: string;
+}
+
+export function onInstallProgress(callback: (e: InstanceProgressEvent) => void): () => void {
+  if (!isElectron || !eAPI.onInstallProgress) return () => {};
+  return eAPI.onInstallProgress(callback);
+}
+
+export function onLaunchStatus(callback: (e: InstanceProgressEvent) => void): () => void {
+  if (!isElectron || !eAPI.onLaunchStatus) return () => {};
+  return eAPI.onLaunchStatus(callback);
+}
+
 export async function launchMinecraft(opts: LaunchOptions): Promise<void> {
   if (isElectron) {
     return eAPI.launchMinecraft(opts);
@@ -527,6 +556,82 @@ export function onPlaytimeSessionEnded(callback: (data: { modpackId: string; tot
   return eAPI.onPlaytimeSessionEnded(callback);
 }
 
+// ─── Diagnóstico de crasheos (electron/crash-diagnosis.js) ─────────────────
+
+/** alaunchi-meta.json#crashStats, sent with "instance:crashed" at the end of a session that crashed. */
+export interface InstanceCrashEvent {
+  modpackId: string;
+  name: string;
+  /** Crashes in a row (a clean exit resets it). */
+  consecutive: number;
+  /** When this run of crashes began — identifies the streak. */
+  streakStartedAt: number;
+  lastCrashAt: number;
+  lastReason: string;
+  lastDescription: string | null;
+  total: number;
+}
+
+export type CrashFix =
+  | { kind: "repair-files"; label: string }
+  | { kind: "disable-mods"; label: string; paths: string[] }
+  | { kind: "delete-cache-files"; label: string; paths: string[] }
+  | { kind: "reset-loader"; label: string; loaderType: string; paths?: string[] }
+  | { kind: "clear-fabric-cache"; label: string }
+  | { kind: "reset-config"; label: string; path: string }
+  | { kind: "set-ram"; label: string; mb: number }
+  | { kind: "reinstall-java"; label: string; major: number };
+
+export interface CrashFinding {
+  key: string;
+  /** critical = seguro que rompe el juego · likely / possible = sospecha · info */
+  severity: "critical" | "likely" | "possible" | "info";
+  category: "files" | "mods" | "memory" | "java" | "loader" | "config" | "graphics" | "other";
+  title: string;
+  detail: string;
+  fix: CrashFix | null;
+  /** A missing dependency: what to look for on Modrinth. */
+  searchQuery?: string;
+}
+
+export interface CrashDiagnosis {
+  findings: CrashFinding[];
+  lastCrashAt: number | null;
+  crashReport: string | null;
+  /** The crash report's "Description:" line. */
+  description: string | null;
+  /** A piece of the error, without tokens or the user's folder name. */
+  excerpt: string;
+  modsScanned: number;
+}
+
+export async function diagnoseCrash(opts: {
+  modpackId: string;
+  /** The instance comes from a creator's repo we can reinstall files from. */
+  canRepairFromSource: boolean;
+  mcVersion?: string;
+  loaderType?: string;
+}): Promise<CrashDiagnosis> {
+  if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
+  return eAPI.diagnoseCrash(opts);
+}
+
+/** Every fix except "repair-files", which reinstalls through the snapshot flow in the renderer. */
+export async function applyCrashFix(modpackId: string, fix: CrashFix): Promise<{ success: boolean; done?: number }> {
+  if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
+  return eAPI.applyCrashFix({ modpackId, fix });
+}
+
+export function onCrashDiagnoseProgress(callback: (p: { modpackId: string; label: string; progress: number }) => void): () => void {
+  if (!isElectron || !eAPI.onCrashDiagnoseProgress) return () => {};
+  return eAPI.onCrashDiagnoseProgress(callback);
+}
+
+export function onInstanceCrashed(callback: (e: InstanceCrashEvent) => void): () => void {
+  if (!isElectron || !eAPI.onInstanceCrashed) return () => {};
+  return eAPI.onInstanceCrashed(callback);
+}
+
 // ─── Importar desde CurseForge ─────────────────────────────────────────────
 
 export interface CurseForgeInstance {
@@ -594,6 +699,8 @@ export async function installModrinthModpack(args: {
   sha1: string;
   name: string;
   iconDataUrl?: string;
+  /** null = the project has no images; left out = couldn't find out (retried later). */
+  bannerDataUrl?: string | null;
   projectId: string;
   versionId: string;
   versionNumber: string;

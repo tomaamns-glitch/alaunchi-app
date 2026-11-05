@@ -28,6 +28,8 @@ import {
 } from "@/services/mod-library";
 import { InstanceProgressChip } from "@/components/instance-progress-chip";
 import { useInstanceProgress } from "@/hooks/use-instance-progress";
+import { ListScrollbar } from "@/components/list-scrollbar";
+import { openCrashDiagnosis, useCrashDiagnosis } from "@/lib/crash-diagnosis";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -61,6 +63,7 @@ import {
   Heart,
   MoreVertical,
   Settings2,
+  Stethoscope,
   FolderOpen,
   Send,
   Share2,
@@ -74,6 +77,9 @@ import {
   Trash2,
   Square,
   Link2,
+  CornerUpLeft,
+  Gamepad2,
+  Clock,
 } from "lucide-react";
 import { SnapshotEntry, fetchSnapshot, snapshotBaseUrl, type SnapshotManifest } from "@/services/github";
 import { OptionalContentView } from "@/components/optional-content-view";
@@ -103,7 +109,7 @@ import {
   type InstallableCategory,
 } from "@/services/modrinth";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -176,7 +182,7 @@ import { useAnimatedBackground } from "@/lib/animated-background";
 import { useTheme } from "@/lib/theme";
 import { extractDominantColor, type HSL } from "@/lib/dominant-color";
 import { loadRecentUpdates, recordRecentUpdate, type RecentUpdates } from "@/lib/recent-updates";
-import { formatBytes, formatPlaytime } from "@/lib/format";
+import { formatBytes, formatPlaytime, formatPlaytimeShort } from "@/lib/format";
 import { toast } from "sonner";
 import { SiModrinth } from "react-icons/si";
 
@@ -256,6 +262,11 @@ interface InstalledContentRowProps {
   onOpen: (path: string) => void;
   onUpdate: (category: Category, path: string) => void;
   onDelete: (category: Category, path: string) => void;
+  /** Ticked in the row's check (shown on hover, always while ticked). */
+  marked: boolean;
+  /** Something in the list is ticked: every row shows its check. */
+  selecting: boolean;
+  onMarkToggle: (path: string) => void;
   onInstallMissing: (deps: MissingDep[]) => Promise<void>;
 }
 
@@ -380,9 +391,13 @@ const InstalledContentRow = memo(function InstalledContentRow({
   onUpdate,
   onDelete,
   onInstallMissing,
+  marked,
+  selecting,
+  onMarkToggle,
 }: InstalledContentRowProps) {
   const [hovered, setHovered] = useState(false);
   const shared = sharedLayout || hovered;
+  const showCheck = hovered || marked || selecting;
   const CategoryIcon = CATEGORY_META[category].icon;
   const isDependency = !!dependentTitles?.length;
   return (
@@ -390,16 +405,32 @@ const InstalledContentRow = memo(function InstalledContentRow({
       data-flip-key={path}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
-      className={`flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full border-l-2 [content-visibility:auto] [contain-intrinsic-size:auto_66px] ${
-        isDependency ? "border-accent/50" : "border-transparent"
-      }`}
+      className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full [content-visibility:auto] [contain-intrinsic-size:auto_66px]"
     >
+      {/* The mark check: no width while hidden (the -mr cancels the row's gap),
+          so on hover the icon and name slide right to make room for it. */}
+      <div
+        className={`shrink-0 flex items-center overflow-hidden transition-[width,margin,opacity] duration-200 ease-out ${
+          showCheck ? "w-4 opacity-100" : "w-0 -mr-3 opacity-0"
+        }`}
+      >
+        <Checkbox
+          checked={marked}
+          onCheckedChange={() => onMarkToggle(path)}
+          tabIndex={showCheck ? 0 : -1}
+          aria-label={marked ? "Desmarcar" : "Marcar"}
+          // The instance's accent (like Jugar), not the theme's orange primary.
+          className="border-white/40 data-[state=checked]:bg-accent data-[state=checked]:border-accent data-[state=checked]:text-accent-foreground [&_svg]:h-3.5 [&_svg]:w-3.5"
+        />
+      </div>
       <div
         onClick={() => match && onOpen(path)}
         className={`flex items-center gap-3 min-w-0 flex-1 transition-opacity ${match ? "cursor-pointer" : ""} ${
           disabled || notInstalled ? "opacity-45 grayscale" : ""
         }`}
       >
+        {/* Dependency: a chain seal on the icon's corner (who needs it: the counter by the name). */}
+        <div className="relative shrink-0">
         {match?.iconUrl ? (
           shared ? (
             <motion.img
@@ -430,9 +461,18 @@ const InstalledContentRow = memo(function InstalledContentRow({
           </div>
         ) : (
           <div className="h-11 w-11 rounded shrink-0 bg-black/30 flex items-center justify-center">
-            <span className="text-xs font-bold text-muted-foreground">Ms</span>
+            <CategoryIcon className="h-5 w-5 text-muted-foreground" />
           </div>
         )}
+        {isDependency && (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute -right-1.5 -bottom-1.5 h-[18px] w-[18px] rounded-full bg-accent text-accent-foreground ring-2 ring-card flex items-center justify-center"
+          >
+            <Link2 className="h-2.5 w-2.5" strokeWidth={3} />
+          </span>
+        )}
+        </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 min-w-0">
             {match && shared ? (
@@ -453,12 +493,9 @@ const InstalledContentRow = memo(function InstalledContentRow({
             {isDependency && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent shrink-0 max-w-[14rem] cursor-default">
-                    <Link2 className="h-3 w-3 shrink-0" />
-                    <span className="truncate">
-                      Requerido por{" "}
-                      {dependentTitles!.length === 1 ? dependentTitles![0] : `${dependentTitles!.length} mods`}
-                    </span>
+                  <span className="inline-flex items-center gap-1 rounded-md border border-white/15 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground shrink-0 cursor-default">
+                    <CornerUpLeft className="h-3 w-3 shrink-0" />
+                    {dependentTitles!.length === 1 ? "1 mod" : `${dependentTitles!.length} mods`}
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-xs">
@@ -475,50 +512,74 @@ const InstalledContentRow = memo(function InstalledContentRow({
           <p className="text-muted-foreground text-[11px] font-mono truncate select-text">{fileName(path)}</p>
         </div>
       </div>
-      {!mandatory && !notInstalled && update && (
-        <button
-          onClick={() => onUpdate(category, path)}
-          disabled={busy}
-          title={`Actualizar a v${update.versionNumber}`}
-          className="h-7 w-7 flex items-center justify-center rounded-full text-accent hover:bg-accent/10 transition-colors shrink-0 disabled:opacity-50"
-        >
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-        </button>
-      )}
-      {/* Mods: the switch sits in a fixed column (always rendered, empty when
-          the row can't be toggled) right before the delete slot, so every
-          switch lines up whether or not the row has update/delete buttons. */}
-      {category === "mods" && (
-        <span className="shrink-0 w-11 flex items-center justify-center">
-          {canToggle && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="flex items-center">
-                  <Switch
-                    checked={!disabled}
-                    disabled={busy || !!toggleLockedReason}
-                    onCheckedChange={(on) => onToggle(path, on)}
-                    aria-label={disabled ? "Activar mod" : "Desactivar mod"}
-                  />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="max-w-xs">
-                {toggleLockedReason ?? (disabled ? "Activar mod" : "Desactivar mod (no se carga al jugar)")}
-              </TooltipContent>
-            </Tooltip>
+      {/* Update · on/off · delete as one capsule with lines between them (like
+          the ⋮ menu). Every slot is always there so the columns line up row
+          after row: ↻ is faint until there's a new version (then an accent
+          dot marks it), and on files the modpack requires ✕ becomes a lock. */}
+      {(category === "mods" || (!mandatory && !notInstalled)) && (
+        <div className="flex items-center shrink-0 rounded-lg border border-white/15 bg-white/[0.03] p-0.5">
+          <button
+            onClick={() => onUpdate(category, path)}
+            disabled={busy || mandatory || notInstalled || !update}
+            title={update && !mandatory && !notInstalled ? `Actualizar a v${update.versionNumber}` : "Sin actualizaciones"}
+            className="relative h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-white/10 hover:text-foreground transition-colors disabled:pointer-events-none"
+          >
+            {busy && update ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className={`h-4 w-4 ${update && !mandatory && !notInstalled ? "" : "opacity-30"}`} strokeWidth={2.75} />
+            )}
+            {update && !mandatory && !notInstalled && !busy && (
+              <span className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />
+            )}
+          </button>
+          <span className="mx-1 h-4 w-px bg-white/15" aria-hidden />
+          {/* Mods: the switch's slot is always there (empty when the row can't
+              be toggled), so every switch lines up. */}
+          {category === "mods" && (
+            <>
+              <span className="w-11 flex items-center justify-center">
+                {canToggle && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="flex items-center">
+                        <Switch
+                          checked={!disabled}
+                          disabled={busy || !!toggleLockedReason}
+                          onCheckedChange={(on) => onToggle(path, on)}
+                          aria-label={disabled ? "Activar mod" : "Desactivar mod"}
+                          // The instance's accent (like Jugar), not the theme's orange primary.
+                          className="data-[state=checked]:bg-accent data-[state=unchecked]:bg-white/20"
+                        />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs">
+                      {toggleLockedReason ?? (disabled ? "Activar mod" : "Desactivar mod (no se carga al jugar)")}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+              </span>
+              <span className="mx-1 h-4 w-px bg-white/15" aria-hidden />
+            </>
           )}
-        </span>
-      )}
-      {(mandatory || notInstalled) && category === "mods" && <span className="w-7 shrink-0" aria-hidden />}
-      {!mandatory && !notInstalled && (
-        <button
-          onClick={() => onDelete(category, path)}
-          disabled={busy}
-          title="Eliminar"
-          className="h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/20 hover:text-destructive transition-colors shrink-0 disabled:opacity-50"
-        >
-          <X className="h-4 w-4" />
-        </button>
+          {mandatory || notInstalled ? (
+            <span
+              title={mandatory ? "Obligatorio del modpack" : undefined}
+              className="h-7 w-7 flex items-center justify-center text-muted-foreground"
+            >
+              {mandatory && <Lock className="h-3.5 w-3.5 opacity-40" strokeWidth={2.75} />}
+            </span>
+          ) : (
+            <button
+              onClick={() => onDelete(category, path)}
+              disabled={busy}
+              title="Eliminar"
+              className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/20 hover:text-destructive transition-colors disabled:opacity-50"
+            >
+              <X className="h-4 w-4" strokeWidth={2.75} />
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -549,6 +610,9 @@ export default function ModpackDetail() {
   return <ModpackManager />;
 }
 
+/** Width (px) the Play group grows to, leftwards, while installing/opening. */
+const PLAY_PROGRESS_WIDTH = 360;
+
 /** Elements of the embedding page that receive the manager's Play group and
  *  "Contenido adicional" card (see playGroup/extrasCard). */
 export interface ManagerHeaderSlots {
@@ -575,20 +639,10 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   const { busy: playBusy, running: playRunning, runState: playRunState, toggle: playToggle } = useLaunchModpack(pack);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const playProgress = useInstanceProgress(pack?.id);
-  // Width of the Play button while idle — when it turns into the (wider) progress
-  // chip, the header card widens by the difference, so the chip grows to the
-  // right instead of pushing everything left (the card's right edge would
-  // otherwise stay put). Only possible while the page has room on the right.
-  const [playButtonW, setPlayButtonW] = useState(0);
-  // Callback ref + ResizeObserver: measured only when the button's size changes
-  // (label JUGAR ↔ ACTUALIZAR Y JUGAR), never on every render of this page. It
-  // unmounts while the chip shows, so the last idle width is what's kept.
-  const playButtonRef = useCallback((node: HTMLButtonElement | null) => {
-    if (!node) return;
-    const ro = new ResizeObserver(() => setPlayButtonW(node.offsetWidth));
-    ro.observe(node);
-    return () => ro.disconnect();
-  }, []);
+  // While installing/opening, the Play group widens to the LEFT (its right edge
+  // stays put, the pack info gives up the room) so the whole phase label reads
+  // well. (Embedded, the Play group lives in another page's header.)
+  const progressWide = playProgress.active && !embedded;
   useDynamicAccent(pack?.bannerUrl || pack?.imageUrl);
 
   // Animated background (same SwellLight as the Hub's "Mis instancias"), tinted
@@ -635,6 +689,13 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   const [savedGroupChoice, setSavedGroupChoice] = useState<OptionalGroupChoice | null>(null);
   // Bumped to re-run the content load (after applying a new group choice).
   const [contentReloadKey, setContentReloadKey] = useState(0);
+  // "Actualizar todo" running for the current category.
+  const [updatingAll, setUpdatingAll] = useState(false);
+  // A crash diagnosis fix disabled mods / reset a config: show the change.
+  const crashFixesApplied = useCrashDiagnosis((s) => s.fixesApplied);
+  useEffect(() => {
+    if (crashFixesApplied) setContentReloadKey((k) => k + 1);
+  }, [crashFixesApplied]);
   useEffect(() => setExtrasOpen(false), [id]);
   /** Where a listed file actually is on disk. */
   const diskPath = (path: string) => (disabledMods.has(path) ? `${path}${DISABLED_SUFFIX}` : path);
@@ -653,6 +714,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   const [modRequires, setModRequires] = useState<Map<string, string[]>>(new Map());
   // A pending delete of a mod other installed mods still require.
   const [depDeleteConfirm, setDepDeleteConfirm] = useState<{ c: Category; path: string; dependents: string[] } | null>(null);
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState<{ c: Category; paths: string[]; neededBy: string[] } | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
   // Extra sort keys of the installed list, applied before the name order:
   // dependencies to the top/bottom (mods only), and pending updates first with
@@ -683,7 +745,6 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   // (sticks right under that). Heights are measured live — the banner is
   // responsive and the header card's text can wrap to more than one line.
   const [headerH, setHeaderH] = useState(0);
-  const [tabsH, setTabsH] = useState(0);
   const headerGroupRef = useCallback((node: HTMLDivElement | null) => {
     if (!node) return;
     const update = () => setHeaderH(node.getBoundingClientRect().height);
@@ -692,32 +753,67 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
     ro.observe(node);
     return () => ro.disconnect();
   }, []);
+  // The tabs band's height is NOT kept in state: it changes on every frame while its
+  // rows fold, and a state update per frame re-rendered this whole page (choppy
+  // animation). Nothing needs it since the sort row moved inside the band.
   const tabsElRef = useRef<HTMLDivElement | null>(null);
   const tabsRowRef = useCallback((node: HTMLDivElement | null) => {
     tabsElRef.current = node;
-    if (!node) return;
-    const update = () => setTabsH(node.getBoundingClientRect().height);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(node);
-    return () => ro.disconnect();
   }, []);
   const sortRowElRef = useRef<HTMLDivElement | null>(null);
 
   // Whether the tabs row / sort row are currently pinned flush against the layer
   // above them — used to swap their touching corners from rounded to square so two
   // independently-rounded boxes meeting edge-to-edge don't form a pinched "V" seam.
+  // The tabs band sticks this far below the header (the content card's 1px border
+  // + its p-4), and while stuck draws the card's top edge in that space: the card
+  // then looks pinned under the header instead of sliding beneath it. Only
+  // embedded: on the normal page the card itself is fixed and scrolls inside
+  // (fixedCard), so the band just sticks to the card's top.
+  const CARD_INSET = 17;
+  const fixedCard = !embedded;
+  const tabsStickyTop = fixedCard ? 0 : headerH + CARD_INSET;
   const [tabsStuck, setTabsStuck] = useState(false);
-  const [sortRowStuck, setSortRowStuck] = useState(false);
+  // fixedCard: scrolled down inside the card → Contenido/Capturas fold away and the
+  // tabs band gets shorter; back at the very top they come back.
+  const [contentScrolled, setContentScrolled] = useState(false);
+  // …and 2 s after that, the sort/filter row folds away too (back at the top it returns).
+  const [sortRowHidden, setSortRowHidden] = useState(false);
+  // The cursor over the band or just under it (24px) brings the folded row back.
+  const [pointerNearBand, setPointerNearBand] = useState(false);
   useEffect(() => {
-    const check = () => {
-      // Embedded, sticky positions are relative to the parent scroll container.
-      const rootTop = embedded ? outerRef.current?.parentElement?.getBoundingClientRect().top ?? 0 : 0;
-      if (tabsElRef.current) {
-        setTabsStuck(tabsElRef.current.getBoundingClientRect().top - rootTop <= headerH + 0.5);
+    if (!contentScrolled) {
+      setSortRowHidden(false);
+      return;
+    }
+    const t = setTimeout(() => setSortRowHidden(true), 2000);
+    return () => clearTimeout(t);
+  }, [contentScrolled]);
+  // The card that scrolls (fixedCard) — for the floating "back to top" button.
+  const cardScrollRef = useRef<HTMLDivElement>(null);
+  /** Re-sorting while scrolled down: back to the list's first rows, but to 1px, not 0 —
+   *  at the very top Contenido/Capturas would come back (contentScrolled). */
+  const scrollListToFirst = () => {
+    if (fixedCard && contentScrolled) cardScrollRef.current?.scrollTo({ top: 1, behavior: "smooth" });
+  };
+  useEffect(() => {
+    // fixedCard never looks at tabsStuck (the band is always on there): skip the work.
+    if (fixedCard) return;
+    // Sticky positions are relative to the scroll container's top, which isn't
+    // the window's: the titlebar sits above it (and embedded, the page's own
+    // header). Measuring from 0 never counted as stuck once these rows lost
+    // their always-on background.
+    const scrollParentOf = (el: HTMLElement | null) => {
+      for (let n = el?.parentElement; n; n = n.parentElement) {
+        const oy = getComputedStyle(n).overflowY;
+        if (oy === "auto" || oy === "scroll") return n;
       }
-      if (sortRowElRef.current) {
-        setSortRowStuck(sortRowElRef.current.getBoundingClientRect().top - rootTop <= headerH + tabsH + 0.5);
+      return null;
+    };
+    const check = () => {
+      const rootTop = scrollParentOf(tabsElRef.current)?.getBoundingClientRect().top ?? 0;
+      if (tabsElRef.current) {
+        setTabsStuck(tabsElRef.current.getBoundingClientRect().top - rootTop <= tabsStickyTop + 0.5);
       }
     };
     check();
@@ -727,7 +823,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
       window.removeEventListener("scroll", check, { capture: true });
       window.removeEventListener("resize", check);
     };
-  }, [headerH, tabsH, embedded]);
+  }, [tabsStickyTop, fixedCard]);
 
   // Mod detail view (opened by clicking a row's icon/name).
   const [selectedModPath, setSelectedModPath] = useState<string | null>(null);
@@ -735,6 +831,31 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   // Row the mod panel was last opened from — keeps its shared-layout ids so
   // closing the panel animates back into it (see InstalledContentRow).
   const [lastOpenedPath, setLastOpenedPath] = useState<string | null>(null);
+  // fixedCard: the list and a mod's page (or Contenido adicional) share the card's
+  // scroll. Leaving the list keeps where it was; the other view starts at its top
+  // and coming back puts the list where it was (applied once the sweep swaps the
+  // content — AnimatePresence's onExitComplete below).
+  const inCardList = !selectedModPath && !extrasOpen;
+  const inCardListRef = useRef(inCardList);
+  inCardListRef.current = inCardList;
+  const listScrollTopRef = useRef(0);
+  const wasInCardListRef = useRef(true);
+  useEffect(() => {
+    if (wasInCardListRef.current && !inCardList) listScrollTopRef.current = cardScrollRef.current?.scrollTop ?? 0;
+    wasInCardListRef.current = inCardList;
+  }, [inCardList]);
+  // One mod's page to another (a dependency link): same view, so no swap — reset here.
+  const prevSelectedModRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevSelectedModRef.current && selectedModPath && prevSelectedModRef.current !== selectedModPath) {
+      cardScrollRef.current?.scrollTo({ top: 0 });
+    }
+    prevSelectedModRef.current = selectedModPath;
+  }, [selectedModPath]);
+  const restoreCardScroll = () => {
+    const el = cardScrollRef.current;
+    if (el) el.scrollTop = inCardListRef.current ? listScrollTopRef.current : 0;
+  };
   const [modDetailTab, setModDetailTab] = useState<ModDetailTab>("description");
   const [modDetailLoading, setModDetailLoading] = useState(false);
   const [projectDetail, setProjectDetail] = useState<ModrinthProjectDetail | null>(null);
@@ -1346,9 +1467,11 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
     c: Category,
     path: string,
     version: ModrinthUpdate,
-    matchInfo: { title: string; iconUrl: string | null; projectId: string }
-  ) => {
-    if (!pack) return;
+    matchInfo: { title: string; iconUrl: string | null; projectId: string },
+    /** "Actualizar todo": no toast per file (one at the end). */
+    quiet = false
+  ): Promise<boolean> => {
+    if (!pack) return false;
     const isFresh = path.startsWith("search:");
     setBusyPaths((s) => new Set(s).add(path));
     try {
@@ -1402,12 +1525,14 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
       });
       if (selectedModPath === path) setSelectedModPath(newPath);
       if (!isFresh) setRecentUpdates(recordRecentUpdate(pack.id, matchInfo.projectId));
-      toast.success(isFresh ? `${matchInfo.title} instalado.` : `Cambiado a v${version.versionNumber}.`);
+      if (!quiet) toast.success(isFresh ? `${matchInfo.title} instalado.` : `Cambiado a v${version.versionNumber}.`);
       // Fire-and-forget — the mod just installed above updates its own UI
       // immediately; any dependencies it needs install in the background.
       if (c === "mods") void autoInstallDependencies(version, matchInfo.projectId);
+      return true;
     } catch (e: any) {
       toast.error(e?.message || "Error al instalar.");
+      return false;
     } finally {
       setBusyPaths((s) => {
         const next = new Set(s);
@@ -1663,6 +1788,19 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   const onRowUpdate = useCallback((c: Category, path: string) => rowActionsRef.current.update(c, path), []);
   const onRowDelete = useCallback((c: Category, path: string) => rowActionsRef.current.remove(c, path), []);
   const onRowInstallMissing = useCallback((deps: MissingDep[]) => rowActionsRef.current.installMissing(deps), []);
+  // Rows ticked in the content list (by path; paths never repeat across
+  // categories). Cleared on switching category: the marks belong to one list.
+  const [markedPaths, setMarkedPaths] = useState<Set<string>>(() => new Set());
+  const onRowMarkToggle = useCallback((path: string) => {
+    setMarkedPaths((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(path)) next.add(path);
+      return next;
+    });
+  }, []);
+  useEffect(() => {
+    setMarkedPaths((prev) => (prev.size ? new Set() : prev));
+  }, [activeCategory]);
 
   const dragCounterRef = useRef(0);
 
@@ -1894,6 +2032,181 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
     },
     remove: (c, path) => void handleDelete(c, path),
     installMissing: installDependencies,
+  };
+
+  /** Every pending update of the category, three at a time, one toast at the end. */
+  const handleUpdateAll = async (c: Category) => {
+    const pending = rowsFor(c)
+      .filter(hasPendingUpdate)
+      .map((r) => ({ path: r.path, update: updates.get(r.path), match: modrinthMatches.get(r.path) }))
+      .filter((x) => x.update && x.match);
+    if (pending.length === 0) return;
+    setUpdatingAll(true);
+    let ok = 0;
+    let next = 0;
+    const worker = async () => {
+      while (next < pending.length) {
+        const item = pending[next++];
+        if (await handleInstallVersion(c, item.path, item.update!, item.match!, true)) ok++;
+      }
+    };
+    try {
+      await Promise.all([worker(), worker(), worker()]);
+    } finally {
+      setUpdatingAll(false);
+    }
+    if (ok > 0) toast.success(ok === 1 ? "1 archivo actualizado." : `${ok} archivos actualizados.`);
+  };
+
+  /** Deletes the ticked rows at once (one toast); asked first in bulkDeleteConfirm. */
+  const handleBulkDelete = async (c: Category, paths: string[]) => {
+    setBusyPaths((s) => new Set([...s, ...paths]));
+    const done: string[] = [];
+    let failed = 0;
+    for (const p of paths) {
+      try {
+        await deleteInstanceFile(pack.id, diskPath(p));
+        forgetDisabled(p);
+        done.push(p);
+      } catch {
+        failed++;
+      }
+    }
+    const gone = new Set(done);
+    setOptionalContent((prev) => ({ ...prev, [c]: prev[c].filter((f) => !gone.has(f.path)) }));
+    setContent((prev) => (prev ? { ...prev, [c]: prev[c].filter((f) => !gone.has(f.path)) } : prev));
+    if (selectedModPath && gone.has(selectedModPath)) closeMod();
+    setBusyPaths((s) => {
+      const next = new Set(s);
+      for (const p of paths) next.delete(p);
+      return next;
+    });
+    setMarkedPaths((prev) => new Set([...prev].filter((p) => !gone.has(p))));
+    if (done.length > 0) toast.success(done.length === 1 ? `${fileName(done[0])} eliminado.` : `${done.length} archivos eliminados.`);
+    if (failed > 0) toast.error(failed === 1 ? "No se pudo eliminar 1 archivo." : `No se pudieron eliminar ${failed} archivos.`);
+  };
+
+  /** Switches the ticked mods on/off, dragging dependents/dependencies along
+   *  like the row's own switch (see handleToggleMod). */
+  const handleBulkToggle = async (paths: string[], enabled: boolean) => {
+    const rows = rowsFor("mods");
+    const rowOf = (p: string) => rows.find((r) => r.path === p);
+    const switchable = (p: string) => {
+      const r = rowOf(p);
+      return !!r && !r.mandatory && !r.notInstalled && /\.jar$/i.test(p);
+    };
+    let targets = paths.filter((p) => switchable(p) && rowOf(p)!.disabled === enabled);
+    const locked = enabled ? [] : targets.filter((p) => !!toggleLockedReason(rowOf(p)!));
+    targets = targets.filter((p) => !locked.includes(p));
+    const extra = [
+      ...new Set(targets.flatMap((p) => (enabled ? disabledDependenciesChain(p) : enabledDependentsChain(p)))),
+    ].filter((p) => switchable(p) && !targets.includes(p));
+    const all = [...targets, ...extra];
+    if (all.length > 0) {
+      try {
+        await setModsEnabled(all, enabled);
+      } catch (e: any) {
+        toast.error(e?.message || "No se pudieron cambiar los mods.");
+        return;
+      }
+      const head = `${targets.length === 1 ? titleFor(targets[0]) : `${targets.length} mods`} ${
+        enabled ? (targets.length === 1 ? "activado" : "activados") : targets.length === 1 ? "desactivado" : "desactivados"
+      }`;
+      const tail = extra.length
+        ? enabled
+          ? `, junto con lo que necesitan: ${extra.map(titleFor).join(", ")}.`
+          : `. También se desactivó lo que depende de ellos: ${extra.map(titleFor).join(", ")}.`
+        : ".";
+      toast.info(head + tail, {
+        duration: 8000,
+        action: {
+          label: "Deshacer",
+          onClick: () => void setModsEnabled(all, !enabled).catch(() => toast.error("No se pudo deshacer.")),
+        },
+      });
+    }
+    if (locked.length > 0) {
+      toast.error(
+        `${locked.map(titleFor).join(", ")}: no se ${locked.length === 1 ? "puede" : "pueden"} desactivar, lo necesita contenido del modpack.`
+      );
+    }
+  };
+
+  /** Floating bar under the list while something in it is ticked: mark all ·
+   *  activar/desactivar (mods) · eliminar. Only rows still in the list count. */
+  const renderMarkedBar = (c: Category, rows: ContentRow[]) => {
+    const marked = rows.filter((r) => markedPaths.has(r.path));
+    const deletable = marked.filter((r) => !r.mandatory && !r.notInstalled).map((r) => r.path);
+    const toggleable =
+      c === "mods" && !contentLocked
+        ? marked.filter((r) => !r.mandatory && !r.notInstalled && /\.jar$/i.test(r.path))
+        : [];
+    // Off if any ticked mod is on; on only when all of them are off.
+    const enableAll = toggleable.length > 0 && toggleable.every((r) => r.disabled);
+    const busy = marked.some((r) => busyPaths.has(r.path));
+    const allMarked = rows.length > 0 && marked.length === rows.length;
+    return (
+      <AnimatePresence>
+        {marked.length > 0 && (
+          <motion.div
+            key="marked-bar"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 12 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            className="sticky bottom-3 z-20 mx-auto mb-3 w-fit flex items-center gap-1 rounded-lg bg-gray-500/15 backdrop-blur-xl p-1 pl-3 text-xs shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
+          >
+            <Checkbox
+              checked={allMarked ? true : "indeterminate"}
+              onCheckedChange={() => setMarkedPaths(allMarked ? new Set() : new Set(rows.map((r) => r.path)))}
+              aria-label={allMarked ? "Desmarcar todo" : "Marcar todo"}
+              title={allMarked ? "Desmarcar todo" : "Marcar todo"}
+              className="border-white/40 data-[state=checked]:bg-accent data-[state=checked]:border-accent data-[state=checked]:text-accent-foreground data-[state=indeterminate]:bg-accent data-[state=indeterminate]:border-accent data-[state=indeterminate]:text-accent-foreground [&_svg]:h-3.5 [&_svg]:w-3.5"
+            />
+            <span className="ml-1 mr-2 text-gray-200 whitespace-nowrap">
+              {marked.length === 1 ? "1 marcado" : `${marked.length} marcados`}
+            </span>
+            {toggleable.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                onClick={() => void handleBulkToggle(toggleable.map((r) => r.path), enableAll)}
+                className="h-7 px-2.5 text-xs hover:bg-white/10"
+              >
+                {enableAll ? "Activar" : "Desactivar"}
+              </Button>
+            )}
+            {deletable.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                onClick={() => {
+                  const set = new Set(deletable);
+                  const neededBy =
+                    c === "mods" ? [...new Set(deletable.flatMap((p) => dependentsOf(p)).filter((d) => !set.has(d)))] : [];
+                  setBulkDeleteConfirm({ c, paths: deletable, neededBy });
+                }}
+                className="h-7 px-2.5 text-xs text-destructive hover:bg-destructive/15 hover:text-destructive"
+              >
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                Eliminar{deletable.length !== marked.length ? ` (${deletable.length})` : ""}
+              </Button>
+            )}
+            <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden />
+            <button
+              type="button"
+              onClick={() => setMarkedPaths(new Set())}
+              title="Quitar marcas"
+              className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-white/10 hover:text-foreground transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    );
   };
 
   // Bloqueo de contenido (Admin → Ajustes): the creator decided this instance's
@@ -2146,27 +2459,79 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   // ⋮ + Play (+ playtime) and the "Contenido adicional" card. Inline in the
   // header; embedded (the online instance page) they're portaled into that
   // page's own header card instead, so they're shown on every view.
+  // Downloaded instances: the logo gets a column of its own on the left, so the
+  // name starts at the same edge as the content card below it.
+  const logoColumn = !!pack.isDownloaded && !embedded;
+  const plainHeader = logoColumn && !selectedModPath && !searchMode;
+  const packLogo = (
+    <div className={`${logoColumn ? "h-28 w-28 min-[1056px]:-ml-4" : "h-24 w-24"} rounded-md border-2 border-background bg-black/70 overflow-hidden shrink-0 shadow-2xl`}>
+      {pack.imageUrl ? (
+        <img src={pack.imageUrl} alt="" className="w-full h-full object-cover" />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center text-4xl font-black text-accent/60">
+          {pack.name.charAt(0)}
+        </div>
+      )}
+    </div>
+  );
+
   const playGroup = pack.installed ? (
     // items-start, not center: the Play column has the playtime under
     // the button, and centering against the whole column left the ⋮
     // lower than the button itself. Both are h-9, so tops line up.
-    <div className={`flex items-start shrink-0 ${embedded ? "gap-2" : "gap-1.5"}`}>
+    <motion.div
+      className={`flex items-start shrink-0 max-w-full ${embedded ? "gap-2" : "gap-1.5"}`}
+      initial={false}
+      animate={{ width: progressWide ? PLAY_PROGRESS_WIDTH : "auto" }}
+      transition={{ duration: 0.3, ease: "easeOut" }}
+    >
+      {/* While installing/opening, the ⋮ goes away and the progress chip takes
+          its place too: one piece, square on the left, round on the right. */}
+      {!playProgress.active && (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
             size="icon"
-            className={`shrink-0 rounded-md border-white/15 bg-white/5 text-gray-300 hover:bg-white/10 hover:border-white/25 hover:text-white data-[state=open]:bg-white/10 data-[state=open]:border-white/25 data-[state=open]:text-white ${embedded ? "h-11 w-11" : ""}`}
+            // Glass: translucent fill and a blur, no lighter border frame (like the cards),
+            // for whatever is behind (the header card itself, or the online page's banner).
+            className={`shrink-0 rounded-md border border-transparent bg-white/[0.07] backdrop-blur-md text-gray-200 hover:bg-white/[0.14] hover:text-white data-[state=open]:bg-white/[0.14] data-[state=open]:text-white ${embedded ? "h-11 w-11" : ""}`}
             aria-label="Más opciones"
           >
             <MoreVertical className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        {/* Glass like the header card (gray-500 at 15% + blur; no lighter border frame), and a translucent
+            highlight instead of the solid accent (Eliminar keeps its red). Highlights and lines
+            run edge to edge (no inner padding/rounding), so every layer is the same width. */}
+        <DropdownMenuContent
+          align="end"
+          className="p-0 bg-gray-500/15 backdrop-blur-xl border-transparent shadow-[0_8px_24px_rgba(0,0,0,0.35)] [&_[role=menuitem]]:rounded-none [&_[role=menuitem]]:px-3 [&_[role=menuitem]]:py-2 [&_[role=separator]]:m-0 [&_[role=menuitem]]:focus:bg-white/10 [&_[role=menuitem]]:focus:text-foreground [&_[role=menuitem].text-destructive]:focus:bg-destructive/15 [&_[role=menuitem].text-destructive]:focus:text-destructive"
+        >
           <DropdownMenuItem onSelect={() => setTimeout(() => setSettingsOpen(true), 0)}>
             <Settings2 className="mr-2 h-4 w-4" />
             Configuración
           </DropdownMenuItem>
+          {/* A line between every option. */}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            // Next tick, like Configuración: the menu has to finish closing before a dialog opens.
+            onSelect={() =>
+              setTimeout(() =>
+                openCrashDiagnosis({
+                  modpackId: pack.id,
+                  name: pack.name,
+                  mcVersion: pack.minecraftVersion,
+                  loaderType: pack.loaderType,
+                }),
+                0
+              )
+            }
+          >
+            <Stethoscope className="mr-2 h-4 w-4" />
+            Diagnosticar crasheos
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
           <DropdownMenuItem
             onClick={async () => {
               try {
@@ -2180,32 +2545,34 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
             Abrir carpeta
           </DropdownMenuItem>
           {pack.source === "custom" && (
-            <DropdownMenuItem onSelect={() => setTimeout(() => setSharingInstance(true), 0)}>
-              <Share2 className="mr-2 h-4 w-4" />
-              Compartir
-            </DropdownMenuItem>
-          )}
-          {pack.source === "custom" && (
-            <DropdownMenuItem onSelect={() => setTimeout(() => setDuplicatingInstance(true), 0)}>
-              <Copy className="mr-2 h-4 w-4" />
-              Duplicar
-            </DropdownMenuItem>
-          )}
-          {pack.source === "custom" && (
-            <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
-              onClick={() => {
-                setKeepInstanceFiles(false);
-                setDeleteConfirmOpen(true);
-              }}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Eliminar instancia
-            </DropdownMenuItem>
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setTimeout(() => setSharingInstance(true), 0)}>
+                <Share2 className="mr-2 h-4 w-4" />
+                Compartir
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setTimeout(() => setDuplicatingInstance(true), 0)}>
+                <Copy className="mr-2 h-4 w-4" />
+                Duplicar
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onClick={() => {
+                  setKeepInstanceFiles(false);
+                  setDeleteConfirmOpen(true);
+                }}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Eliminar instancia
+              </DropdownMenuItem>
+            </>
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      <div className="flex flex-col items-center gap-1 shrink-0">
+      )}
+      <div className={`flex flex-col items-center gap-1 ${progressWide ? "flex-1 min-w-0" : "shrink-0"}`}>
         {playProgress.active ? (
           <InstanceProgressChip
             entry={playProgress.entry}
@@ -2213,12 +2580,15 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
             status={playProgress.status}
             installed={!!pack.installed}
             online={pack.source !== "custom"}
-            size={36}
-            className="w-60"
+            size={embedded ? 44 : 36}
+            // Embedded: 15rem + the ⋮ button and the gap it leaves free. Inline:
+            // the whole Play group, widened to PLAY_PROGRESS_WIDTH.
+            className={embedded ? "w-[calc(15rem+3.25rem)]" : "w-full"}
+            // Left corners: the same curve as the Play/Cerrar button (rounded-md).
+            style={{ borderRadius: `var(--radius-md) ${embedded ? 12 : 10}px ${embedded ? 12 : 10}px var(--radius-md)` }}
           />
         ) : (
         <Button
-          ref={playButtonRef}
           onClick={playToggle}
           disabled={playBusy}
           className={`shrink-0 border-transparent font-bold gap-1.5 ${embedded ? "h-11 px-6 text-base" : ""} ${
@@ -2243,7 +2613,8 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                 : "JUGAR"}
         </Button>
         )}
-        {totalPlaytimeMs > 0 && (
+        {/* On the normal page it's a badge in the header (clock); embedded there's no such header. */}
+        {embedded && totalPlaytimeMs > 0 && (
           <span className="text-[10px] text-muted-foreground whitespace-nowrap">
             {formatPlaytime(totalPlaytimeMs)}
           </span>
@@ -2304,11 +2675,11 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </motion.div>
   ) : null;
   const extrasCard =
     hasExtras && extraGroups ? (
-    <div className={`${embedded ? "flex h-full w-80" : "hidden md:flex flex-1"} min-w-0 items-center gap-3 bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4`}>
+    <div className={`${embedded ? "flex h-full w-80" : "hidden md:flex flex-1"} min-w-0 items-center gap-3 bg-gray-500/10 backdrop-blur-md border border-transparent rounded-md p-4`}>
       <div className="h-11 w-11 shrink-0 rounded-md bg-accent/15 text-accent flex items-center justify-center">
         <Layers className="h-5 w-5" />
       </div>
@@ -2344,7 +2715,9 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   return (
     <div
       ref={outerRef}
-      className={embedded ? "text-foreground relative" : "min-h-full bg-background text-foreground relative"}
+      // Normal page: it doesn't scroll as a whole — the header and the content card stay
+      // put and only the card's inside scrolls. Embedded it flows in the host page's scroll.
+      className={embedded ? "text-foreground relative" : "h-full flex flex-col overflow-hidden bg-background text-foreground relative"}
       onDragEnter={handlePageDragEnter}
       onDragOver={handlePageDragOver}
       onDragLeave={handlePageDragLeave}
@@ -2352,10 +2725,9 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
     >
       {/* Sticky + negative margin: stays pinned to the viewport while the page
           scrolls, without taking any space in the flow. Under everything below
-          (the content wrapper is z-10, the header group z-30 — opaque when there
-          is a banner, so the banner is untouched). */}
+          (the content wrapper is z-10, the header group z-30; a banner fades into it). */}
       {!embedded && (
-        <div className="pointer-events-none sticky top-0 z-0 h-screen -mb-[100vh] overflow-hidden" aria-hidden>
+        <div className="pointer-events-none sticky top-0 z-0 h-screen -mb-[100vh] shrink-0 overflow-hidden" aria-hidden>
           {swellLayer}
         </div>
       )}
@@ -2367,32 +2739,43 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
           </div>
         </div>
       )}
-      {/* With a banner the header group is opaque. Without one there's no banner
-          box at all and the group is just frosted glass (no fill), so the page's
-          animated background runs on uninterrupted behind the header; the blur
-          only matters once the list scrolls under the sticky header. */}
+      {/* With a banner the header group has no fill or blur and the image fades out
+          through a mask, so banner and page share the one animated background with
+          no seam (nothing scrolls under it here: the list scrolls inside its card).
+          Without one there's no banner box at all and the group is just frosted
+          glass (no fill); the blur only matters once the list scrolls under the
+          sticky header. */}
       <div
         ref={headerGroupRef}
-        className={`sticky top-0 z-30 ${pack.bannerUrl && !embedded ? "bg-background" : "backdrop-blur-xl"}`}
+        className={`sticky top-0 z-30 shrink-0 ${pack.bannerUrl && !embedded ? "" : "backdrop-blur-xl"}`}
       >
         {pack.bannerUrl && !embedded && (
-          <div className="relative h-32 md:h-40 overflow-hidden bg-black/50">
-            <img src={pack.bannerUrl} alt={pack.name} className="w-full h-full object-cover" />
-            <div className="absolute inset-0 bg-[linear-gradient(to_top,hsl(var(--background)/0.9)_0%,hsl(var(--background)/0.5)_18%,hsl(var(--background)/0.15)_40%,transparent_65%)]" />
+          <div className="relative h-32 md:h-40 overflow-hidden">
+            <img
+              src={pack.bannerUrl}
+              alt={pack.name}
+              className="w-full h-full object-cover"
+              style={{
+                maskImage: "linear-gradient(to bottom, black 35%, transparent 100%)",
+                WebkitMaskImage: "linear-gradient(to bottom, black 35%, transparent 100%)",
+              }}
+            />
           </div>
         )}
 
         <div className={embedded ? (!selectedModPath && !searchMode ? "hidden" : "w-full") : "max-w-5xl mx-auto w-full"}>
         <div className={`px-4 pb-2 relative z-10 flex items-stretch gap-3 ${pack.bannerUrl && !embedded ? "-mt-16" : "pt-4"}`}>
+          {logoColumn && packLogo}
           <div
-            className={`w-full flex items-center justify-between gap-4 mr-auto bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4 transition-[max-width] duration-300 ease-out ${
-              !selectedModPath && !searchMode ? "" : "max-w-full"
-            }`}
+            className={`w-full min-w-0 flex items-center justify-between gap-4 mr-auto transition-[max-width] duration-300 ease-out ${
+              plainHeader ? "" : "bg-gray-500/10 backdrop-blur-md border border-transparent rounded-md p-4"
+            } ${!selectedModPath && !searchMode ? "" : "max-w-full"}`}
             style={
               !selectedModPath && !searchMode
                 ? {
-                    // 42rem = the old max-w-2xl; the chip is w-60 (240px).
-                    maxWidth: playProgress.active && playButtonW ? `calc(42rem + ${Math.max(0, 240 - playButtonW)}px)` : "42rem",
+                    // As wide as the content card below. 42rem (the old max-w-2xl) only
+                    // when the "Contenido adicional" card needs the room on its right.
+                    maxWidth: !extrasCard ? "100%" : "42rem",
                   }
                 : undefined
             }
@@ -2508,30 +2891,37 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                 >
-                  <div className="h-20 w-20 rounded-md border-2 border-background bg-black/70 overflow-hidden shrink-0 shadow-2xl">
-                    {pack.imageUrl ? (
-                      <img src={pack.imageUrl} alt="" className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-3xl font-black text-accent/60">
-                        {pack.name.charAt(0)}
-                      </div>
-                    )}
-                  </div>
-                  <div className="min-w-0 space-y-2">
-                    <div className="flex items-baseline gap-2 min-w-0">
-                      <h2 className="text-3xl font-bold text-white truncate">{pack.name}</h2>
+                  {!logoColumn && packLogo}
+                  {/* As tall as the icon: the name at its top with a divider line right under it,
+                      the badges at its bottom. */}
+                  <div className={`min-w-0 ${plainHeader ? "min-h-28" : "min-h-24"} self-stretch flex flex-col gap-2`}>
+                    <div className="flex items-baseline gap-2 min-w-0 leading-none">
+                      <h2 className={`text-4xl font-bold text-white truncate leading-none ${plainHeader ? "drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]" : ""}`}>{pack.name}</h2>
                       {pack.source !== "custom" && (
                         <span className="text-sm font-normal text-muted-foreground shrink-0">{pack.version}v</span>
                       )}
                     </div>
+                    <div className="h-px w-full bg-white/10" aria-hidden />
                     {!!pack.description && <p className="text-sm text-gray-300 max-w-3xl">{pack.description}</p>}
-                    <div className="flex flex-wrap gap-2">
-                      <Badge variant="secondary">{pack.minecraftVersion}</Badge>
-                      <Badge variant="secondary" className="uppercase">{pack.loaderType}</Badge>
-                      {pack.source === "custom" && pack.loaderVersion && (
-                        <Badge variant="secondary">{pack.loaderVersion}</Badge>
-                      )}
+                    <div className="mt-auto flex flex-wrap gap-2">
+                      <Badge variant="secondary" className="gap-1.5" title="Versión de Minecraft">
+                        <Gamepad2 className="h-3.5 w-3.5" />
+                        {pack.minecraftVersion}
+                      </Badge>
+                      {/* The loader and its version in one badge. */}
+                      <Badge variant="secondary" className="gap-1.5" title="Modloader">
+                        <span className="uppercase">{pack.loaderType}</span>
+                        {pack.source === "custom" && pack.loaderVersion && (
+                          <span className="font-normal opacity-75">{pack.loaderVersion}</span>
+                        )}
+                      </Badge>
                       {pack.totalSizeMb > 0 && <Badge variant="outline">{pack.totalSizeMb} MB</Badge>}
+                      {totalPlaytimeMs > 0 && (
+                        <Badge variant="secondary" className="gap-1.5" title="Tiempo jugado">
+                          <Clock className="h-3.5 w-3.5" />
+                          {formatPlaytimeShort(totalPlaytimeMs)}
+                        </Badge>
+                      )}
                     </div>
                   </div>
                 </motion.div>
@@ -2575,15 +2965,64 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
         </div>
       </div>
 
-      <div className={`relative z-10 w-full ${embedded ? "" : "max-w-5xl mx-auto"}`}>
-        <div className={embedded ? "pb-4" : "px-4 pt-3 pb-8"}>
-          <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md p-4">
-            {/* No overflow-hidden here: it would become the nearest "scrolling" ancestor for
-                the sticky tab bars below, so they'd stick to the top of this card (which
-                itself scrolls away) instead of the true scroll viewport. The sweep-transition's
-                tiny horizontal offset doesn't need clipping — the page already has
-                overflow-x-hidden. */}
-            <AnimatePresence mode="wait" initial={false} custom={panelDirection}>
+      <div className={`relative z-10 w-full ${embedded ? "" : "max-w-5xl mx-auto flex-1 min-h-0 flex flex-col"}`}>
+        <div className={embedded ? "pb-4" : `relative px-4 pt-3 pb-4 flex-1 min-h-0 flex flex-col ${logoColumn ? "pl-[8.75rem] min-[1056px]:pl-[7.75rem]" : ""}`}>
+          {/* No backdrop-blur here (unlike the header card): a blurred ancestor stops the
+              sticky tabs/sort band inside from blurring the rows that scroll under it. */}
+          {/* Our own scrollbar, next to the list only (from under the tabs/filters band). */}
+          {fixedCard && <ListScrollbar scrollRef={cardScrollRef} bandRefs={[tabsElRef, sortRowElRef]} />}
+          {/* Floating "back to top", centered at the bottom of the card while scrolled down. */}
+          <AnimatePresence>
+            {fixedCard && contentScrolled && (
+              <motion.button
+                key="back-to-top"
+                type="button"
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 12 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+                onClick={() => cardScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
+                title="Volver arriba"
+                aria-label="Volver arriba"
+                className={`absolute bottom-8 ${logoColumn ? "left-[calc(50%+3.375rem)]" : "left-1/2"} z-30 -ml-5 h-10 w-10 flex items-center justify-center rounded-full bg-accent text-accent-foreground shadow-lg shadow-black/40 hover:brightness-110 transition-[filter]`}
+              >
+                <ArrowUp className="h-5 w-5" strokeWidth={2.75} />
+              </motion.button>
+            )}
+          </AnimatePresence>
+          <div
+            ref={cardScrollRef}
+            className={`bg-gray-500/10 border border-transparent rounded-md ${
+              fixedCard ? "flex-1 min-h-0 overflow-y-auto overflow-x-hidden" : "p-4"
+            }`}
+            // Hides past 16px, shows again only at the very top (no flicker around one threshold).
+            onPointerMove={
+              fixedCard
+                ? (e) => {
+                    const band = tabsElRef.current?.getBoundingClientRect();
+                    setPointerNearBand(!!band && e.clientY >= band.top && e.clientY <= band.bottom + 24);
+                  }
+                : undefined
+            }
+            onPointerLeave={fixedCard ? () => setPointerNearBand(false) : undefined}
+            onScroll={
+              fixedCard
+                ? (e) => {
+                    const top = e.currentTarget.scrollTop;
+                    setContentScrolled((was) => (was ? top > 0 : top > 16));
+                  }
+                : undefined
+            }
+          >
+            {/* fixedCard: the padding lives one layer in. On the scroll container itself the
+                browser sticks the tabs band below the padding (16px under the card's top
+                edge); here the band can reach the edge. */}
+            <div className={fixedCard ? "p-4" : undefined}>
+            {/* fixedCard: this card is the scroll container — the sticky tabs/sort band
+                sticks to its top. Embedded it must NOT clip/scroll (the band sticks to the
+                host page's viewport instead); the sweep-transition's tiny horizontal
+                offset doesn't need clipping there — the page already has overflow-x-hidden. */}
+            <AnimatePresence mode="wait" initial={false} custom={panelDirection} onExitComplete={restoreCardScroll}>
               <motion.div
                 key={selectedModPath ? "mod" : extrasOpen && hasExtras ? "extras" : "pack"}
                 custom={panelDirection}
@@ -2849,57 +3288,86 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                 {!searchMode && (
                   <div
                     ref={tabsRowRef}
-                    style={{ top: headerH }}
-                    className={`sticky z-20 flex flex-col gap-3 mb-4 bg-gray-500/10 backdrop-blur-md border border-white/10 p-3 ${
-                      tabsStuck && sortRowStuck
-                        ? "rounded-none"
-                        : tabsStuck
-                        ? "rounded-b-md"
-                        : sortRowStuck
-                        ? "rounded-t-md"
-                        : "rounded-md"
+                    style={{ top: tabsStickyTop }}
+                    // No box of its own. While it sticks over the list it gets the header's look —
+                    // translucent gray + a strong blur — and widens to the content card's edges
+                    // (-mx = the card's border + p-4, the same back as padding so nothing inside
+                    // moves), so with the card top drawn above it and the sort row below it's one
+                    // piece as wide as the card.
+                    className={`sticky z-20 flex flex-col gap-3 border pt-3 ${
+                      fixedCard
+                        ? // A permanent gray panel across the top of the card (with the sort row
+                          // below): out to the card's padding edge (-16px, back as padding) — no
+                          // further, or the card (a scroll container) would scroll sideways; the
+                          // card's rounded clip rounds its top corners. px 15 (+1px border) = 16px in, like the
+                          // header card's p-4: its content and this band's start and end at the same x. The sort row lives inside
+                          // it too, so tabs + filters are one block with one line under it.
+                          "-mx-4 -mt-4 px-[15px] pb-2 mb-0 rounded-none bg-gray-500/10 backdrop-blur-xl border-transparent border-b-white/10"
+                        : !tabsStuck
+                          ? "mb-3 pb-2 px-3 rounded-md border-transparent"
+                          : "mb-3 pb-2 -mx-[17px] px-[29px] rounded-none bg-gray-500/10 backdrop-blur-xl border-transparent border-b-white/10"
                     }`}
                   >
+                    {/* The content card's top edge (border + p-4), drawn above the band while
+                        it's stuck — 18px up = that 17px inset + this box's own 1px border. */}
+                    {!fixedCard && tabsStuck && (
+                      <span
+                        aria-hidden
+                        className="pointer-events-none absolute -top-[18px] -left-px -right-px h-[17px] rounded-t-md bg-gray-500/10 backdrop-blur-xl"
+                      />
+                    )}
                     {/* Top level: the instance's content vs. its screenshots —
                         screenshots used to sit among the content tabs. */}
-                    {pack.installed && (
-                      <div className="flex items-center gap-1 p-1 rounded-lg bg-card/50 border border-white/5 self-start">
-                        {([
-                          { id: "content", label: "Contenido", icon: Package },
-                          { id: "screenshots", label: "Capturas", icon: Camera },
-                        ] as const).map(({ id: sectionId, label, icon: SectionIcon }) => {
-                          const active = sectionId === "screenshots" ? screenshotsOpen : !screenshotsOpen;
-                          return (
-                            <button
-                              key={sectionId}
-                              type="button"
-                              onClick={() => {
-                                if (sectionId === "screenshots") {
-                                  setEmotesOpen(false);
-                                  setSchematicsOpen(false);
-                                  setScreenshotsOpen(true);
-                                } else {
-                                  setScreenshotsOpen(false);
-                                }
-                              }}
-                              className={`relative inline-flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-semibold transition-colors ${
-                                active ? "text-accent-foreground" : "text-muted-foreground hover:text-foreground"
-                              }`}
-                            >
-                              {active && (
-                                <motion.span
-                                  layoutId="section-pill"
-                                  transition={{ type: "spring", stiffness: 500, damping: 40 }}
-                                  className="absolute inset-0 rounded-md bg-accent shadow"
-                                />
-                              )}
-                              <SectionIcon className="relative h-4 w-4" />
-                              <span className="relative">{label}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
+                    <AnimatePresence initial={false}>
+                    {pack.installed && !(fixedCard && contentScrolled) && (
+                      <motion.div
+                        key="section-row"
+                        // marginBottom: -12 cancels the band's gap-3 while it folds.
+                        initial={{ opacity: 0, height: 0, marginBottom: -12 }}
+                        animate={{ opacity: 1, height: "auto", marginBottom: 0 }}
+                        exit={{ opacity: 0, height: 0, marginBottom: -12 }}
+                        transition={{ duration: 0.2, ease: "easeOut" }}
+                        className="self-start overflow-hidden"
+                      >
+                        <div className="flex items-center gap-1 p-1 rounded-md bg-gray-500/10 backdrop-blur-md border border-transparent self-start">
+                          {([
+                            { id: "content", label: "Contenido", icon: Package },
+                            { id: "screenshots", label: "Capturas", icon: Camera },
+                          ] as const).map(({ id: sectionId, label, icon: SectionIcon }) => {
+                            const active = sectionId === "screenshots" ? screenshotsOpen : !screenshotsOpen;
+                            return (
+                              <button
+                                key={sectionId}
+                                type="button"
+                                onClick={() => {
+                                  if (sectionId === "screenshots") {
+                                    setEmotesOpen(false);
+                                    setSchematicsOpen(false);
+                                    setScreenshotsOpen(true);
+                                  } else {
+                                    setScreenshotsOpen(false);
+                                  }
+                                }}
+                                className={`relative inline-flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-semibold transition-colors ${
+                                  active ? "text-accent-foreground" : "text-muted-foreground hover:text-foreground"
+                                }`}
+                              >
+                                {active && (
+                                  <motion.span
+                                    layoutId="section-pill"
+                                    transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                                    className="absolute inset-0 rounded-md bg-accent shadow"
+                                  />
+                                )}
+                                <SectionIcon className="relative h-4 w-4" />
+                                <span className="relative">{label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </motion.div>
                     )}
+                    </AnimatePresence>
                     <AnimatePresence initial={false}>
                     {!screenshotsOpen && (
                     <motion.div
@@ -2910,7 +3378,8 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                       transition={{ duration: 0.2, ease: "easeOut" }}
                       className="flex items-center justify-between gap-2 flex-wrap"
                     >
-                    <TabsList className="bg-card/50 border border-white/5">
+                    {/* Second level: underlined, so it doesn't compete with Contenido/Capturas. */}
+                    <TabsList className="h-auto justify-start gap-2 rounded-none border-b border-white/10 bg-transparent p-0">
                       {categories.map((c) => {
                         const Icon = CATEGORY_META[c].icon;
                         return (
@@ -2922,18 +3391,18 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                               setSchematicsOpen(false);
                               setScreenshotsOpen(false);
                             }}
-                            className="relative data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:text-accent-foreground gap-1.5"
+                            className="relative rounded-none px-2 pb-2 pt-1 data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:text-foreground text-muted-foreground hover:text-foreground gap-1.5"
                           >
                             {c === effectiveCategory && !emotesOpen && !schematicsOpen && (
                               <motion.span
                                 layoutId="category-pill"
                                 transition={{ type: "spring", stiffness: 500, damping: 40 }}
-                                className="absolute inset-0 rounded-md bg-accent shadow"
+                                className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-accent"
                               />
                             )}
                             <Icon className="relative h-3.5 w-3.5" />
                             <span className="relative">{CATEGORY_META[c].label}</span>
-                            <span className="relative opacity-60">({rowsFor(c).length})</span>
+                            <span className="relative opacity-50">{rowsFor(c).length}</span>
                           </TabsTrigger>
                         );
                       })}
@@ -2945,15 +3414,15 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                             setScreenshotsOpen(false);
                             setEmotesOpen(true);
                           }}
-                          className={`relative inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium gap-1.5 transition-colors ${
-                            emotesOpen ? "text-accent-foreground" : "text-muted-foreground hover:text-foreground"
+                          className={`relative inline-flex items-center justify-center whitespace-nowrap px-2 pb-2 pt-1 text-sm font-medium gap-1.5 transition-colors ${
+                            emotesOpen ? "text-foreground" : "text-muted-foreground hover:text-foreground"
                           }`}
                         >
                           {emotesOpen && (
                             <motion.span
                               layoutId="category-pill"
                               transition={{ type: "spring", stiffness: 500, damping: 40 }}
-                              className="absolute inset-0 rounded-md bg-accent shadow"
+                              className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-accent"
                             />
                           )}
                           <Smile className="relative h-3.5 w-3.5" />
@@ -2968,15 +3437,15 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                             setScreenshotsOpen(false);
                             setSchematicsOpen(true);
                           }}
-                          className={`relative inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium gap-1.5 transition-colors ${
-                            schematicsOpen ? "text-accent-foreground" : "text-muted-foreground hover:text-foreground"
+                          className={`relative inline-flex items-center justify-center whitespace-nowrap px-2 pb-2 pt-1 text-sm font-medium gap-1.5 transition-colors ${
+                            schematicsOpen ? "text-foreground" : "text-muted-foreground hover:text-foreground"
                           }`}
                         >
                           {schematicsOpen && (
                             <motion.span
                               layoutId="category-pill"
                               transition={{ type: "spring", stiffness: 500, damping: 40 }}
-                              className="absolute inset-0 rounded-md bg-accent shadow"
+                              className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-accent"
                             />
                           )}
                           <Box className="relative h-3.5 w-3.5" />
@@ -2998,8 +3467,9 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                         {!emotesOpen && !schematicsOpen && !screenshotsOpen && !contentLocked && (
                           <Button
                             size="sm"
+                            variant="outline"
                             onClick={() => setSearchMode(true)}
-                            className="bg-green-600 hover:bg-green-500 border-transparent text-white font-bold gap-1.5"
+                            className="border-accent/50 bg-transparent text-accent hover:bg-accent/10 hover:text-accent font-semibold gap-1.5"
                           >
                             <SiModrinth className="h-3.5 w-3.5" />
                             {`Instalar ${CATEGORY_META[effectiveCategory].label}`}
@@ -3007,19 +3477,115 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                         )}
                         {!emotesOpen && !schematicsOpen && !screenshotsOpen && !contentLocked && effectiveCategory === "mods" && (
                           <Button
-                            size="icon"
+                            size="sm"
                             variant="outline"
                             onClick={() => setLibraryOpen(true)}
                             title="Biblioteca de mods del grupo"
-                            aria-label="Biblioteca de mods del grupo"
-                            className="h-8 w-8"
+                            className="gap-1.5 font-semibold"
                           >
-                            <Library className="h-4 w-4" />
+                            <Library className="h-3.5 w-3.5" />
+                            Biblioteca
                           </Button>
                         )}
                       </div>
                     )}
                     </motion.div>
+                    )}
+                    </AnimatePresence>
+                    {/* Sort / filter row of the list, inside the band (one block with the tabs). */}
+                    <AnimatePresence initial={false}>
+                    {!emotesOpen && !schematicsOpen && !screenshotsOpen && !(fixedCard && sortRowHidden && !pointerNearBand) && (
+                      <motion.div
+                        key="sort-row"
+                        // marginTop: -12 cancels the band's gap-3 while it folds.
+                        initial={{ opacity: 0, height: 0, marginTop: -12 }}
+                        animate={{ opacity: 1, height: "auto", marginTop: 0 }}
+                        exit={{ opacity: 0, height: 0, marginTop: -12 }}
+                        transition={{ duration: 0.2, ease: "easeOut" }}
+                        // -5px out (on the clipping box, so hover backgrounds at the ends aren't cut):
+                        // keeps "Nombre" under "Mods" and "Actualizar todo" under "Biblioteca".
+                        className="overflow-hidden -mx-[5px]"
+                      >
+                      <div
+                        ref={sortRowElRef}
+                        className="flex items-center justify-between gap-2"
+                      >
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => {
+                              setSortAsc((v) => !v);
+                              scrollListToFirst();
+                            }}
+                            className="h-7 flex items-center gap-1.5 px-3 text-[11px] font-semibold rounded-md border border-transparent text-muted-foreground hover:text-white transition-colors"
+                          >
+                            Nombre
+                            <ArrowUpDown className="h-3 w-3" />
+                          </button>
+                          {effectiveCategory === "mods" && (
+                            <button
+                              onClick={() => {
+                                setDependencySort((v) => (v === "off" ? "first" : v === "first" ? "last" : "off"));
+                                scrollListToFirst();
+                              }}
+                              title={
+                                dependencySort === "off"
+                                  ? "Llevar las dependencias arriba"
+                                  : dependencySort === "first"
+                                  ? "Llevar las dependencias abajo"
+                                  : "Quitar orden por dependencias"
+                              }
+                              className={`h-7 flex items-center gap-1.5 px-3 text-[11px] font-semibold rounded-md border transition-colors ${
+                                dependencySort !== "off"
+                                  ? "bg-accent/15 text-accent border-accent/30"
+                                  : "border-transparent text-muted-foreground hover:text-white"
+                              }`}
+                            >
+                              <Link2 className="h-3 w-3" />
+                              Dependencias
+                              <span className="w-3 flex justify-center">
+                                {dependencySort === "first" ? (
+                                  <ArrowUp className="h-3 w-3" />
+                                ) : dependencySort === "last" ? (
+                                  <ArrowDown className="h-3 w-3" />
+                                ) : null}
+                              </span>
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              setUpdatesSort((v) => !v);
+                              scrollListToFirst();
+                            }}
+                            title="Pendientes de actualizar primero; las actualizadas recientemente, al final"
+                            className={`h-7 flex items-center gap-1.5 px-3 text-[11px] font-semibold rounded-md border transition-colors ${
+                              updatesSort
+                                ? "bg-accent/15 text-accent border-accent/30"
+                                : "border-transparent text-muted-foreground hover:text-white"
+                            }`}
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                            Actualizaciones
+                            {pendingUpdateCount(effectiveCategory) > 0 && (
+                              <span className="rounded-full bg-accent text-accent-foreground px-1.5 text-[10px] leading-4">
+                                {pendingUpdateCount(effectiveCategory)}
+                              </span>
+                            )}
+                          </button>
+                        </div>
+                        {pack.installed && !contentLocked && pendingUpdateCount(effectiveCategory) > 0 && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleUpdateAll(effectiveCategory)}
+                            disabled={updatingAll}
+                            className="h-6 shrink-0 gap-1 px-2 text-[11px] font-semibold text-muted-foreground hover:text-foreground mr-1"
+                          >
+                            {updatingAll ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" strokeWidth={2.75} />}
+                            Actualizar todo ({pendingUpdateCount(effectiveCategory)})
+                          </Button>
+                        )}
+                      </div>
+                      </motion.div>
                     )}
                     </AnimatePresence>
                   </div>
@@ -3192,7 +3758,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                           type="button"
                           key={emote.fileName}
                           onClick={() => setSelectedEmote(emote)}
-                          className="flex flex-col items-center gap-2 p-3 rounded-md bg-gray-500/10 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-colors text-left"
+                          className="flex flex-col items-center gap-2 p-3 rounded-md bg-gray-500/10 border border-transparent hover:bg-white/10 hover:border-white/20 transition-colors text-left"
                         >
                           <div className="h-16 w-16 rounded bg-black/30 overflow-hidden flex items-center justify-center shrink-0">
                             {emote.thumbnailBase64 ? (
@@ -3256,7 +3822,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                                 type="button"
                                 key={s.path}
                                 onClick={() => setSelectedSchematic(s)}
-                                className="flex flex-col items-center gap-2 p-3 rounded-md bg-gray-500/10 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-colors text-left"
+                                className="flex flex-col items-center gap-2 p-3 rounded-md bg-gray-500/10 border border-transparent hover:bg-white/10 hover:border-white/20 transition-colors text-left"
                               >
                                 <div className="h-16 w-16 rounded bg-black/30 overflow-hidden flex items-center justify-center shrink-0">
                                   <Box className="h-6 w-6 text-muted-foreground" />
@@ -3416,7 +3982,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                               setLightboxLoading(false);
                             }
                           }}
-                          className="w-full flex flex-col items-center gap-2 p-2 rounded-md bg-gray-500/10 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-colors"
+                          className="w-full flex flex-col items-center gap-2 p-2 rounded-md bg-gray-500/10 border border-transparent hover:bg-white/10 hover:border-white/20 transition-colors"
                         >
                           <div className="h-24 w-full rounded bg-black/30 overflow-hidden flex items-center justify-center shrink-0">
                             {shot.thumbnailDataUrl ? (
@@ -3435,71 +4001,8 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                   )
                 ) : (
                 categories.map((c) => (
-                  <TabsContent key={c} value={c} className="mt-4">
-                    <div className="bg-gray-500/10 backdrop-blur-md border border-white/10 rounded-md">
-                      <div
-                        ref={sortRowElRef}
-                        style={{ top: headerH + tabsH }}
-                        className={`sticky z-10 flex items-center justify-between px-3 py-2.5 min-h-[3.5rem] bg-gray-500/10 backdrop-blur-md border-b border-white/10 ${
-                          sortRowStuck ? "" : "rounded-t-md"
-                        }`}
-                      >
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => setSortAsc((v) => !v)}
-                            className="h-9 flex items-center gap-1.5 px-4 text-xs font-semibold rounded-md border border-transparent text-muted-foreground hover:text-white transition-colors"
-                          >
-                            Nombre
-                            <ArrowUpDown className="h-3 w-3" />
-                          </button>
-                          {c === "mods" && (
-                            <button
-                              onClick={() =>
-                                setDependencySort((v) => (v === "off" ? "first" : v === "first" ? "last" : "off"))
-                              }
-                              title={
-                                dependencySort === "off"
-                                  ? "Llevar las dependencias arriba"
-                                  : dependencySort === "first"
-                                  ? "Llevar las dependencias abajo"
-                                  : "Quitar orden por dependencias"
-                              }
-                              className={`h-9 flex items-center gap-1.5 px-4 text-xs font-semibold rounded-md border transition-colors ${
-                                dependencySort !== "off"
-                                  ? "bg-accent/15 text-accent border-accent/30"
-                                  : "border-transparent text-muted-foreground hover:text-white"
-                              }`}
-                            >
-                              <Link2 className="h-3.5 w-3.5" />
-                              Dependencias
-                              <span className="w-3 flex justify-center">
-                                {dependencySort === "first" ? (
-                                  <ArrowUp className="h-3 w-3" />
-                                ) : dependencySort === "last" ? (
-                                  <ArrowDown className="h-3 w-3" />
-                                ) : null}
-                              </span>
-                            </button>
-                          )}
-                          <button
-                            onClick={() => setUpdatesSort((v) => !v)}
-                            title="Pendientes de actualizar primero; las actualizadas recientemente, al final"
-                            className={`h-9 flex items-center gap-1.5 px-4 text-xs font-semibold rounded-md border transition-colors ${
-                              updatesSort
-                                ? "bg-accent/15 text-accent border-accent/30"
-                                : "border-transparent text-muted-foreground hover:text-white"
-                            }`}
-                          >
-                            <RefreshCw className="h-3.5 w-3.5" />
-                            Actualizaciones
-                            {pendingUpdateCount(c) > 0 && (
-                              <span className="rounded-full bg-accent text-accent-foreground px-1.5 text-[10px] leading-4">
-                                {pendingUpdateCount(c)}
-                              </span>
-                            )}
-                          </button>
-                        </div>
-                      </div>
+                  <TabsContent key={c} value={c} className="mt-0">
+                    <div>
                       {(() => {
                         const sorted = rowsFor(c)
                           .map((row) => ({ row, title: titleFor(row.path) }))
@@ -3517,7 +4020,8 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                             return sortAsc ? cmp : -cmp;
                           });
                         return (
-                      <FlipList orderKey={sorted.map((r) => r.row.path).join("|")} className="flex flex-col gap-1.5 p-3 pt-1.5">
+                      <>
+                      <FlipList orderKey={sorted.map((r) => r.row.path).join("|")} className={`flex flex-col gap-1.5 ${fixedCard ? "px-0 pb-3 pt-3" : "p-3 pt-1.5"}`}>
                         {sorted.map(({ row, title }) => (
                             <InstalledContentRow
                               key={row.path}
@@ -3540,9 +4044,14 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                               onOpen={onRowOpen}
                               onUpdate={onRowUpdate}
                               onDelete={onRowDelete}
+                              marked={markedPaths.has(row.path)}
+                              selecting={markedPaths.size > 0}
+                              onMarkToggle={onRowMarkToggle}
                             />
                           ))}
                       </FlipList>
+                      {renderMarkedBar(c, sorted.map((r) => r.row))}
+                      </>
                         );
                       })()}
                     </div>
@@ -3555,6 +4064,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
             )}
               </motion.div>
             </AnimatePresence>
+            </div>
           </div>
         </div>
       </div>
@@ -3634,6 +4144,48 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
               }}
             >
               Quitar igualmente
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!bulkDeleteConfirm} onOpenChange={(open) => !open && setBulkDeleteConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {bulkDeleteConfirm?.paths.length === 1
+                ? `¿Eliminar ${titleFor(bulkDeleteConfirm.paths[0])}?`
+                : `¿Eliminar ${bulkDeleteConfirm?.paths.length ?? 0} archivos?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>Se borrarán de la instancia. Esta acción no se puede deshacer.</p>
+                {!!bulkDeleteConfirm?.neededBy.length && (
+                  <>
+                    <p>Otros mods que no has marcado los necesitan:</p>
+                    <ul className="list-disc pl-5 text-foreground">
+                      {bulkDeleteConfirm.neededBy.map((d) => (
+                        <li key={d}>{titleFor(d)}</li>
+                      ))}
+                    </ul>
+                    <p>Si los quitas, probablemente el juego no arranque.</p>
+                  </>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (!bulkDeleteConfirm) return;
+                const { c, paths } = bulkDeleteConfirm;
+                setBulkDeleteConfirm(null);
+                void handleBulkDelete(c, paths);
+              }}
+            >
+              Eliminar
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -3763,7 +4315,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                   onlinePostFiles.map((file) => (
                     <div
                       key={file.id}
-                      className="flex items-center gap-3 p-2.5 bg-gray-500/10 rounded-md border border-white/10"
+                      className="flex items-center gap-3 p-2.5 bg-gray-500/10 rounded-md border border-transparent"
                     >
                       <Box className="h-4 w-4 text-muted-foreground shrink-0" />
                       <div className="min-w-0 flex-1">

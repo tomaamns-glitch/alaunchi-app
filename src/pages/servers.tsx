@@ -305,7 +305,7 @@ export default function Servers() {
     <div className="min-h-full bg-background text-foreground flex flex-col">
       <main className="flex-1 overflow-y-auto px-6 py-6">
         <div className="max-w-6xl w-full mx-auto flex gap-6" style={{ minHeight: "70vh" }}>
-          <aside className="w-64 shrink-0 rounded-xl border border-white/10 bg-card/40 p-3 flex flex-col gap-2">
+          <aside className="w-64 shrink-0 rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md p-3 flex flex-col gap-2">
             <div className="flex items-center justify-between px-1 pb-1">
               <h1 className="text-sm font-bold flex items-center gap-1.5">
                 <ServerIcon className="h-4 w-4 text-accent" />
@@ -402,7 +402,7 @@ export default function Servers() {
             )}
           </aside>
 
-          <div className="flex-1 min-w-0 rounded-xl border border-white/10 bg-card/40 flex flex-col overflow-hidden">
+          <div className="flex-1 min-w-0 rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md flex flex-col overflow-hidden">
             {!selectedServer ? (
               <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center text-muted-foreground">
                 <ServerIcon className="h-8 w-8" />

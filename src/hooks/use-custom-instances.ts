@@ -6,6 +6,7 @@ import {
   getInstalledModpacksMeta,
   CreateInstanceInput,
 } from "../services/electron";
+import { backfillModrinthBanners } from "../lib/modrinth-banner";
 
 // Kept deliberately separate from useModpacks() (the GitHub-catalog store) —
 // home.tsx's carousel iterates that store's array directly, so merging custom
@@ -31,12 +32,16 @@ function metaToModpack(meta: Record<string, any>): Modpack {
     source: "custom",
     installedAt: meta.installedAt,
     isCopy: !!meta.duplicatedFrom,
+    isDownloaded: meta.importedFrom?.type === "modrinth" || meta.importedFrom?.type === "curseforge",
   };
 }
 
 interface CustomInstancesState {
   instances: Modpack[];
   loading: boolean;
+  /** True once a read from disk has succeeded — until then `instances` is just
+   *  the empty initial value, not "the user has no instances". */
+  loaded: boolean;
   loadInstances: () => Promise<void>;
   createInstance: (input: CreateInstanceInput) => Promise<Modpack>;
   deleteInstance: (id: string) => Promise<void>;
@@ -45,6 +50,7 @@ interface CustomInstancesState {
 export const useCustomInstances = create<CustomInstancesState>((set, get) => ({
   instances: [],
   loading: false,
+  loaded: false,
 
   loadInstances: async () => {
     set({ loading: true });
@@ -53,7 +59,10 @@ export const useCustomInstances = create<CustomInstancesState>((set, get) => ({
       const instances = Object.values(meta)
         .filter((m: any) => m?.source === "custom")
         .map(metaToModpack);
-      set({ instances, loading: false });
+      set({ instances, loading: false, loaded: true });
+      void backfillModrinthBanners(Object.values(meta)).then((changed) => {
+        if (changed) void get().loadInstances();
+      });
     } catch {
       set({ loading: false });
     }

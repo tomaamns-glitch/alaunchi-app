@@ -60,6 +60,11 @@ export function getInstanceRunState(modpackId: string): InstanceRunState {
   return mainState[modpackId] ?? (pending.has(modpackId) ? "pending" : "idle");
 }
 
+/** Whether a renderer launch flow (maybe updating first) is under way for it. */
+export function isInstancePending(modpackId: string): boolean {
+  return pending.has(modpackId);
+}
+
 /** Marks a launch the renderer is preparing (before main has taken the op lock). */
 export function setInstancePending(modpackId: string, value: boolean) {
   if (value ? pending.has(modpackId) : !pending.has(modpackId)) return;

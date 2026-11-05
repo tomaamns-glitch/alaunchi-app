@@ -136,7 +136,7 @@ export function OptionalContentView({
       </div>
 
       {selectable.map((g) => (
-        <section key={g.id} className="rounded-lg border border-white/10 bg-card/50 p-4">
+        <section key={g.id} className="rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md p-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-accent">{g.name}</p>
           {g.description.trim() && <p className="text-xs text-muted-foreground mt-0.5">{g.description}</p>}
           <div role="radiogroup" aria-label={g.name} className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -178,7 +178,7 @@ export function OptionalContentView({
       ))}
 
       {groups.length > 0 && (
-        <section className="rounded-lg border border-white/10 bg-card/50 p-4">
+        <section className="rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md p-4">
           {selectable.length > 0 && (
             <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-3">Extras</p>
           )}

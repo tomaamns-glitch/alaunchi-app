@@ -34,7 +34,7 @@ export function OnlineNowPanel({
   const total = groups.reduce((n, g) => n + g.players.length, 0);
 
   return (
-    <aside className="flex flex-col max-h-full rounded-xl border border-white/10 bg-card/40 backdrop-blur-md overflow-hidden">
+    <aside className="flex flex-col max-h-full rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden">
       <div className="shrink-0 flex items-center gap-2 px-4 py-3 border-b border-white/5">
         <Users className="h-4 w-4 text-accent" />
         <h3 className="text-sm font-semibold text-white">Jugando ahora</h3>

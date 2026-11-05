@@ -42,7 +42,7 @@ export function OnlineBannerTile({
       // mb-5: room for the logo hanging off the bottom edge.
       className="group relative block w-full mb-5 text-left cursor-pointer outline-none"
     >
-      <div className="relative aspect-[3/1] rounded-xl border border-white/10 bg-card/40 overflow-hidden group-hover:border-accent/50 transition-colors">
+      <div className="relative aspect-[3/1] rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden group-hover:border-accent/50 transition-colors">
         {cover && !broken ? (
           <img
             src={cover}

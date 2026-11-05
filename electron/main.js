@@ -17,8 +17,10 @@ const ftp = require("basic-ftp");
 const SftpClient = require("ssh2-sftp-client");
 const { readNbt, writeNbt, NBT } = require("./nbt");
 const { createDiscordPresence } = require("./discord-rpc");
+const { detectCrash, diagnoseInstance } = require("./crash-diagnosis");
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(require("child_process").execFile);
 
 // Prefer IPv4 for all outbound requests. On networks where IPv6 is advertised but
 // not actually routed (common with some ISP routers), Node's default resolution
@@ -1912,20 +1914,114 @@ async function fetchMinemevJson(pathAndQuery) {
   }
 }
 
+// Progress of a multi-phase operation (installing an instance, opening it) for
+// the Play buttons: every event says which phase is running, a label for it
+// ("Descargando Minecraft 1.20.1"), that phase's own 0..1 (null when there's no
+// real measure) and the whole operation's 0..1. Each phase owns a slice of the
+// bar proportional to its weight; a phase that turns out to be cached just
+// gets skipped over. With no measure the bar creeps inside the phase's slice
+// so it never looks stuck, and it never goes backwards. A phase made of several
+// steps (Java: download, then unpack) gives each its `span` of the phase's
+// slice — the label's % stays the step's own. `stop()` (always, in a finally)
+// clears the creep timer.
+function createPhaseProgress(send, weights) {
+  const ids = Object.keys(weights);
+  const total = ids.reduce((s, id) => s + weights[id], 0) || 1;
+  const sliceOf = (phase) => {
+    let start = 0;
+    for (const id of ids) {
+      if (id === phase) return [start / total, (start + weights[id]) / total];
+      start += weights[id];
+    }
+    return [overall, overall];
+  };
+  let overall = 0;
+  let creep = null;
+  let last = "";
+  const stopCreep = () => {
+    if (creep) clearInterval(creep);
+    creep = null;
+  };
+  const emit = (phase, label, phaseProgress, extra) => {
+    const key = `${phase}|${label}|${phaseProgress === null ? "-" : Math.round(phaseProgress * 100)}|${Math.round(overall * 1000)}`;
+    if (key === last) return;
+    last = key;
+    send({ stage: phase, label, phaseProgress, overallProgress: overall, ...extra });
+  };
+  const set = (phase, label, phaseProgress = null, { span = [0, 1], extra = {} } = {}) => {
+    stopCreep();
+    const [sliceFrom, sliceTo] = sliceOf(phase);
+    const from = sliceFrom + (sliceTo - sliceFrom) * span[0];
+    const to = sliceFrom + (sliceTo - sliceFrom) * span[1];
+    const p = typeof phaseProgress === "number" && isFinite(phaseProgress) ? Math.min(1, Math.max(0, phaseProgress)) : null;
+    overall = Math.max(overall, p === null ? from : from + (to - from) * p);
+    emit(phase, label, p, extra);
+    if (p === null && to - overall > 0.002) {
+      creep = setInterval(() => {
+        // Closes 4% of the remaining gap every 400 ms — slows down near the end of the slice.
+        overall = Math.min(to - 0.002, overall + (to - overall) * 0.04);
+        emit(phase, label, null, extra);
+      }, 400);
+    }
+  };
+  return { set, stop: stopCreep, overall: () => overall };
+}
+
 // Downloads (if missing) and returns the path to a Minecraft version's vanilla
 // client jar, plus its parsed version JSON. Shared by mc:launch (which needs the
 // full launch pipeline around it) and the schematic viewer's asset extraction
 // (which only needs the jar itself) — one place fetching Mojang's version
 // manifest instead of two copies drifting apart.
-async function ensureClientJar(mcVersion, onProgress) {
+//
+// The version JSON is kept next to the jar (versions/<mc>/<mc>.json), like the
+// official launcher and CurseForge do: opening an instance that's already
+// installed no longer waits on Mojang's servers (and works if they're down).
+// Mojang does very occasionally re-publish an old version's JSON (the Log4Shell
+// fix patched 1.7–1.18), so a cached one is refreshed in the background once
+// per session — the next launch picks up any change.
+const refreshedVersionJsons = new Set();
+
+async function fetchVersionJson(mcVersion, versionJsonPath) {
   const versionManifest = await fetchJson("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json");
   const versionEntry = versionManifest.versions.find((v) => v.id === mcVersion);
   if (!versionEntry) throw new Error(`Minecraft version ${mcVersion} not found`);
   const versionJson = await fetchJson(versionEntry.url);
+  if (!versionJson?.downloads?.client?.url || !versionJson.assetIndex) {
+    throw new Error(`JSON de versión incompleto para Minecraft ${mcVersion}`);
+  }
+  // Temp + rename: a half-written file must never be read as the cache.
+  const tmpPath = `${versionJsonPath}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(versionJson));
+  await fs.rename(tmpPath, versionJsonPath).catch(async (e) => {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw e;
+  });
+  refreshedVersionJsons.add(mcVersion);
+  return versionJson;
+}
 
+async function ensureClientJar(mcVersion, onProgress) {
   const versionDir = path.join(CACHE_DIR, "versions", mcVersion);
   await fs.mkdir(versionDir, { recursive: true });
   const clientJarPath = path.join(versionDir, `${mcVersion}.jar`);
+  const versionJsonPath = path.join(versionDir, `${mcVersion}.json`);
+
+  let versionJson = null;
+  try {
+    const cached = JSON.parse(await fs.readFile(versionJsonPath, "utf8"));
+    if (cached?.downloads?.client?.url && cached.assetIndex) versionJson = cached;
+  } catch {}
+  if (versionJson) {
+    if (!refreshedVersionJsons.has(mcVersion)) {
+      refreshedVersionJsons.add(mcVersion);
+      fetchVersionJson(mcVersion, versionJsonPath).catch((e) =>
+        console.warn(`[versions] No se pudo refrescar el JSON de ${mcVersion} (se usa el guardado):`, e.message)
+      );
+    }
+  } else {
+    versionJson = await fetchVersionJson(mcVersion, versionJsonPath);
+  }
+
   if (!fsSync.existsSync(clientJarPath)) {
     await downloadFile(versionJson.downloads.client.url, clientJarPath, onProgress || (() => {}));
   }
@@ -2080,7 +2176,8 @@ function watchProcessForPlaytime(modpackId, pid, startedAt, initialState = "runn
       runningInstances.delete(modpackId);
       broadcastRunState();
     }
-    creditPlaytimeAndClearSession(modpackId, startedAt);
+    // Both write alaunchi-meta.json: one after the other.
+    creditPlaytimeAndClearSession(modpackId, startedAt).then(() => recordSessionOutcome(modpackId, startedAt, info));
   }, 2000);
   activePlaytimeWatchers.set(modpackId, interval);
 }
@@ -2119,6 +2216,168 @@ async function reconcileDanglingPlaytimeSessions() {
     } catch {}
   }
 }
+
+// ─── DIAGNÓSTICO DE CRASHEOS ────────────────────────────────────────────────
+// Every session end is checked for a crash (electron/crash-diagnosis.js) and
+// counted in alaunchi-meta.json#crashStats: `consecutive` crashes in a row
+// (a clean exit resets it) — from the 3rd the renderer offers a diagnosis
+// (components/crash-watcher.tsx). The diagnosis itself only reads; fixes go
+// through crash:apply-fix, which re-validates every path it touches.
+
+async function recordSessionOutcome(modpackId, startedAt, info) {
+  let instanceDir;
+  try {
+    instanceDir = instanceDirFor(modpackId);
+  } catch {
+    return;
+  }
+  const outcome = await detectCrash({ instanceDir, startedAt }).catch(() => ({ crashed: false }));
+  const metaPath = path.join(instanceDir, "alaunchi-meta.json");
+  let meta;
+  try {
+    meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
+  } catch {
+    return;
+  }
+  const prev = meta.crashStats || {};
+  if (!outcome.crashed) {
+    if (!prev.consecutive) return;
+    meta.crashStats = { ...prev, consecutive: 0, streakStartedAt: null };
+    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2)).catch(() => {});
+    return;
+  }
+  const now = Date.now();
+  const stats = {
+    consecutive: (prev.consecutive || 0) + 1,
+    streakStartedAt: prev.consecutive ? prev.streakStartedAt || now : now,
+    lastCrashAt: now,
+    lastReason: outcome.reason,
+    lastDescription: outcome.description || null,
+    total: (prev.total || 0) + 1,
+  };
+  meta.crashStats = stats;
+  await fs.writeFile(metaPath, JSON.stringify(meta, null, 2)).catch(() => {});
+  console.warn(`[Crash] ${modpackId}: ${outcome.reason}${outcome.description ? ` — ${outcome.description}` : ""} (${stats.consecutive} seguidos)`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("instance:crashed", { modpackId, name: info?.name || meta.name || modpackId, ...stats });
+  }
+}
+
+async function currentRamMbFor(meta) {
+  if (Number(meta?.maxMemoryMb) >= 512) return Math.round(meta.maxMemoryMb);
+  try {
+    const settings = JSON.parse(await fs.readFile(path.join(APP_DATA_DIR, "settings.json"), "utf8"));
+    if (settings.maxMemoryMb && settings.maxMemoryMb >= 512) return Math.round(settings.maxMemoryMb);
+  } catch {}
+  return 2048; // mc:launch's default
+}
+
+ipcMain.handle("crash:diagnose", async (event, { modpackId, canRepairFromSource, mcVersion, loaderType }) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const instanceDir = instanceDirFor(modpackId);
+  let meta = {};
+  try {
+    meta = JSON.parse(await fs.readFile(path.join(instanceDir, "alaunchi-meta.json"), "utf8")) || {};
+  } catch {}
+  const mc = meta.minecraftVersion || mcVersion || "";
+  const versionJson = mc
+    ? await fs.readFile(path.join(CACHE_DIR, "versions", mc, `${mc}.json`), "utf8").then(JSON.parse, () => null)
+    : null;
+  const javaMajor = versionJson?.javaVersion?.majorVersion ?? null;
+  return diagnoseInstance(
+    {
+      instanceDir,
+      meta,
+      mcVersion: mc,
+      loaderType: meta.loaderType || loaderType || "vanilla",
+      cacheDir: CACHE_DIR,
+      librariesDir: path.join(CACHE_DIR, "libraries"),
+      assetsDir: path.join(CACHE_DIR, "assets"),
+      javaMajor,
+      javaPath: javaMajor ? await getJavaPathForMajor(javaMajor) : null,
+      currentRamMb: await currentRamMbFor(meta),
+      totalRamMb: Math.round(os.totalmem() / 1048576),
+      hashFile,
+      hashFileSha1: (p) => cachedSha1(p),
+      isUsableLaunchFile,
+      isPlayerEditableFile,
+      disabledSuffix: DISABLED_SUFFIX,
+      execFile: execFileAsync,
+      canRepairFromSource: !!canRepairFromSource,
+    },
+    (label, progress) => win?.webContents.send("crash:diagnose-progress", { modpackId, label, progress })
+  );
+});
+
+/** An absolute path the renderer sent back: only ever inside `base`. */
+function assertInside(base, p) {
+  const rel = path.relative(base, path.resolve(String(p || "")));
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) throw new Error("Ruta fuera de la carpeta permitida.");
+  return path.resolve(String(p));
+}
+
+ipcMain.handle("crash:apply-fix", async (_event, { modpackId, fix }) => {
+  if (runningInstances.has(modpackId)) throw new Error("Cierra Minecraft antes de aplicar el arreglo.");
+  if (activeModpackOps.has(modpackId)) throw new Error("Espera a que termine la instalación o el lanzamiento.");
+  const instanceDir = instanceDirFor(modpackId);
+  switch (fix?.kind) {
+    case "disable-mods": {
+      let done = 0;
+      for (const rel of Array.isArray(fix.paths) ? fix.paths : []) {
+        if (!/^mods\/[^/]+\.jar$/i.test(rel)) continue;
+        const from = safeJoin(instanceDir, rel);
+        if (!fsSync.existsSync(from)) continue;
+        let to = `${from}${DISABLED_SUFFIX}`;
+        // Already a disabled copy with that name: keep both (still listed as a disabled mod).
+        if (fsSync.existsSync(to)) to = `${from.replace(/\.jar$/i, "")}-${Date.now()}.jar${DISABLED_SUFFIX}`;
+        await fs.rename(from, to);
+        done++;
+      }
+      return { success: true, done };
+    }
+    case "delete-cache-files":
+    case "reset-loader": {
+      const files = (Array.isArray(fix.paths) ? fix.paths : []).map((p) => assertInside(CACHE_DIR, p));
+      if (fix.kind === "reset-loader" && /^(forge|neoforge)$/.test(fix.loaderType || "") && files.length === 0) {
+        // From the log alone we don't know which build: drop this loader's install caches, all rebuilt on demand.
+        for (const n of await fs.readdir(CACHE_DIR).catch(() => [])) {
+          if (n.startsWith(`${fix.loaderType}-`) && /-v\d+-(profile|outputs)\.json$/.test(n)) files.push(path.join(CACHE_DIR, n));
+        }
+      }
+      for (const f of files) await fs.unlink(f).catch(() => {});
+      return { success: true, done: files.length };
+    }
+    case "clear-fabric-cache":
+      await fs.rm(path.join(instanceDir, ".fabric"), { recursive: true, force: true });
+      return { success: true };
+    case "reset-config": {
+      const rel = String(fix.path || "");
+      if (!/^(config|defaultconfigs)\//.test(rel)) throw new Error("Solo archivos de configuración.");
+      const p = safeJoin(instanceDir, rel);
+      const bak = `${p}.alaunchi-bak`;
+      await fs.rm(bak, { force: true }).catch(() => {});
+      await fs.rename(p, bak);
+      return { success: true };
+    }
+    case "set-ram": {
+      const mb = Math.round(Number(fix.mb));
+      if (!(mb >= 512 && mb <= 65536)) throw new Error("Cantidad de memoria no válida.");
+      const metaPath = path.join(instanceDir, "alaunchi-meta.json");
+      const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
+      meta.maxMemoryMb = mb;
+      await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
+      return { success: true };
+    }
+    case "reinstall-java": {
+      const major = Number(fix.major);
+      if (!Number.isInteger(major) || major < 8 || major > 99) throw new Error("Versión de Java no válida.");
+      await fs.rm(path.join(JAVA_DIR, String(major)), { recursive: true, force: true });
+      return { success: true };
+    }
+    default:
+      throw new Error("Arreglo desconocido.");
+  }
+});
 
 ipcMain.handle("mc:get-installed-modpacks", async () => {
   const installed = {};
@@ -2268,7 +2527,7 @@ function normalizeCurseForgeDir(dir) {
   return null;
 }
 
-async function readCurseForgeInstance(instancesDir, folder) {
+async function readCurseForgeInstance(instancesDir, folder, iconSize = 96) {
   const dir = path.join(instancesDir, folder);
   let info;
   try {
@@ -2290,7 +2549,7 @@ async function readCurseForgeInstance(instancesDir, folder) {
     try {
       const img = nativeImage.createFromPath(candidate);
       if (!img.isEmpty()) {
-        iconDataUrl = img.resize({ width: 96, height: 96, quality: "good" }).toDataURL();
+        iconDataUrl = img.resize({ width: iconSize, height: iconSize, quality: "good" }).toDataURL();
         break;
       }
     } catch {}
@@ -2367,7 +2626,8 @@ ipcMain.handle("curseforge:import", async (event, { folder }) => {
   const instancesDir = await curseForgeInstancesDir();
   const sourceDir = safeJoin(instancesDir, String(folder || ""));
   if (path.dirname(sourceDir) !== path.resolve(instancesDir)) throw new Error("Carpeta de instancia no válida.");
-  const info = await readCurseForgeInstance(instancesDir, folder);
+  // Bigger than the list's icon: without a banner this is also the Hub card's cover.
+  const info = await readCurseForgeInstance(instancesDir, folder, 256);
   if (!info) throw new Error("No es una instancia de CurseForge (falta minecraftinstance.json).");
   if (info.unsupported) throw new Error(info.unsupported);
 
@@ -2437,7 +2697,7 @@ function isAllowedMrpackUrl(url) {
   }
 }
 
-ipcMain.handle("modrinth:install-modpack", async (event, { url, sha1, name, iconDataUrl, projectId, versionId, versionNumber }) => {
+ipcMain.handle("modrinth:install-modpack", async (event, { url, sha1, name, iconDataUrl, bannerDataUrl, projectId, versionId, versionNumber }) => {
   if (!isAllowedMrpackUrl(url) || !url.endsWith(".mrpack")) throw new Error("Enlace de modpack no válido.");
   const send = (data) => {
     if (!event.sender.isDestroyed()) event.sender.send("modrinth:install-progress", { versionId, ...data });
@@ -2538,6 +2798,12 @@ ipcMain.handle("modrinth:install-modpack", async (event, { url, sha1, name, icon
       loaderType,
       loaderVersion,
       iconDataUrl: typeof iconDataUrl === "string" && iconDataUrl.startsWith("data:image/") ? iconDataUrl : undefined,
+      bannerDataUrl:
+        typeof bannerDataUrl === "string" && bannerDataUrl.startsWith("data:image/") && bannerDataUrl.length <= MAX_INSTANCE_IMAGE
+          ? bannerDataUrl
+          : undefined,
+      // undefined = the gallery couldn't be read: lib/modrinth-banner.ts tries again.
+      bannerChecked: bannerDataUrl !== undefined,
       installedAt: Date.now(),
       source: "custom",
       importedFrom: { type: "modrinth", projectId, versionId, versionNumber },
@@ -2584,7 +2850,11 @@ ipcMain.handle("instances:update-settings", async (_, { id, name, iconDataUrl, b
     if ((cleanName && cleanName !== meta.name) || icon !== undefined || banner !== undefined) delete meta.duplicatedFrom;
     if (cleanName) meta.name = cleanName;
     if (icon !== undefined) meta.iconDataUrl = icon || undefined;
-    if (banner !== undefined) meta.bannerDataUrl = banner || undefined;
+    if (banner !== undefined) {
+      meta.bannerDataUrl = banner || undefined;
+      // A banner chosen or removed by hand stays that way (lib/modrinth-banner.ts).
+      meta.bannerChecked = true;
+    }
   } else if (resetOverrides) {
     delete meta.overrides;
   } else {
@@ -2940,9 +3210,16 @@ function isPlayerEditableFile(relPath) {
 
 ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manifest, baseUrl, token, optionalGroupChoice }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
+  // Checking what's already on disk, downloading what's missing into the
+  // object cache, copying it into the instance, and the final cleanup.
+  const progress = createPhaseProgress(
+    (p) => win?.webContents.send("install-progress", { modpackId, ...p }),
+    { checking: 15, downloading: 65, placing: 15, finishing: 5 }
+  );
   acquireModpackOp(modpackId, "installing");
   try {
   validateManifest(manifest);
+  progress.set("checking", "Verificando archivos", 0);
   if (typeof baseUrl !== "string" || !baseUrl.startsWith("https://")) {
     throw new Error("Falta URL base de objetos (https)");
   }
@@ -3038,16 +3315,8 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
 
   const total = manifest.files.length;
   let done = 0;
-  const sendProgress = (stage) => {
-    win?.webContents.send("install-progress", {
-      modpackId,
-      stage: stage || "downloading",
-      progress: total === 0 ? 100 : Math.round((done / total) * 100),
-      done,
-      total,
-    });
-  };
-  sendProgress();
+  let checked = 0;
+  const sendProgress = () => progress.set("checking", "Verificando archivos", total === 0 ? 1 : checked / total);
 
   // Pre-resolve dest paths; skip entries that are already on-disk with correct hash.
   // Empty files (size 0) are split out: they aren't published to GitHub, we just touch them.
@@ -3055,6 +3324,7 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
   const pending = []; // [{ entry, destPath }]
   const emptyFiles = []; // [{ entry, destPath }]
   for (const f of manifest.files) {
+    checked++;
     let destPath = safeJoin(instanceDir, f.path);
     // An optional mod the player disabled (foo.jar → foo.jar.disabled, see
     // mc:set-mod-enabled) counts as present: check/update it under the
@@ -3100,37 +3370,30 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
     } else {
       pending.push({ entry: f, destPath });
     }
+    sendProgress();
   }
 
   // Phase 1: ensure all needed objects exist in the global cache (no instance writes yet).
-  // Progress is advanced by the number of pending files that depend on each downloaded hash,
-  // so the UI moves smoothly from 0 → 100 across both phases.
-  const filesByHash = new Map();
+  // Its percentage goes by bytes, so a big mod weighs more than a config file.
+  const sizeByHash = new Map();
   const pathsByHash = new Map();
   for (const p of pending) {
-    if (!filesByHash.has(p.entry.hash)) {
-      filesByHash.set(p.entry.hash, 0);
+    if (!sizeByHash.has(p.entry.hash)) {
+      sizeByHash.set(p.entry.hash, Math.max(1, Number(p.entry.size) || 1));
       pathsByHash.set(p.entry.hash, []);
     }
-    filesByHash.set(p.entry.hash, filesByHash.get(p.entry.hash) + 1);
     pathsByHash.get(p.entry.hash).push(p.entry.path);
   }
-  const uniqueHashes = Array.from(filesByHash.keys());
-
-  // Reserve half the remaining work for the download phase, half for the place phase.
-  // We advance "virtual done" by 0.5 per file in phase 1, then 0.5 per file in phase 2.
-  let virtualDone = done * 2; // scale to half-units
-  const virtualTotal = total * 2;
-  const sendVirtual = () => {
-    win?.webContents.send("install-progress", {
-      modpackId,
-      stage: "downloading",
-      progress: virtualTotal === 0 ? 100 : Math.round((virtualDone / virtualTotal) * 100),
-      done: Math.floor(virtualDone / 2),
-      total,
-    });
-  };
-  sendVirtual();
+  const uniqueHashes = Array.from(sizeByHash.keys());
+  const bytesTotal = uniqueHashes.reduce((s, h) => s + sizeByHash.get(h), 0);
+  let bytesDone = 0;
+  const sendDownload = () =>
+    progress.set(
+      "downloading",
+      `Descargando ${uniqueHashes.length === 1 ? "1 archivo" : `${uniqueHashes.length} archivos`}`,
+      bytesTotal === 0 ? 1 : bytesDone / bytesTotal
+    );
+  if (uniqueHashes.length > 0) sendDownload();
 
   // Failures don't abort the batch — a single missing object (typically one that
   // never actually got uploaded during a prior publish) used to kill the whole
@@ -3160,8 +3423,8 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
         failedHashes.push({ hash, error: e.message });
         continue;
       }
-      virtualDone += filesByHash.get(hash);
-      sendVirtual();
+      bytesDone += sizeByHash.get(hash);
+      sendDownload();
     }
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, () => downloadWorker()));
@@ -3169,12 +3432,13 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
   const failedHashSet = new Set(failedHashes.map((f) => f.hash));
 
   // Phase 2: place files from cache into instance dir (skip anything that failed above).
+  let placed = 0;
   for (const { entry, destPath } of pending) {
     if (failedHashSet.has(entry.hash)) continue;
     await placeObject(entry.hash, destPath);
     done++;
-    virtualDone += 1;
-    sendVirtual();
+    placed++;
+    progress.set("placing", "Copiando archivos a la instancia", placed / pending.length);
   }
 
   if (failedHashes.length > 0) {
@@ -3196,9 +3460,8 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
     const fh = await fs.open(destPath, "w");
     await fh.close();
     done++;
-    virtualDone += 2;
-    sendVirtual();
   }
+  progress.set("finishing", "Terminando");
 
   // Phase 3: delete files that were in old manifest but not in new (only after a successful install).
   for (const [p] of oldByPath) {
@@ -3244,9 +3507,11 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
   };
   await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
 
-  win?.webContents.send("install-progress", { modpackId, stage: "done", progress: 100 });
+  progress.stop();
+  win?.webContents.send("install-progress", { modpackId, stage: "done", label: "Listo", phaseProgress: 1, overallProgress: 1, progress: 100 });
   return { success: true, totalFiles: total };
   } finally {
+    progress.stop();
     releaseModpackOp(modpackId);
   }
 });
@@ -3809,6 +4074,13 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
     throw new Error("Minecraft ya está en marcha para este modpack.");
   }
 
+  const win = BrowserWindow.fromWebContents(event.sender);
+  // Everything a first launch of a never-seen MC/loader/Java may have to fetch;
+  // with all of it cached most phases are skipped in a blink.
+  const progress = createPhaseProgress(
+    (p) => win?.webContents.send("launch-status", { modpackId, ...p }),
+    { preparing: 2, downloading_client: 10, downloading_assets: 30, downloading_libraries: 8, installing_loader: 25, extracting_natives: 3, installing_java: 15, launching: 7 }
+  );
   acquireModpackOp(modpackId, "launching");
   try {
   // Bloqueo de contenido: last sweep right before the game reads its mods.
@@ -3820,8 +4092,7 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   if (!effectiveClientId) {
     console.warn(`[mc:launch] WARNING: launching with empty --clientId. Online server joins may fail.`);
   }
-  const win = BrowserWindow.fromWebContents(event.sender);
-  win?.webContents.send("launch-status", { modpackId, stage: "preparing" });
+  progress.set("preparing", "Preparando");
 
   const librariesDir = path.join(CACHE_DIR, "libraries");
   const assetsDir = path.join(CACHE_DIR, "assets");
@@ -3831,10 +4102,15 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   await fs.mkdir(assetsDir, { recursive: true });
   await fs.mkdir(nativesDir, { recursive: true });
 
-  win?.webContents.send("launch-status", { modpackId, stage: "downloading_client" });
-  const { clientJarPath, versionJson } = await ensureClientJar(mcVersion);
+  // "Descargando…" only once something really downloads: with everything
+  // cached these phases are just a quick check, and saying "Descargando" on
+  // an instance that's already there was confusing.
+  progress.set("downloading_client", `Verificando Minecraft ${mcVersion}`);
+  const { clientJarPath, versionJson } = await ensureClientJar(mcVersion, (pct) =>
+    progress.set("downloading_client", `Descargando Minecraft ${mcVersion}`, pct / 100)
+  );
 
-  win?.webContents.send("launch-status", { modpackId, stage: "downloading_assets" });
+  progress.set("downloading_assets", "Verificando recursos de Minecraft");
   const assetIndexId = versionJson.assetIndex.id;
   const assetIndexDir = path.join(assetsDir, "indexes");
   await fs.mkdir(assetIndexDir, { recursive: true });
@@ -3845,32 +4121,30 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
 
   const assetIndex = JSON.parse(await fs.readFile(assetIndexPath, "utf8"));
   const objectsDir = path.join(assetsDir, "objects");
-  const assetEntries = Object.entries(assetIndex.objects || {});
+  // Only the missing ones, so the % is the real download's.
+  const missingAssets = Object.values(assetIndex.objects || {}).filter(
+    (obj) => !fsSync.existsSync(path.join(objectsDir, obj.hash.substring(0, 2), obj.hash))
+  );
   let downloadedAssets = 0;
   const ASSET_BATCH = 20;
 
-  for (let i = 0; i < assetEntries.length; i += ASSET_BATCH) {
-    const batch = assetEntries.slice(i, i + ASSET_BATCH);
+  for (let i = 0; i < missingAssets.length; i += ASSET_BATCH) {
+    const batch = missingAssets.slice(i, i + ASSET_BATCH);
     await Promise.all(
-      batch.map(async ([, obj]) => {
+      batch.map(async (obj) => {
         const hash = obj.hash;
         const prefix = hash.substring(0, 2);
         const assetDir = path.join(objectsDir, prefix);
         await fs.mkdir(assetDir, { recursive: true });
-        const assetPath = path.join(assetDir, hash);
-        if (!fsSync.existsSync(assetPath)) {
-          await downloadFile(`https://resources.download.minecraft.net/${prefix}/${hash}`, assetPath, () => {});
-        }
+        await downloadFile(`https://resources.download.minecraft.net/${prefix}/${hash}`, path.join(assetDir, hash), () => {});
       })
     );
     downloadedAssets += batch.length;
-    win?.webContents.send("launch-status", {
-      modpackId, stage: "downloading_assets",
-      progress: Math.round((downloadedAssets / assetEntries.length) * 100),
-    });
+    progress.set("downloading_assets", "Descargando recursos de Minecraft", downloadedAssets / missingAssets.length);
   }
 
-  win?.webContents.send("launch-status", { modpackId, stage: "downloading_libraries" });
+  let libsLabel = "Verificando librerías";
+  progress.set("downloading_libraries", libsLabel, 0);
   const classpath = [clientJarPath];
   const currentPlatform = process.platform.replace("win32", "windows").replace("darwin", "osx");
 
@@ -3892,7 +4166,10 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
     vanillaLibPaths.delete(key);
   };
 
-  for (const lib of versionJson.libraries || []) {
+  const vanillaLibs = versionJson.libraries || [];
+  let libsChecked = 0;
+  for (const lib of vanillaLibs) {
+    progress.set("downloading_libraries", libsLabel, libsChecked++ / vanillaLibs.length);
     if (lib.rules) {
       const allowed = lib.rules.every((rule) => {
         if (rule.action === "allow") return !rule.os || rule.os.name === currentPlatform;
@@ -3905,7 +4182,11 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
       const artifact = lib.downloads.artifact;
       const libPath = path.join(librariesDir, artifact.path);
       await fs.mkdir(path.dirname(libPath), { recursive: true });
-      if (!fsSync.existsSync(libPath)) await downloadFile(artifact.url, libPath, () => {});
+      if (!fsSync.existsSync(libPath)) {
+        libsLabel = "Descargando librerías";
+        progress.set("downloading_libraries", libsLabel, (libsChecked - 1) / vanillaLibs.length);
+        await downloadFile(artifact.url, libPath, () => {});
+      }
       classpath.push(libPath);
       const key = libKey(lib.name);
       if (key) vanillaLibPaths.set(key, libPath);
@@ -3916,19 +4197,23 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   const modsDir = path.join(instanceDir, "mods");
   await fs.mkdir(modsDir, { recursive: true });
 
-  win?.webContents.send("launch-status", { modpackId, stage: "downloading_libraries" });
-
   let mainClass = versionJson.mainClass;
   let loaderProfile = null;
   let loaderLibsDir = librariesDir;
 
   if (loaderType === "fabric" || loaderType === "quilt") {
     try {
-      win?.webContents.send("launch-status", { modpackId, stage: "installing_loader" });
+      const loaderName = loaderType === "quilt" ? "Quilt" : "Fabric";
+      // "Instalando" once one of its libraries actually has to be downloaded.
+      let fabricLabel = `Preparando ${loaderName}`;
+      progress.set("installing_loader", fabricLabel, null, { span: [0, 0.1] });
       const fabricProfile = await resolveFabricProfile(mcVersion, pinnedLoaderVersion);
       loaderProfile = fabricProfile;
       mainClass = fabricProfile.mainClass;
-      for (const lib of fabricProfile.libraries || []) {
+      const fabricLibs = fabricProfile.libraries || [];
+      let fabricDone = 0;
+      for (const lib of fabricLibs) {
+        progress.set("installing_loader", fabricLabel, fabricDone++ / fabricLibs.length, { span: [0.1, 1] });
         const parts = lib.name.split(":");
         const [group, artifact, ver] = parts;
         const groupPath = group.replace(/\./g, "/");
@@ -3937,6 +4222,8 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
         const libPath = path.join(librariesDir, relPath);
         await fs.mkdir(path.dirname(libPath), { recursive: true });
         if (!fsSync.existsSync(libPath)) {
+          fabricLabel = `Instalando ${loaderName}`;
+          progress.set("installing_loader", fabricLabel, (fabricDone - 1) / fabricLibs.length, { span: [0.1, 1] });
           const baseUrl = lib.url || "https://repo1.maven.org/maven2/";
           await downloadFile(baseUrl + relPath, libPath, () => {});
         }
@@ -3955,13 +4242,13 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
 
   if (loaderType === "neoforge") {
     try {
-      win?.webContents.send("launch-status", { modpackId, stage: "installing_loader" });
+      progress.set("installing_loader", "Preparando NeoForge", null, { span: [0, 0.03] });
       const neoforgeVersion = pinnedLoaderVersion || await resolveNeoforgeVersion(mcVersion);
       if (!neoforgeVersion) throw new Error(`No se encontró NeoForge para MC ${mcVersion}`);
       console.log(`[NeoForge] Usando versión ${neoforgeVersion}`);
       const { profile, installLibsDir } = await runForgeInstallerDirect(
         "neoforge", neoforgeVersion, mcVersion, clientJarPath, librariesDir,
-        (msg) => win?.webContents.send("launch-status", { modpackId, stage: "installing_loader", msg })
+        (label, phaseProgress, span) => progress.set("installing_loader", label, phaseProgress, { span })
       );
       loaderProfile = profile;
       loaderLibsDir = installLibsDir;
@@ -3985,13 +4272,13 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
 
   if (loaderType === "forge") {
     try {
-      win?.webContents.send("launch-status", { modpackId, stage: "installing_loader" });
+      progress.set("installing_loader", "Preparando Forge", null, { span: [0, 0.03] });
       const forgeVersion = pinnedLoaderVersion || await resolveForgeVersion(mcVersion);
       if (!forgeVersion) throw new Error(`No se encontró Forge para MC ${mcVersion}`);
       console.log(`[Forge] Usando versión ${forgeVersion}`);
       const { profile, installLibsDir } = await runForgeInstallerDirect(
         "forge", forgeVersion, mcVersion, clientJarPath, librariesDir,
-        (msg) => win?.webContents.send("launch-status", { modpackId, stage: "installing_loader", msg })
+        (label, phaseProgress, span) => progress.set("installing_loader", label, phaseProgress, { span })
       );
       loaderProfile = profile;
       loaderLibsDir = installLibsDir;
@@ -4013,10 +4300,8 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
     }
   }
 
-  win?.webContents.send("launch-status", { modpackId, stage: "extracting_natives" });
+  progress.set("extracting_natives", "Descomprimiendo librerías nativas");
   await extractNatives(versionJson.libraries || [], nativesDir);
-
-  win?.webContents.send("launch-status", { modpackId, stage: "launching" });
 
   const requiredJavaMajor = versionJson.javaVersion?.majorVersion ?? 8;
   let javaPath = await getJavaPathForMajor(requiredJavaMajor);
@@ -4032,16 +4317,11 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
     } catch {}
   }
   if (!javaPath) {
-    win?.webContents.send("launch-status", { modpackId, stage: "installing_java", javaMajor: requiredJavaMajor, progress: 0 });
+    progress.set("installing_java", `Buscando Java ${requiredJavaMajor}`);
     try {
       javaPath = await installJavaMajor(requiredJavaMajor, (p) => {
-        win?.webContents.send("launch-status", {
-          modpackId,
-          stage: "installing_java",
-          javaMajor: requiredJavaMajor,
-          javaSubstage: p.stage,
-          progress: p.progress ?? 0,
-        });
+        const step = javaInstallStep(requiredJavaMajor, p);
+        if (step) progress.set("installing_java", step.label, step.phaseProgress, { span: step.span, extra: { javaMajor: requiredJavaMajor } });
       });
     } catch (e) {
       throw new Error(`Java ${requiredJavaMajor} requerido y no se pudo instalar automáticamente: ${e.message}`);
@@ -4147,6 +4427,8 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   // update replaces — or the project folder in dev), and any mod writing to a
   // relative path (Crash Assistant's local/, etc.) put its data there: shared
   // between instances and wiped on each update.
+  progress.set("launching", "Lanzando");
+  const spawnedAt = Date.now();
   const child = spawn(javaPath, mcArgs, { detached: true, stdio, cwd: instanceDir });
   if (logFd !== null) fsSync.closeSync(logFd);
 
@@ -4172,6 +4454,8 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
     let logContent = "";
     try { logContent = (await fs.readFile(logFile, "utf8")).slice(-5000); } catch {}
     console.error("[Launch] Java crashed (code", exitCode, "):\n", logContent);
+    // Never got to the playtime watcher: count this crash here.
+    await recordSessionOutcome(modpackId, spawnedAt, { name: displayName || modpackId }).catch(() => {});
     win?.webContents.send("launch-status", { modpackId, stage: "error", message: `Java salió con código ${exitCode}` });
     throw new Error(`Java salió con código ${exitCode}. Log guardado en: ${logFile}`);
   }
@@ -4208,9 +4492,19 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   waitForGameWindow(modpackId, child.pid, logFile);
 
   child.unref();
-  win?.webContents.send("launch-status", { modpackId, stage: "launched" });
+  progress.stop();
+  // The game window takes a while more to show up: the renderer holds this
+  // until the instance's run state turns "running".
+  win?.webContents.send("launch-status", {
+    modpackId,
+    stage: "launched",
+    label: "Abriendo Minecraft",
+    phaseProgress: null,
+    overallProgress: Math.max(progress.overall(), 0.97),
+  });
   return { success: true, pid: child.pid };
   } finally {
+    progress.stop();
     releaseModpackOp(modpackId);
   }
 });
@@ -4401,7 +4695,10 @@ function isUsableLaunchFile(p) {
   }
 }
 
+// sendStatus(label, phaseProgress, span): what it's doing for the Play button's
+// progress — `span` is that step's share of the "installing the loader" phase.
 async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, clientJarPath, libsDir, sendStatus) {
+  const loaderName = loaderType === "neoforge" ? "NeoForge" : "Forge";
   // v4 cache key: also stores a manifest of processor output paths so we can detect
   // incomplete processor runs (processors that failed silently leave the profile cached
   // but the output JARs missing — game then crashes with NoClassDefFoundError).
@@ -4451,10 +4748,12 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
   }
 
   const installerPath = path.join(CACHE_DIR, installerFilename);
-  sendStatus?.("Descargando instalador...");
-  await downloadFile(installerUrl, installerPath, () => {});
+  sendStatus?.(`Descargando instalador de ${loaderName}`, 0, [0.03, 0.15]);
+  await downloadFile(installerUrl, installerPath, (pct) =>
+    sendStatus?.(`Descargando instalador de ${loaderName}`, pct / 100, [0.03, 0.15])
+  );
 
-  sendStatus?.("Leyendo perfil...");
+  sendStatus?.(`Instalando ${loaderName}`, null, [0.15, 0.2]);
   let installProfile, versionJson;
   try {
     installProfile = JSON.parse(readZipEntry(installerPath, "install_profile.json").toString("utf8"));
@@ -4477,7 +4776,6 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
     throw new Error(`No se pudo leer el instalador de ${loaderType}: ${e.message}`);
   }
 
-  sendStatus?.("Extrayendo librerías internas...");
   try {
     const zip = new AdmZip(installerPath);
     for (const entry of zip.getEntries()) {
@@ -4492,7 +4790,7 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
     console.warn(`[${loaderType}] No se pudo extraer maven/ interno:`, e.message);
   }
 
-  sendStatus?.("Descargando dependencias del loader...");
+  sendStatus?.(`Descargando librerías de ${loaderName}`, 0, [0.2, 0.45]);
   const mavenBases = loaderType === "neoforge"
     ? ["https://maven.neoforged.net/releases/", "https://libraries.minecraft.net/", "https://repo1.maven.org/maven2/"]
     : ["https://maven.minecraftforge.net/", "https://libraries.minecraft.net/", "https://repo1.maven.org/maven2/"];
@@ -4504,7 +4802,9 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
   // downloading just the first list silently fetched nothing for them.
   const libsToFetch = [...(installProfile.libraries || []), ...(versionJson.libraries || [])];
   const seenLibKeys = new Set();
+  let libsChecked = 0;
   for (const lib of libsToFetch) {
+    sendStatus?.(`Descargando librerías de ${loaderName}`, libsChecked++ / libsToFetch.length, [0.2, 0.45]);
     const key = lib.name || lib.downloads?.artifact?.path;
     if (!key || seenLibKeys.has(key)) continue;
     seenLibKeys.add(key);
@@ -4518,7 +4818,7 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
   // missing, processors fail silently and the patched minecraft jar is never generated, which
   // makes the game crash at launch with "Mod ID 'minecraft' [MISSING]" / NoClassDefFoundError on
   // net.minecraft.* classes.
-  sendStatus?.("Preparando cliente y mappings de Minecraft...");
+  sendStatus?.(`Preparando Minecraft para ${loaderName}`, null, [0.45, 0.5]);
   try {
     const mcLibDir = path.join(libsDir, "net", "minecraft", "client", mcVersion);
     await fs.mkdir(mcLibDir, { recursive: true });
@@ -4550,7 +4850,6 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
     (p) => !p.sides || p.sides.includes("client")
   );
 
-  sendStatus?.("Ejecutando procesadores (solo primera vez)...");
   // Processors run under the loader's own required Java major, which can differ
   // from whatever else is already cached — resolve/download it the same way the
   // final launch does instead of assuming a globally-installed JRE.
@@ -4565,9 +4864,10 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
     } catch {}
   }
   if (!javaExe) {
-    sendStatus?.(`Descargando Java ${loaderJavaMajor} (necesario para instalar ${loaderType})...`);
+    sendStatus?.(`Buscando Java ${loaderJavaMajor}`, null, [0.5, 0.52]);
     javaExe = await installJavaMajor(loaderJavaMajor, (p) => {
-      if (p.stage === "downloading") sendStatus?.(`Descargando Java ${loaderJavaMajor}... ${p.progress}%`);
+      const step = javaInstallStep(loaderJavaMajor, p, [0.5, 0.7]);
+      if (step) sendStatus?.(step.label, step.phaseProgress, step.span);
     });
   }
 
@@ -4611,7 +4911,7 @@ async function runForgeInstallerDirect(loaderType, loaderVersion, mcVersion, cli
 
   for (let i = 0; i < processors.length; i++) {
     const proc = processors[i];
-    sendStatus?.(`Procesador ${i + 1}/${processors.length}...`);
+    sendStatus?.(`Instalando ${loaderName}`, i / processors.length, [0.7, 1]);
 
     const jarPath = path.join(libsDir, mavenCoordToPath(proc.jar));
     if (!fsSync.existsSync(jarPath)) { console.warn(`[Processor] JAR no encontrado: ${jarPath}`); continue; }
@@ -4944,6 +5244,17 @@ async function getJavaPathForMajor(major) {
 // identical finalDir at once — interleaved writes to one file, or one instance's rename
 // landing mid-way through the other's rm, corrupting the JRE either way.
 const inFlightJavaInstalls = new Map(); // major -> Promise<binPath>
+
+// installJavaMajor's progress ({ stage, progress }) as createPhaseProgress
+// arguments — label, 0..1 and the step's span of the phase (scaled into
+// `outer` when Java is only part of a bigger phase); null for "done".
+function javaInstallStep(major, p, outer = [0, 1]) {
+  const within = (a, b) => [outer[0] + (outer[1] - outer[0]) * a, outer[0] + (outer[1] - outer[0]) * b];
+  if (p?.stage === "fetching") return { label: `Buscando Java ${major}`, phaseProgress: null, span: within(0, 0.05) };
+  if (p?.stage === "downloading") return { label: `Descargando Java ${major}`, phaseProgress: (p.progress ?? 0) / 100, span: within(0.05, 0.8) };
+  if (p?.stage === "extracting") return { label: `Descomprimiendo Java ${major}`, phaseProgress: null, span: within(0.8, 1) };
+  return null;
+}
 
 function installJavaMajor(major, onProgress) {
   const inFlight = inFlightJavaInstalls.get(major);

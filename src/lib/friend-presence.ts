@@ -21,6 +21,7 @@ export function toPresenceEntries(
       online: a ? a.status !== "offline" : false,
       lastSeen: a?.lastSeen ?? friend.since,
       playing: a?.status === "playing",
+      playingName: a?.status === "playing" ? a.instanceName : undefined,
     };
   }
   return out;

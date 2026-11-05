@@ -34,7 +34,7 @@ const label = (n: string) => n.replace(/^.*\//, "").replace(/\.webm$/i, "").repl
 /** Same layers as the Profile page's card: banner, left-to-right fade, content. */
 function BannerPreview({ videoUrl, headUrl, username }: { videoUrl: string; headUrl: string | null; username: string }) {
   return (
-    <div className="relative h-[120px] rounded-xl border border-white/10 bg-card/40 overflow-hidden">
+    <div className="relative h-[120px] rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden">
       <div className="absolute inset-0">
         <video src={videoUrl} autoPlay loop muted playsInline className="w-full h-full object-cover" />
         <div className="absolute inset-0 bg-gradient-to-r from-background via-background/85 to-background/25" />

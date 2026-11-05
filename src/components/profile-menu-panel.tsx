@@ -139,7 +139,7 @@ export function ProfileBannerCard({ uuid, username, onNavigate }: ProfileMenuPan
   return (
     <>
       <ProfileFrame frame={frame}>
-        <div className="relative rounded-xl border border-white/10 overflow-hidden shrink-0">
+        <div className="relative rounded-md border border-transparent overflow-hidden shrink-0">
           <div className="absolute inset-0">
             {devBannerVideo ? (
               <video src={devBannerVideo} autoPlay loop muted playsInline className="w-full h-full object-cover" />

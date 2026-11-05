@@ -45,7 +45,7 @@ interface ModrinthProjectFull {
   categories: string[];
   downloads: number;
   followers: number;
-  gallery: Array<{ url: string; title?: string; featured: boolean }>;
+  gallery: Array<{ url: string; raw_url?: string; title?: string; featured: boolean }>;
 }
 
 const API = "https://api.modrinth.com/v2";
@@ -290,7 +290,8 @@ export interface ModrinthProjectDetail {
   categories: string[];
   downloads: number;
   followers: number;
-  gallery: Array<{ url: string; title?: string }>;
+  /** `url` is often a 350px thumbnail; `rawUrl` is the original upload. */
+  gallery: Array<{ url: string; rawUrl?: string; title?: string; featured?: boolean }>;
 }
 
 const projectDetailCache = new Map<string, ModrinthProjectDetail | null>();
@@ -311,7 +312,7 @@ export async function getProjectDetail(projectId: string): Promise<ModrinthProje
       categories: p.categories ?? [],
       downloads: p.downloads ?? 0,
       followers: p.followers ?? 0,
-      gallery: (p.gallery ?? []).map((g) => ({ url: g.url, title: g.title })),
+      gallery: (p.gallery ?? []).map((g) => ({ url: g.url, rawUrl: g.raw_url, title: g.title, featured: g.featured })),
     };
     projectDetailCache.set(projectId, detail);
     return detail;

@@ -84,6 +84,7 @@ export function Titlebar() {
   const [onPublicProfile] = useRoute("/profile/:uuid");
   const [onFriends] = useRoute("/friends");
   const [onServers] = useRoute("/servers");
+  const [onExplore] = useRoute("/explore");
   const [onSettings] = useRoute("/settings");
   const [onAdmin] = useRoute("/admin");
   // The admin's sub-pages (a modpack, the mod library) go back to the panel,
@@ -91,7 +92,7 @@ export function Titlebar() {
   const onAdminSubpage = location.startsWith("/admin/");
   const [onHome] = useRoute("/");
   const showBack =
-    onModpackDetail || onOnlineInstance || onHub || onProfile || onPublicProfile || onFriends || onServers || onSettings || onAdmin || onAdminSubpage;
+    onModpackDetail || onOnlineInstance || onHub || onProfile || onPublicProfile || onFriends || onServers || onExplore || onSettings || onAdmin || onAdminSubpage;
   const backTarget = onAdminSubpage ? "/admin" : getLastViewPath();
   const isAdmin = useIsAdmin();
   const [redeemOpen, setRedeemOpen] = useState(false);

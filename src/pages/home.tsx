@@ -41,7 +41,7 @@ import { FooterPanelButton } from "@/components/footer-panel-button";
 import { InstanceMembersPanel } from "@/components/instance-members-panel";
 import { ChangelogHistoryButton } from "@/components/changelog-history-button";
 import { ChangelogViewerDialog } from "@/components/changelog-viewer-dialog";
-import { PresenceButton } from "@/components/presence-button";
+import { ActivityButton } from "@/components/activity-button";
 import { ChatWindow } from "@/components/chat-window";
 import { ChatBubbleRow } from "@/components/chat-bubble-row";
 import type { ChatMode } from "@/lib/instance-context";
@@ -70,47 +70,12 @@ const api = (window as any).electronAPI;
  *  carousel of their own. */
 export const CAROUSEL_POSITION_KEY = "alaunchi_carousel_pack_id";
 
-const LAUNCH_STAGE_PROGRESS: Record<string, number> = {
-  preparing: 5,
-  downloading_client: 20,
-  downloading_assets: 50,
-  downloading_libraries: 70,
-  installing_loader: 85,
-  extracting_natives: 92,
-  installing_java: 94,
-  launching: 97,
-  launched: 100,
-};
-
-// Deliberately coarse — every underlying stage (fetching a JRE, downloading the
-// client jar, downloading assets/libraries...) collapses into one of a handful
-// of generic words instead of a different message per stage.
-const LAUNCH_STAGE_LABEL: Record<string, string> = {
-  preparing: "Preparando",
-  downloading_client: "Descargando",
-  downloading_assets: "Descargando",
-  downloading_libraries: "Descargando",
-  installing_loader: "Instalando",
-  extracting_natives: "Extrayendo",
-  installing_java: "Descargando",
-  launching: "Iniciando",
-  launched: "¡Listo!",
-};
-
-const INSTALL_STAGE_LABEL: Record<string, string> = {
-  downloading: "Descargando",
-  updating: "Descargando",
-  extracting: "Extrayendo",
-  done: "Completado",
-};
-
 interface ModpackActionBarProps {
   pack: Modpack;
 }
 
 function ModpackActionBar({ pack }: ModpackActionBarProps) {
   const [status, setStatus] = useState<"idle" | "installing" | "updating" | "launching">("idle");
-  const [progress, setProgress] = useState(0);
   const [stageLabel, setStageLabel] = useState("");
   const { updateModpackStatus } = useModpacks();
   const { getValidTokenForLaunch } = useAuth();
@@ -170,21 +135,14 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
         setTimeout(() => setStatus("idle"), 4000);
         return;
       }
-      setStageLabel(LAUNCH_STAGE_LABEL[data.stage] ?? data.stage);
-      setProgress(LAUNCH_STAGE_PROGRESS[data.stage] ?? progress);
+      if (data.label) setStageLabel(data.label);
       if (data.stage === "launched") {
         setTimeout(() => setStatus("idle"), 2500);
       }
     });
     const offInstall = api.onInstallProgress((data: any) => {
       if (data.modpackId !== pack.id) return;
-      if (data.stage === "done") {
-        setProgress(100);
-        setStageLabel("Completado");
-      } else {
-        setProgress(data.progress ?? 0);
-        setStageLabel(INSTALL_STAGE_LABEL[data.stage] ?? "Descargando...");
-      }
+      setStageLabel(data.label ?? (data.stage === "done" ? "Completado" : "Descargando"));
     });
     return () => { offLaunch(); offInstall(); };
   }, [pack.id]);
@@ -225,7 +183,6 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   // confirmation gate here, it just gets on with the update.
   const installFromSnapshot = async (mode: "installing" | "updating") => {
     setStatus(mode);
-    setProgress(0);
     setStageLabel("Obteniendo manifiesto...");
     try {
       const { repoUrl, token } = requirePackSource(pack);
@@ -298,7 +255,6 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
         toast.success(`${pack.name} actualizado a v${manifest.version}.`);
       }
       setStatus("launching");
-      setProgress(5);
       setStageLabel("Preparando...");
 
       // Refresh the MC token right before launching — this is what CurseForge and other
@@ -376,7 +332,8 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   // border to a bottom corner, then straight out to that side's screen edge.
   // Drawn with the SVG dash-offset trick (pathLength=100 normalizes it so the
   // dash offset IS the percentage) so the reveal is directly proportional to
-  // the real `progress` value the whole way — no separate phases/rates.
+  // the whole operation's real progress (the same as the chip's fill: main's
+  // phases weighted into one 0..1, use-instance-progress.ts) — never goes back.
   const g = trailGeo;
   const leftPath = g
     ? `M ${g.centerX} ${g.top} L ${g.left} ${g.top} L ${g.left} ${g.bottom} L ${g.left} ${g.extendY} L 0 ${g.extendY}`
@@ -384,7 +341,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   const rightPath = g
     ? `M ${g.centerX} ${g.top} L ${g.right} ${g.top} L ${g.right} ${g.bottom} L ${g.right} ${g.extendY} L ${g.screenW} ${g.extendY}`
     : "";
-  const dashOffset = 100 - progress;
+  const dashOffset = 100 - (chip.entry?.progress ?? 0) * 100;
 
   return (
     <div className="relative w-64">
@@ -681,7 +638,7 @@ export default function Home() {
   }, [modpacks]);
 
   const currentPack = modpacks[currentIndex];
-  // Shared by PresenceButton and ChatWindow below — both need "which carousel
+  // Shared by ChatWindow below (was also PresenceButton's) — both need "which carousel
   // pack (if any) is this page currently showing" in the same shape. A past
   // (out-of-network) instance has no instance chat/players anymore → general.
   const viewContext: ChatMode =
@@ -777,7 +734,7 @@ export default function Home() {
           {/* Same animated background as the Hub, under everything (z-0). */}
           <AppBackground />
           <div className="relative z-10 flex-1 min-h-0 flex flex-col px-6 pt-6 pb-4 gap-6">
-            <div className="relative shrink-0 rounded-xl border border-white/10 bg-card/40 p-5 overflow-hidden">
+            <div className="relative shrink-0 rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md p-5 overflow-hidden">
               <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
               <div className="relative min-w-0">
                 <h1 className="text-xl font-bold leading-tight">Instancias online</h1>
@@ -847,7 +804,7 @@ export default function Home() {
           // entirely, the same way the loaded-carousel branch further below already does.
           <div className="absolute inset-0 flex items-center justify-center px-6">
             <div className="absolute inset-0 bg-gradient-to-b from-destructive/[0.04] via-transparent to-transparent" />
-            <div className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-card/50 backdrop-blur-sm px-8 py-10 flex flex-col items-center text-center gap-5 shadow-xl shadow-black/20">
+            <div className="relative w-full max-w-sm rounded-md border border-transparent bg-gray-500/10 backdrop-blur-sm px-8 py-10 flex flex-col items-center text-center gap-5 shadow-xl shadow-black/20">
               <div className="h-16 w-16 rounded-2xl bg-destructive/10 border border-destructive/25 flex items-center justify-center">
                 <AlertTriangle className="h-7 w-7 text-destructive" />
               </div>
@@ -864,7 +821,7 @@ export default function Home() {
         ) : modpacks.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center px-6">
             <div className="absolute inset-0 bg-gradient-to-b from-accent/[0.04] via-transparent to-transparent" />
-            <div className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-card/50 backdrop-blur-sm px-8 py-10 flex flex-col items-center text-center gap-5 shadow-xl shadow-black/20">
+            <div className="relative w-full max-w-sm rounded-md border border-transparent bg-gray-500/10 backdrop-blur-sm px-8 py-10 flex flex-col items-center text-center gap-5 shadow-xl shadow-black/20">
               <div className="h-16 w-16 rounded-2xl bg-accent/10 border border-accent/25 flex items-center justify-center">
                 {isAdmin ? <Settings className="h-7 w-7 text-accent" /> : <KeyRound className="h-7 w-7 text-accent" />}
               </div>
@@ -984,17 +941,11 @@ export default function Home() {
 
       {/* Always mounted: the account menu (Instancias online included) and chats
           don't depend on the catalog, and unmounting would close whatever popup is open. */}
-      <footer className="relative z-20 h-20 border-t border-white/5 bg-card/50 backdrop-blur flex items-center justify-between px-6 shrink-0">
+      <footer className="relative z-20 h-20 bg-gray-500/10 backdrop-blur-xl flex items-center justify-between px-6 shrink-0">
           {/* Always here — the account menu (Skin, Ajustes…) and your chats
               don't need a selected modpack. */}
           <div className="flex items-center gap-1">
             <AccountMenuButton uuid={uuid} username={username} />
-            {/* Friends only — the instance's players are in Participantes (right). */}
-            <PresenceButton
-              context={{ type: "general" }}
-              open={activePopup === "presence"}
-              onOpenChange={(next) => (next ? openOverlay("presence") : closeOverlay())}
-            />
             {uuid && (
               <div className="relative">
                 <ChatBubbleRow />
@@ -1003,16 +954,20 @@ export default function Home() {
             )}
           </div>
 
+          {/* Play button only once there's a modpack. */}
+          {currentPack && !drawerView && (
+            <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2">
+              <ModpackActionBar key={currentPack.id} pack={currentPack} />
+            </div>
+          )}
+
+          {/* Right side: the pack's shortcuts, then Actividad always at the far right. */}
+          <div className="flex items-center gap-1">
           {/* Drawer view: someone wrote in one of your online instances' group chats. */}
           {drawerView && uuid && <GroupChatNotifications myUuid={uuid} myUsername={username ?? ""} />}
 
-          {/* Play button + content shortcuts only once there's a modpack. */}
           {currentPack && !drawerView && (
             <>
-              <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2">
-                <ModpackActionBar key={currentPack.id} pack={currentPack} />
-              </div>
-
               <div className="flex items-center gap-1">
                 {!currentPack.outOfNetwork && <ChangelogHistoryButton modpackId={currentPack.id} />}
                 {!currentPack.outOfNetwork && (
@@ -1037,6 +992,13 @@ export default function Home() {
               </div>
             </>
           )}
+          {uuid && (
+            <ActivityButton
+              open={activePopup === "presence"}
+              onOpenChange={(next) => (next ? openOverlay("presence") : closeOverlay())}
+            />
+          )}
+          </div>
         </footer>
 
       <RedeemCodeDialog open={redeemOpen} onOpenChange={setRedeemOpen} onRedeemed={() => loadModpacks()} />

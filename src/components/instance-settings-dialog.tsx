@@ -121,7 +121,7 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
   return (
     <>
       <Dialog open={open} onOpenChange={(v) => !saving && onOpenChange(v)}>
-        <DialogContent className="bg-card border-white/10 text-foreground max-w-lg p-0 gap-0 overflow-hidden">
+        <DialogContent className="border-transparent bg-gray-500/15 backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.35)] text-foreground max-w-lg p-0 gap-0 overflow-hidden sm:rounded-md">
           <DialogHeader className="px-5 pt-4 pb-3">
             <DialogTitle className="text-white">Configuración de la instancia</DialogTitle>
             <DialogDescription className="text-xs">
@@ -137,7 +137,7 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
               {looksLocked ? (
               <div className="relative">
                 <div
-                  className="relative block w-full overflow-hidden rounded-xl border border-white/10 bg-black/30"
+                  className="relative block w-full overflow-hidden rounded-md border border-transparent bg-white/[0.06]"
                   style={{ aspectRatio: String(BANNER_ASPECT) }}
                 >
                   {shownBanner ? (
@@ -152,7 +152,7 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
                     <Lock className="h-3.5 w-3.5" />
                   </span>
                 </div>
-                <div className="absolute -bottom-6 left-4 h-20 w-20 overflow-hidden rounded-xl border-2 border-card bg-black/60 shadow-xl">
+                <div className="absolute -bottom-6 left-4 h-20 w-20 overflow-hidden rounded-md border-2 border-black/40 bg-black/60 shadow-xl">
                   {shownIcon ? (
                     <img src={shownIcon} alt="" className="h-full w-full object-cover" />
                   ) : (
@@ -173,7 +173,7 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
                 <button
                   type="button"
                   onClick={() => bannerInput.current?.click()}
-                  className="group relative block w-full overflow-hidden rounded-xl border border-white/10 bg-black/30"
+                  className="group relative block w-full overflow-hidden rounded-md border border-transparent bg-white/[0.06] hover:border-accent/50 transition-colors"
                   style={{ aspectRatio: String(BANNER_ASPECT) }}
                   title="Cambiar banner"
                 >
@@ -189,7 +189,7 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
                 <button
                   type="button"
                   onClick={() => iconInput.current?.click()}
-                  className="group absolute -bottom-6 left-4 h-20 w-20 overflow-hidden rounded-xl border-2 border-card bg-black/60 shadow-xl"
+                  className="group absolute -bottom-6 left-4 h-20 w-20 overflow-hidden rounded-md border-2 border-black/40 bg-black/60 shadow-xl"
                   title="Cambiar foto"
                 >
                   {shownIcon ? (
@@ -240,7 +240,7 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
               />
             </div>
 
-            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+            <div className="rounded-md border border-transparent bg-gray-500/10 p-4 space-y-3">
               <div className="flex items-center gap-3">
                 <Cpu className="h-4 w-4 text-accent shrink-0" />
                 <div className="flex-1 min-w-0">
@@ -249,14 +249,14 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
                     {customRam ? "Esta instancia usa su propia cantidad." : `Usa la de Ajustes (${formatRam(globalRam)}).`}
                   </p>
                 </div>
-                <Switch checked={customRam} onCheckedChange={toggleCustomRam} />
+                <Switch checked={customRam} onCheckedChange={toggleCustomRam} className="data-[state=checked]:bg-accent data-[state=unchecked]:bg-white/20" />
               </div>
               <div className={cn("space-y-2 transition-opacity", !customRam && "opacity-40 pointer-events-none")}>
                 <div className="flex justify-between text-xs">
                   <span className="text-muted-foreground">Memoria máxima</span>
                   <span className="font-bold text-accent tabular-nums">{formatRam(ram)}</span>
                 </div>
-                <Slider min={MIN_RAM} max={MAX_RAM} step={512} value={[ram]} onValueChange={([v]) => setRam(v)} />
+                <Slider min={MIN_RAM} max={MAX_RAM} step={512} value={[ram]} onValueChange={([v]) => setRam(v)} className="[&>span:first-child]:bg-white/10 [&>span:first-child>span]:bg-accent [&_[role=slider]]:border-accent/70 [&_[role=slider]]:focus-visible:ring-0" />
                 <div className="flex justify-between text-[10px] text-muted-foreground">
                   <span>{formatRam(MIN_RAM)}</span>
                   <span>{formatRam(MAX_RAM)}</span>
@@ -269,11 +269,9 @@ export function InstanceSettingsDialog({ pack, open, onOpenChange }: { pack: Mod
             </div>
           </div>
 
-          <div className="px-5 py-3 border-t border-white/5 flex items-center gap-2">
-            <Button variant="outline" className="ml-auto border-white/10" disabled={saving} onClick={() => onOpenChange(false)}>
-              Cancelar
-            </Button>
-            <Button onClick={save} disabled={saving || !dirty} className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold">
+          <div className="px-5 py-3 flex items-center gap-2">
+            {/* No Cancelar: the dialog's ✕ already closes it without saving. */}
+            <Button onClick={save} disabled={saving || !dirty} className="ml-auto bg-accent hover:bg-accent/90 text-accent-foreground font-bold border-transparent">
               {saving && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
               Guardar
             </Button>

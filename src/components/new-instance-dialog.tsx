@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ImagePlus, Loader2, Pencil, X } from "lucide-react";
+import { ImagePlus, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import instanceVanillaIcon from "@/assets/instance-vanilla.png";
 import instanceModdedIcon from "@/assets/instance-modded.png";
@@ -280,74 +280,75 @@ export function NewInstanceDialog({ open, onOpenChange, onCreated }: NewInstance
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md border-transparent bg-gray-500/15 backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.35)] sm:rounded-md">
         <DialogHeader>
           <DialogTitle>Nueva instancia</DialogTitle>
           <DialogDescription>Crea una instancia local, como en cualquier launcher.</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="flex items-center gap-4">
+          {/* Banner with the picture over it, like the instance settings dialog. */}
+          <div className="space-y-2">
             <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleIconPick} />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="group relative h-16 w-16 shrink-0 rounded-md border border-white/10 bg-black/40 overflow-hidden hover:border-accent/50 transition-colors"
-              aria-label="Elegir icono"
-            >
-              <img src={icon ?? DEFAULT_ICONS[loaderType]} alt="" className="h-full w-full object-cover" />
-              <span className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity">
-                <Pencil className="h-4 w-4 text-white" />
-              </span>
-            </button>
-            <div className="flex-1 space-y-1.5">
-              <Label htmlFor="instance-name">Nombre</Label>
-              <Input
-                id="instance-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Mi instancia"
-                maxLength={60}
-              />
+            <input ref={bannerInputRef} type="file" accept="image/*" className="hidden" onChange={handleBannerPick} />
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => bannerInputRef.current?.click()}
+                className="group relative block w-full overflow-hidden rounded-md border border-transparent bg-white/[0.06] hover:border-accent/50 transition-colors"
+                style={{ aspectRatio: String(16 / 7) }}
+                title={banner ? "Cambiar banner" : "Elegir banner"}
+              >
+                {banner ? (
+                  <img src={banner} alt="" className="absolute inset-0 h-full w-full object-cover" />
+                ) : (
+                  <span className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">Sin banner</span>
+                )}
+                <span className="absolute inset-0 flex items-center justify-center gap-1.5 bg-black/50 text-xs font-semibold text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                  <ImagePlus className="h-4 w-4" /> {banner ? "Cambiar banner" : "Elegir banner"}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="group absolute -bottom-6 left-4 h-20 w-20 overflow-hidden rounded-md border-2 border-black/40 bg-black/60 shadow-xl"
+                aria-label="Elegir icono"
+                title="Cambiar foto"
+              >
+                <img src={icon ?? DEFAULT_ICONS[loaderType]} alt="" className="h-full w-full object-cover" />
+                <span className="absolute inset-0 flex items-center justify-center bg-black/55 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <ImagePlus className="h-5 w-5 text-white" />
+                </span>
+              </button>
             </div>
-            {icon && (
-              <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setIcon(null)} aria-label="Quitar icono">
-                <X className="h-4 w-4" />
-              </Button>
+            <div className="flex justify-end gap-1.5 pt-1 min-h-7">
+              {icon && (
+                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" onClick={() => setIcon(null)}>
+                  <X className="mr-1 h-3.5 w-3.5" /> Quitar foto
+                </Button>
+              )}
+              {banner && (
+                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" onClick={() => setBanner(null)}>
+                  <X className="mr-1 h-3.5 w-3.5" /> Quitar banner
+                </Button>
+              )}
+            </div>
+            {!banner && (
+              <p className="text-[11px] text-muted-foreground">
+                Sin banner, se usa el fondo animado con el color del icono al entrar en la instancia.
+              </p>
             )}
           </div>
 
           <div className="space-y-1.5">
-            <Label>Banner (opcional)</Label>
-            <input ref={bannerInputRef} type="file" accept="image/*" className="hidden" onChange={handleBannerPick} />
-            <button
-              type="button"
-              onClick={() => bannerInputRef.current?.click()}
-              className="group relative w-full h-24 rounded-md border border-white/10 bg-black/40 overflow-hidden hover:border-accent/50 transition-colors flex items-center justify-center text-xs text-muted-foreground"
-            >
-              {banner ? (
-                <>
-                  <img src={banner} alt="" className="h-full w-full object-cover" />
-                  <span className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Pencil className="h-4 w-4 text-white" />
-                  </span>
-                </>
-              ) : (
-                <span className="flex items-center gap-1.5">
-                  <ImagePlus className="h-4 w-4" />
-                  Elegir banner
-                </span>
-              )}
-            </button>
-            <p className="text-[11px] text-muted-foreground">
-              Sin banner, se usa el fondo animado con el color del icono al entrar en la instancia.
-            </p>
-            {banner && (
-              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setBanner(null)}>
-                <X className="mr-1 h-3.5 w-3.5" />
-                Quitar banner
-              </Button>
-            )}
+            <Label htmlFor="instance-name">Nombre</Label>
+            <Input
+              id="instance-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Mi instancia"
+              maxLength={60}
+            />
           </div>
 
           <div className="space-y-1.5">
@@ -356,10 +357,11 @@ export function NewInstanceDialog({ open, onOpenChange, onCreated }: NewInstance
               type="single"
               value={loaderType}
               onValueChange={(v) => v && setLoaderType(v as LoaderType)}
-              className="justify-start flex-wrap"
+              // A segmented control like Contenido/Capturas.
+              className="justify-start flex-wrap w-fit gap-1 rounded-md bg-white/[0.05] p-1"
             >
               {(Object.keys(LOADER_LABELS) as LoaderType[]).map((lt) => (
-                <ToggleGroupItem key={lt} value={lt} className="px-4">
+                <ToggleGroupItem key={lt} value={lt} className="h-8 px-4 hover:bg-white/10 hover:text-foreground">
                   {LOADER_LABELS[lt]}
                 </ToggleGroupItem>
               ))}
@@ -394,10 +396,14 @@ export function NewInstanceDialog({ open, onOpenChange, onCreated }: NewInstance
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={creating}>
             Cancelar
           </Button>
-          <Button onClick={handleSubmit} disabled={!canSubmit}>
+          <Button
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            className="bg-accent text-accent-foreground hover:bg-accent/90 border-transparent"
+          >
             {creating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Crear instancia
           </Button>

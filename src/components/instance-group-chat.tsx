@@ -438,7 +438,7 @@ export function InstanceGroupChat({
 export function InstanceGroupChatPanel({ pack, myUuid, myUsername }: { pack: Modpack; myUuid: string; myUsername: string }) {
   const room = useGroupRoom(pack, myUuid, true);
   return (
-    <aside className="h-full flex flex-col rounded-md border border-white/10 bg-gray-500/10 backdrop-blur-md overflow-hidden">
+    <aside className="h-full flex flex-col rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden">
       <GroupChatBody pack={pack} myUuid={myUuid} myUsername={myUsername} room={room} panel />
     </aside>
   );

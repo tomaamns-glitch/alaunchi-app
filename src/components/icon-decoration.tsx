@@ -175,7 +175,11 @@ export function DecoratedIcon({
   useLayoutEffect(() => {
     if (!decorated || fixedSize || !ref.current) return;
     const el = ref.current;
-    const update = () => setMeasured(el.getBoundingClientRect().width);
+    // offsetWidth, not getBoundingClientRect: the latter includes transforms, and a
+    // head inside something opening with a zoom (dialogs, footer panels start at
+    // 95–96 %) got its decoration sized for that shrunken head — and the observer
+    // never fires again once the animation ends (the layout size didn't change).
+    const update = () => setMeasured(el.offsetWidth);
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);

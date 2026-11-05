@@ -166,7 +166,7 @@ export function HubSidebar({
   const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null>(null);
 
   return (
-    <aside className="w-56 shrink-0 ml-6 rounded-xl border border-white/10 bg-card/40 px-3 py-4 overflow-y-auto space-y-5">
+    <aside className="w-56 shrink-0 ml-6 self-start max-h-full rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md px-3 py-4 overflow-y-auto space-y-5">
       <nav className="space-y-0.5">
         <button
           type="button"

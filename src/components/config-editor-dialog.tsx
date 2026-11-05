@@ -152,7 +152,7 @@ export function ConfigEditorDialog({
                       {section.split(" › ").map(humanizeKey).join(" › ")}
                     </h3>
                   )}
-                  <div className="rounded-xl border border-white/10 bg-card/40 divide-y divide-white/5">
+                  <div className="rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md divide-y divide-white/5">
                     {fields.map((f) => (
                       <FieldRow
                         key={f.id}

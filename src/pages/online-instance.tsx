@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { BannerPlayButton } from "@/components/online-banner-tile";
 import { AccountMenuButton } from "@/components/account-menu-button";
 import { AppBackground } from "@/components/app-background";
-import { PresenceButton } from "@/components/presence-button";
+import { ActivityButton } from "@/components/activity-button";
 import { InstanceGroupChat, InstanceGroupChatPanel } from "@/components/instance-group-chat";
 import { ChatBubbleRow } from "@/components/chat-bubble-row";
 import { ChatWindow } from "@/components/chat-window";
@@ -299,7 +299,7 @@ export default function OnlineInstance() {
               {hasGroupChat ? (
                 <InstanceGroupChatPanel pack={pack} myUuid={uuid!} myUsername={username ?? ""} />
               ) : (
-                <aside className="h-full flex items-center justify-center rounded-md border border-white/10 bg-gray-500/10 backdrop-blur-md p-6 text-center text-xs text-muted-foreground">
+                <aside className="h-full flex items-center justify-center rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md p-6 text-center text-xs text-muted-foreground">
                   {isExample ? "La instancia de ejemplo no tiene chat de grupo." : "Esta instancia ya no tiene chat de grupo."}
                 </aside>
               )}
@@ -308,17 +308,9 @@ export default function OnlineInstance() {
         </div>
       </div>
 
-      <footer className="relative z-20 h-20 border-t border-white/5 bg-card/50 backdrop-blur flex items-center justify-between px-6 shrink-0">
+      <footer className="relative z-20 h-20 bg-gray-500/10 backdrop-blur-xl flex items-center justify-between px-6 shrink-0">
         <div className="flex items-center gap-1">
           <AccountMenuButton uuid={uuid} username={username} />
-          {uuid && (
-            // Friends only — this instance's players are in Participantes.
-            <PresenceButton
-              context={{ type: "general" }}
-              open={activePopup === "presence"}
-              onOpenChange={(next) => (next ? openOverlay("presence") : closeOverlay())}
-            />
-          )}
           {uuid && (
             <div className="relative">
               <ChatBubbleRow />
@@ -327,18 +319,27 @@ export default function OnlineInstance() {
           )}
         </div>
 
-        {/* Narrow window: the side columns are hidden, they open from here. */}
-        {!wide && (
-          <div className="flex items-center gap-1">
-            <FooterPanelButton icon={Sparkles} label="Novedades">
-              {changelogPanel("min-h-0")}
-            </FooterPanelButton>
-            <FooterPanelButton icon={Users} label="Participantes">
-              {membersPanel("min-h-0")}
-            </FooterPanelButton>
-            {hasGroupChat && <InstanceGroupChat pack={pack} myUuid={uuid!} myUsername={username ?? ""} plainHeader />}
-          </div>
-        )}
+        <div className="flex items-center gap-1">
+          {/* Narrow window: the side columns are hidden, they open from here. */}
+          {!wide && (
+            <>
+              <FooterPanelButton icon={Sparkles} label="Novedades">
+                {changelogPanel("min-h-0")}
+              </FooterPanelButton>
+              <FooterPanelButton icon={Users} label="Participantes">
+                {membersPanel("min-h-0")}
+              </FooterPanelButton>
+              {hasGroupChat && <InstanceGroupChat pack={pack} myUuid={uuid!} myUsername={username ?? ""} plainHeader />}
+            </>
+          )}
+          {/* Actividad, always at the far right. */}
+          {uuid && (
+            <ActivityButton
+              open={activePopup === "presence"}
+              onOpenChange={(next) => (next ? openOverlay("presence") : closeOverlay())}
+            />
+          )}
+        </div>
       </footer>
     </div>
   );

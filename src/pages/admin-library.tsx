@@ -59,7 +59,7 @@ export default function AdminLibrary() {
     <div className="relative h-full overflow-hidden bg-background text-foreground flex flex-col">
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="flex flex-col gap-5 px-6 pt-6 pb-6 max-w-5xl mx-auto w-full">
-          <div className="relative shrink-0 rounded-xl border border-white/10 bg-card/40 p-5 overflow-hidden">
+          <div className="relative shrink-0 rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md p-5 overflow-hidden">
             <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
             {/* "Volver" lives in the titlebar, same as every other page. */}
             <div className="relative flex items-center gap-3">
@@ -110,7 +110,7 @@ export default function AdminLibrary() {
                         setEditorOpen(true);
                       }
                     }}
-                    className="flex items-center gap-4 rounded-xl border border-white/10 bg-card/40 hover:bg-card/60 hover:border-white/20 transition-colors cursor-pointer p-4"
+                    className="flex items-center gap-4 rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md hover:bg-card/60 hover:border-white/20 transition-colors cursor-pointer p-4"
                   >
                     {mod.icon ? (
                       <img src={mod.icon} alt="" className="h-14 w-14 rounded-lg object-cover bg-black/50 shrink-0" />

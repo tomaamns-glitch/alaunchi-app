@@ -22,7 +22,8 @@ export function SendToFriendDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
-  description: string;
+  /** Optional line under the title. */
+  description?: string;
   preview?: React.ReactNode;
   /** e.g. while the thing to send is still being prepared. */
   disabled?: boolean;
@@ -60,10 +61,15 @@ export function SendToFriendDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !sendingTo && onOpenChange(o)}>
-      <DialogContent className="bg-card border-white/10 text-foreground sm:max-w-sm">
+      <DialogContent className="border-transparent bg-gray-500/15 backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.35)] text-foreground sm:max-w-sm sm:rounded-md">
         <DialogHeader>
           <DialogTitle className="text-white">{title}</DialogTitle>
-          <DialogDescription className="text-xs">{description}</DialogDescription>
+          {description ? (
+            <DialogDescription className="text-xs">{description}</DialogDescription>
+          ) : (
+            // Radix wants a description for screen readers; keep it, just not shown.
+            <DialogDescription className="sr-only">{title}</DialogDescription>
+          )}
         </DialogHeader>
         {preview}
         <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar amigo…" className="h-8 text-sm" />
@@ -80,7 +86,7 @@ export function SendToFriendDialog({
                 type="button"
                 disabled={!!sendingTo || disabled}
                 onClick={() => send(uuid, f.username)}
-                className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md hover:bg-white/5 disabled:opacity-60 transition-colors text-left"
+                className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md hover:bg-white/10 disabled:opacity-60 transition-colors text-left"
               >
                 <Head uuid={uuid} username={f.username} />
                 <span className="flex-1 text-sm truncate">{f.username}</span>

@@ -24,6 +24,7 @@ const loadProfile = () => import("@/pages/profile");
 const loadPublicProfile = () => import("@/pages/public-profile");
 const loadFriends = () => import("@/pages/friends");
 const loadServers = () => import("@/pages/servers");
+const loadExplore = () => import("@/pages/explore");
 const loadAdmin = () => import("@/pages/admin");
 const loadAdminModpack = () => import("@/pages/admin-modpack");
 const loadAdminLibrary = () => import("@/pages/admin-library");
@@ -34,6 +35,7 @@ const Profile = lazy(loadProfile);
 const PublicProfile = lazy(loadPublicProfile);
 const Friends = lazy(loadFriends);
 const Servers = lazy(loadServers);
+const Explore = lazy(loadExplore);
 const Admin = lazy(loadAdmin);
 const AdminModpack = lazy(loadAdminModpack);
 const AdminLibrary = lazy(loadAdminLibrary);
@@ -48,6 +50,7 @@ function prefetchLazyPages() {
     loadPublicProfile,
     loadFriends,
     loadServers,
+    loadExplore,
     loadAdmin,
     loadAdminModpack,
     loadAdminLibrary,
@@ -58,6 +61,7 @@ function prefetchLazyPages() {
 import { Titlebar } from "@/components/titlebar";
 import { OnboardingTour } from "@/components/onboarding-tour";
 import { OptionalGroupsDialog } from "@/components/optional-groups-dialog";
+import { CrashWatcher } from "@/components/crash-watcher";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { getLastViewPath, setLastView } from "@/lib/last-view";
 import { useAuth } from "@/hooks/use-auth";
@@ -264,6 +268,7 @@ function RouteSwitch({ location }: { location: string }) {
       <Route path="/admin/library" component={AdminLibrary} />
       <Route path="/admin/:id" component={AdminModpack} />
       <Route path="/servers" component={Servers} />
+      <Route path="/explore" component={Explore} />
       <Route path="/settings" component={Settings} />
       <Route path="/profile" component={Profile} />
       <Route path="/profile/:uuid" component={PublicProfile} />
@@ -331,6 +336,7 @@ function App() {
             <Titlebar />
             <OnboardingTour />
             <OptionalGroupsDialog />
+            <CrashWatcher />
             <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
               <ErrorBoundary>
                 {authChecked ? <Router /> : <AppSplash />}

@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { Download, Play, RefreshCw, Square } from "lucide-react";
 import { CallChip } from "@/components/call-chip";
 import type { InstanceProgress } from "@/hooks/use-instance-progress";
@@ -16,8 +17,27 @@ const LAUNCH_DETAIL: Record<string, string> = {
   launched: "Minecraft",
 };
 
+/**
+ * main's phase label as the chip's bold verb + the rest: "Descargando" ·
+ * "Minecraft 1.20.1 · 42 %". The % is the phase's own; with no measure the
+ * text ends in "…" instead. (The fill is the whole operation's progress.)
+ */
+function splitLabel(label: string, phaseProgress: number | null | undefined) {
+  const space = label.indexOf(" ");
+  const name = space === -1 ? label : label.slice(0, space);
+  const rest = space === -1 ? "" : label.slice(space + 1);
+  if (typeof phaseProgress === "number") {
+    return { name, argument: [rest, `${Math.round(phaseProgress * 100)} %`].filter(Boolean).join(" · ") };
+  }
+  return rest ? { name, argument: `${rest}…` } : { name: `${name}…`, argument: "" };
+}
+
 function describe(entry: InstanceProgress | undefined, runState: InstanceRunState, installed: boolean, online: boolean) {
   if (runState === "stopping") return { icon: <Square className="fill-current" />, name: "Cerrando", argument: "Minecraft", progress: null };
+  if (entry?.label && entry.stage !== "error") {
+    const icon = entry.kind === "launch" ? <Play className="fill-current" /> : installed ? <RefreshCw /> : <Download />;
+    return { icon, ...splitLabel(entry.label, entry.phaseProgress), progress: entry.progress };
+  }
   if (entry?.kind === "install") {
     // The percentage only for an online instance's download/update.
     const pct = online && entry.progress !== null ? `${Math.round(entry.progress * 100)}%` : "";
@@ -53,6 +73,7 @@ export function InstanceProgressChip({
   size = 34,
   radius,
   className,
+  style,
 }: {
   entry: InstanceProgress | undefined;
   runState: InstanceRunState;
@@ -64,6 +85,8 @@ export function InstanceProgressChip({
   /** Corner radius in px (by default, proportional to the size). */
   radius?: number;
   className?: string;
+  /** E.g. a per-corner border radius when the chip stands in for two buttons. */
+  style?: CSSProperties;
 }) {
   const d = describe(entry, runState, installed, online);
   const name = status === "done" ? (entry?.kind === "install" ? (installed ? "Actualizado" : "Descargado") : "Abierto") : d.name;
@@ -85,6 +108,7 @@ export function InstanceProgressChip({
       progressOpacity={0.32}
       washOpacity={0.22}
       className={cn("w-full border border-white/10", className)}
+      style={style}
     />
   );
 }

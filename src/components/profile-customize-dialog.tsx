@@ -187,7 +187,7 @@ export function ProfileCustomizeDialog({
           <TabsContent value="frame" className="pt-4">
             <div className="space-y-3">
               <ProfileFrame frame={frame}>
-                <div className="rounded-xl border border-white/10 bg-card/60 px-4 py-6 text-center">
+                <div className="rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md px-4 py-6 text-center">
                   <div className="text-sm font-semibold">{/* preview */}Vista previa</div>
                   <div className="text-[11px] text-muted-foreground">Así se verá el borde de tu tarjeta.</div>
                 </div>

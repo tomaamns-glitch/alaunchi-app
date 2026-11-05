@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Loader2, Package } from "lucide-react";
 import { toast } from "sonner";
 import { SendToFriendDialog } from "@/components/send-to-friend-dialog";
-import { LoaderIcon } from "@/components/loader-icon";
 import { useAuth } from "@/hooks/use-auth";
 import { buildInstanceRecipe } from "@/lib/instance-recipe";
 import { sendSharedInstance, type SharedInstance } from "@/services/chat";
@@ -81,11 +80,10 @@ export function ShareInstanceDialog({
       open={!!instance}
       onOpenChange={onOpenChange}
       title="Compartir instancia"
-      description="Le llegará por el chat con un botón para instalarla. Se descarga desde Modrinth: lo que Modrinth no reconoce (mods añadidos a mano, configs, mundos) no viaja."
       disabled={!recipe}
       preview={
         instance && (
-          <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+          <div className="flex items-center gap-3 rounded-md bg-white/[0.05] p-3">
             {instance.imageUrl ? (
               <img src={instance.imageUrl} alt="" className="h-10 w-10 rounded-md object-cover shrink-0" />
             ) : (
@@ -96,8 +94,7 @@ export function ShareInstanceDialog({
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-white truncate">{instance.name}</p>
               <p className="text-[11px] text-muted-foreground flex items-center gap-1">
-                {instance.minecraftVersion} · <LoaderIcon loader={instance.loaderType} className="h-3 w-3" />{" "}
-                <span className="capitalize">{instance.loaderType}</span>
+                {instance.minecraftVersion} · <span className="capitalize">{instance.loaderType}</span>
               </p>
               <p className="text-[11px] text-muted-foreground flex items-center gap-1">
                 {recipe ? (

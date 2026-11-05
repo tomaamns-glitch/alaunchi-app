@@ -35,6 +35,7 @@ import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { searchModpacks, listModpackVersions, type ModpackHit, type ModpackSearch, type ModpackVersion } from "@/services/modrinth";
 import { installModrinthModpack, onModrinthInstallProgress, type ModrinthInstallProgress } from "@/services/electron";
+import { fetchModrinthBanner } from "@/lib/modrinth-banner";
 
 // Modrinth's modpack categories, in Spanish.
 const CATEGORIES: { id: string; label: string; icon: LucideIcon }[] = [
@@ -343,7 +344,8 @@ function FilterSelect({
   );
 }
 
-function ModpackDetail({
+/** Also used by Explorar (pages/explore.tsx) for a modpack's page. */
+export function ModpackDetail({
   hit,
   preferredGameVersion,
   preferredLoader,
@@ -398,12 +400,16 @@ function ModpackDetail({
     onInstallingChange(true);
     setProgress(null);
     try {
-      const iconDataUrl = await iconToDataUrl(hit.iconUrl);
+      const [iconDataUrl, bannerDataUrl] = await Promise.all([
+        iconToDataUrl(hit.iconUrl),
+        fetchModrinthBanner(hit.projectId),
+      ]);
       const meta = await installModrinthModpack({
         url: version.url,
         sha1: version.sha1,
         name: hit.title,
         iconDataUrl,
+        bannerDataUrl,
         projectId: hit.projectId,
         versionId: version.versionId,
         versionNumber: version.versionNumber,

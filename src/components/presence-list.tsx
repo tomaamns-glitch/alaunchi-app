@@ -42,11 +42,13 @@ export function PresenceList({ players, emptyMessage, banners = false }: Presenc
         const label = nickname || entry.username;
         const statusText = entry.online
           ? entry.playing
-            ? "Jugando"
+            ? entry.playingName
+              ? `Jugando a ${entry.playingName}`
+              : "Jugando"
             : "En línea"
           : entry.lastSeen
-            ? `Hace ${formatCompactAgo(entry.lastSeen)}`
-            : "";
+            ? `Visto hace ${formatCompactAgo(entry.lastSeen)}`
+            : "Desconectado";
 
         if (banners) {
           return (
@@ -65,20 +67,29 @@ export function PresenceList({ players, emptyMessage, banners = false }: Presenc
           <div key={uuid} className="flex items-center gap-2 text-sm min-h-[26px]">
             <PlayerAvatar uuid={uuid} username={entry.username} online={entry.online} />
 
-            <button
-              type="button"
-              onClick={() => openChat(uuid)}
-              className="text-white hover:text-accent truncate text-left transition-colors"
-              aria-label={`Chat con ${label}`}
-            >
-              {label}
-            </button>
-            <span className="text-xs text-muted-foreground ml-auto shrink-0">{statusText}</span>
+            {/* Name with its activity status right under it. */}
+            <div className="min-w-0 flex flex-col leading-tight">
+              <button
+                type="button"
+                onClick={() => openChat(uuid)}
+                className="text-white hover:text-accent truncate text-left transition-colors"
+                aria-label={`Chat con ${label}`}
+              >
+                {label}
+              </button>
+              <span className={`text-[11px] truncate ${statusClass(entry)}`}>{statusText}</span>
+            </div>
           </div>
         );
       })}
     </div>
   );
+}
+
+/** Green while playing / online, muted when offline (lighter over a banner). */
+function statusClass(entry: PresenceEntry, onBanner = false) {
+  if (entry.online) return entry.playing ? "text-green-400" : "text-green-300/80";
+  return onBanner ? "text-gray-300" : "text-muted-foreground";
 }
 
 /** Friends row: the player's profile banner + frame, the whole row opens the chat. */
@@ -98,8 +109,10 @@ function BannerRow({
   return (
     <ProfileBannerRow uuid={uuid} onClick={onOpenChat} ariaLabel={`Chat con ${label}`} className="h-12">
       <PlayerAvatar uuid={uuid} username={entry.username} online={entry.online} large />
-      <span className="text-sm font-medium text-white truncate drop-shadow">{label}</span>
-      <span className="ml-auto shrink-0 text-xs text-gray-200 drop-shadow">{statusText}</span>
+      <span className="min-w-0 flex flex-col leading-tight">
+        <span className="text-sm font-medium text-white truncate drop-shadow">{label}</span>
+        <span className={`text-[11px] truncate drop-shadow ${statusClass(entry, true)}`}>{statusText}</span>
+      </span>
     </ProfileBannerRow>
   );
 }

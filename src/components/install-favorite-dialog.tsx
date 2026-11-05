@@ -90,7 +90,7 @@ export function InstallFavoriteDialog({ favorite, onOpenChange }: InstallFavorit
             {targets.map((target) => {
               const st = status[target.id] ?? { state: "idle" };
               return (
-                <div key={target.id} className="rounded-lg border border-white/10 bg-card/40 px-3 py-2.5">
+                <div key={target.id} className="rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md px-3 py-2.5">
                   <div className="flex items-center gap-3">
                     <div className="h-8 w-8 rounded-md bg-black/40 border border-white/10 flex items-center justify-center shrink-0 text-accent/70">
                       {target.source === "custom" ? <Boxes className="h-4 w-4" /> : <HomeIcon className="h-4 w-4" />}

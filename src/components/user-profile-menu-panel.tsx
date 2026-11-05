@@ -200,7 +200,7 @@ function UserProfileBody({
   return (
     <div className="h-full flex flex-col gap-2.5 min-h-0">
       <ProfileFrame frame={profile.frame}>
-        <div className="relative rounded-xl border border-white/10 overflow-hidden shrink-0">
+        <div className="relative rounded-md border border-transparent overflow-hidden shrink-0">
           <div className="absolute inset-0">
             <BannerMedia src={profile.bannerUrl || DEFAULT_PROFILE_BANNER} className="w-full h-full object-cover" />
             <div className="absolute inset-0 bg-gradient-to-r from-background via-background/80 to-background/20" />
@@ -262,7 +262,7 @@ function UserProfileBody({
       </ProfileFrame>
 
       {!contentVisible ? (
-        <div className="flex-1 flex flex-col items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.02] text-center px-6">
+        <div className="flex-1 flex flex-col items-center justify-center gap-2 rounded-md border border-transparent bg-gray-500/10 text-center px-6">
           <Lock className="h-5 w-5 text-muted-foreground" />
           <p className="text-xs text-muted-foreground">
             {profile.username} solo comparte sus instancias y favoritos con sus amigos.

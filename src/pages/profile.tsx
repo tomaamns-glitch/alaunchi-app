@@ -74,7 +74,7 @@ function InstanceCard({ pack, onOpen }: { pack: Modpack; onOpen: () => void }) {
   const cover = pack.bannerUrl || pack.imageUrl;
 
   return (
-    <div className="rounded-xl border border-white/10 bg-card/40 overflow-hidden hover:border-accent/40 transition-colors">
+    <div className="rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden hover:border-accent/40 transition-colors">
       <button type="button" onClick={onOpen} className="block w-full text-left">
         <div className="relative h-20 bg-black/50">
           {cover && <img src={cover} alt="" className="w-full h-full object-cover opacity-50" />}
@@ -256,7 +256,7 @@ export default function Profile() {
       <main className="flex-1 overflow-y-auto px-6 py-6">
         <div className="max-w-5xl w-full mx-auto space-y-6">
           <ProfileFrame frame={frame}>
-          <div className="relative rounded-xl border border-white/10 bg-card/40 overflow-hidden">
+          <div className="relative rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden">
             <div className="absolute inset-0">
               {devBannerVideo ? (
                 // DEV ONLY: nameplate being tried from Personalizar → Pruebas → Banners
@@ -382,7 +382,7 @@ export default function Profile() {
                       href={`https://modrinth.com/${favFilter === "mods" ? "mod" : favFilter === "shaderpacks" ? "shader" : "resourcepack"}/${f.projectId}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-card/50 pl-1.5 pr-3.5 py-1.5 hover:border-accent/50 hover:bg-card/80 hover:-translate-y-0.5 transition-all"
+                      className="flex items-center gap-2.5 rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md pl-1.5 pr-3.5 py-1.5 hover:border-accent/50 hover:bg-card/80 hover:-translate-y-0.5 transition-all"
                     >
                       <div className="h-9 w-9 rounded-md border border-white/10 bg-black/40 overflow-hidden flex items-center justify-center text-xs font-black text-accent/60 shrink-0">
                         {f.iconUrl ? <img src={f.iconUrl} alt="" className="h-full w-full object-cover" /> : f.title.charAt(0)}

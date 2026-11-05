@@ -35,6 +35,9 @@ export interface Modpack {
   /** Only for source === "custom": a duplicate nobody has renamed or re-imaged
    *  yet (the Hub tile shows a ↺ badge). */
   isCopy?: boolean;
+  /** Only for source === "custom": installed from Modrinth or imported from
+   *  CurseForge (the instance page gives its logo a column of its own). */
+  isDownloaded?: boolean;
 }
 
 /** Why an online instance became "past": you left it, its creator removed

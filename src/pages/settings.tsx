@@ -54,7 +54,7 @@ const SECTIONS: { id: SectionId; label: string; description: string; icon: Lucid
   { id: "account", label: "Mi cuenta", description: "Tu cuenta de Minecraft y de Microsoft", icon: UserCircle2 },
 ];
 
-const GLASS = "rounded-xl border border-white/10 bg-card/40";
+const GLASS = "rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md";
 const SECTION_KEY = "alaunchi_settings_section";
 
 export default function Settings() {

@@ -209,7 +209,7 @@ async function walkDroppedEntry(entry: any, basePath: string): Promise<WalkedFil
 /** Only content Modrinth can know about is worth hashing/looking up. */
 const isIdentifiable = (path: string) => categoryOf(path) !== null;
 
-const GLASS = "rounded-xl border border-white/10 bg-card/40";
+const GLASS = "rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md";
 const TAB_TRIGGER = "gap-1.5 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground";
 
 export default function AdminModpack() {

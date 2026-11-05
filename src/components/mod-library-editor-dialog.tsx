@@ -304,7 +304,7 @@ function BuildsEditor({ mod }: { mod: LibraryMod }) {
         </div>
       ) : (
         versions.map((v) => (
-          <div key={v} className="rounded-md border border-white/10 bg-card/40">
+          <div key={v} className="rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md">
             <div className="flex items-center justify-between px-3 py-2 border-b border-white/5">
               <span className="text-sm font-semibold">Minecraft {v}</span>
               <button

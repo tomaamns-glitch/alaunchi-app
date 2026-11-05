@@ -15,6 +15,8 @@ export interface PresenceEntry {
    *  Per-modpack presence entries never set this (online there already only
    *  ever means "playing this one instance"). */
   playing?: boolean;
+  /** Same entries: the instance they're playing, when `playing`. */
+  playingName?: string;
 }
 
 /** Marks a player online for a modpack, and arms a server-side fallback (via
