@@ -265,7 +265,9 @@ const CHAINED_STEPS: TourStep[] = [...PRIVATE_STEPS.slice(0, -1), BRIDGE_STEP, .
 export function ManagerTour({ kind, ready }: { kind: ManagerTourKind; ready: boolean }) {
   const uuid = useAuth((s) => s.uuid);
   const { requested, active, chained, step, begin, setStep, end } = useManagerTour();
-  const otherBusy = useTour((t) => t.active || t.requested) || useOnlineTour((t) => t.active || t.requested);
+  const hubTourBusy = useTour((t) => t.active || t.requested);
+  const onlineTourBusy = useOnlineTour((t) => t.active || t.requested);
+  const otherBusy = hubTourBusy || onlineTourBusy;
   const steps = useMemo(() => (chained ? CHAINED_STEPS : STEPS_BY_KIND[kind]), [kind, chained]);
 
   // First time this kind of instance is opened.

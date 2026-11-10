@@ -113,10 +113,11 @@ export function CuriositiesCard({ className }: { className?: string }) {
     return () => document.removeEventListener("pointerdown", onDown, true);
   }, [expanded]);
   const stateRef = useRef<Saved>(load());
-  const busy =
-    useTour((t) => t.active || t.requested) ||
-    useOnlineTour((t) => t.active || t.requested) ||
-    useManagerTour((t) => !!t.active || !!t.requested);
+  // All three hooks always run: `||` between hooks would change the hook count.
+  const tourBusy = useTour((t) => t.active || t.requested);
+  const onlineTourBusy = useOnlineTour((t) => t.active || t.requested);
+  const managerTourBusy = useManagerTour((t) => !!t.active || !!t.requested);
+  const busy = tourBusy || onlineTourBusy || managerTourBusy;
 
   // Resting → wait for its time, then show the saved one.
   useEffect(() => {
