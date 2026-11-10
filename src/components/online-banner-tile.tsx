@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AlertTriangle, ArrowUpCircle, Download, Loader2, Play, RefreshCw, Square } from "lucide-react";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import type { Modpack } from "@/services/github";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
 import { useInstanceProgress } from "@/hooks/use-instance-progress";
@@ -15,16 +15,10 @@ import { Button } from "@/components/ui/button";
 export function OnlineBannerTile({
   pack,
   onClick,
-  badge,
-  preview = false,
   playingCount,
 }: {
   pack: Modpack;
   onClick: () => void;
-  /** Extra label on the top-right corner (e.g. "Ejemplo"). */
-  badge?: string;
-  /** A fake pack (dev example): the Play button only shows a toast. */
-  preview?: boolean;
   /** People playing it right now (green dot + count); undefined = not shown. */
   playingCount?: number;
 }) {
@@ -76,11 +70,6 @@ export function OnlineBannerTile({
               {playingCount}
             </span>
           )}
-          {badge && (
-            <span className="rounded-md bg-accent px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-accent-foreground">
-              {badge}
-            </span>
-          )}
           {pack.outOfNetwork ? (
             <span className="flex items-center gap-1 rounded-md bg-destructive/90 px-2 py-0.5 text-[10px] font-bold text-white">
               <AlertTriangle className="h-3 w-3" /> Fuera de red
@@ -95,13 +84,7 @@ export function OnlineBannerTile({
         </div>
 
         <div className="absolute bottom-3 left-4" onClick={(e) => e.stopPropagation()}>
-          {preview ? (
-            <Button size="sm" className="h-8 px-4 font-bold border-0" onClick={() => toast.info("Instancia de ejemplo — no se puede jugar.")}>
-              <Play className="mr-1.5 h-3.5 w-3.5 fill-current" /> JUGAR
-            </Button>
-          ) : (
-            <BannerPlayButton pack={pack} />
-          )}
+          <BannerPlayButton pack={pack} />
         </div>
       </div>
 
@@ -149,7 +132,7 @@ export function BannerPlayButton({ pack, large = false }: { pack: Modpack; large
     const install = async () => {
       setInstalling(true);
       try {
-        if (await installOnlineInstance(pack)) toast.success(`${pack.name} instalado correctamente.`);
+        if (await installOnlineInstance(pack)) notify.success(`${pack.name} instalado correctamente.`);
       } catch (e: any) {
         toast.error(e?.message || "Error al instalar.");
       } finally {

@@ -38,7 +38,7 @@ function Notice({ state }: { state: OverlayState }) {
         initial={{ opacity: 0, y: 14, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ type: "spring", stiffness: 420, damping: 32 }}
-        className="relative w-full overflow-hidden rounded-2xl border border-white/[0.08] bg-[#121214]/95 shadow-[0_18px_40px_-12px_rgba(0,0,0,0.8)] backdrop-blur-xl"
+        className="relative w-full overflow-hidden rounded-md border border-white/[0.08] bg-[#121214]/95 shadow-[0_18px_40px_-12px_rgba(0,0,0,0.8)] backdrop-blur-xl"
       >
         <div className="flex items-center gap-3 p-3 pr-3.5">
           {shot ? (
@@ -76,8 +76,7 @@ function Notice({ state }: { state: OverlayState }) {
               </>
             ) : (
               <>
-                <p className="truncate text-[13px] font-semibold text-white">ALaunchi está listo</p>
-                <p className="mt-0.5 truncate text-[11px] text-gray-400">{state.instance?.name || "Minecraft"}</p>
+                <p className="truncate text-[13px] font-semibold text-white">{state.instance?.name || "Minecraft"} está listo</p>
               </>
             )}
             {!shot && (
@@ -122,7 +121,7 @@ function Panel({ state }: { state: OverlayState }) {
   const view = shareShot ? "share" : tab;
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden rounded-[20px] border border-white/[0.08] bg-[#121214]/[0.97] text-white shadow-[0_24px_60px_-16px_rgba(0,0,0,0.85)] backdrop-blur-2xl">
+    <div className="relative flex h-full flex-col overflow-hidden rounded-md border border-white/[0.08] bg-[#121214]/[0.97] text-white shadow-[0_24px_60px_-16px_rgba(0,0,0,0.85)] backdrop-blur-2xl">
       {/* Soft wash of the instance's color behind the header. */}
       <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[radial-gradient(120%_100%_at_0%_0%,hsl(var(--accent)/0.16),transparent_65%)]" />
 

@@ -1,14 +1,14 @@
 import { create } from "zustand";
 import { subscribeChatIndex, subscribeUserDirectory, markConversationRead, type ChatIndexEntry, type KnownUser } from "@/services/chat";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { subscribeFriends, subscribeIncomingRequests, subscribeSentRequests, type FriendRequestEntry } from "@/services/friends";
 import { notifyUser, isAppVisible } from "@/lib/notify";
 
 /** Incoming chat message: sound, plus a Windows notification if the launcher
  *  is minimized/in the tray (see notifyUser). Nothing at all if that very
  *  conversation is open on screen — you're already reading it — or if you
- *  muted that person (right click on their chat bubble); the unread badge
- *  still shows. */
+ *  muted that person (right click on them in the chat window); the unread
+ *  badge still shows. */
 function notifyNewMessage(uuid: string, name: string, text: string) {
   const { openUuid, mutedUuids } = useChatHeads.getState();
   if (mutedUuids.has(uuid)) return;
@@ -20,7 +20,7 @@ function notifyNewMessage(uuid: string, name: string, text: string) {
  *  Windows notification (see notifyUser), so an in-app toast says what the
  *  sound was about. */
 function notifyFriendEvent(uuid: string, body: string) {
-  if (isAppVisible()) toast(body);
+  if (isAppVisible()) notify(body);
   notifyUser({ title: "ALaunchi", body, iconUuid: uuid }).catch(() => {});
 }
 
@@ -33,16 +33,33 @@ interface ChatHeadsState {
    *  message actually gets sent, so a conversation opened fresh from a friend's
    *  profile/the friends list has nothing there yet). */
   directory: Record<string, KnownUser>;
+  /** The chat window is on screen. It can be with no conversation selected
+   *  (openUuid null): nobody to talk to yet, or the selected one was deleted. */
+  panelOpen: boolean;
   openUuid: string | null;
-  pinnedUuids: Set<string>;
   /** Conversations whose new messages don't play a sound or show a Windows
    *  notification. Per account, persisted. */
   mutedUuids: Set<string>;
   init: (myUuid: string) => void;
   toggleMute: (uuid: string) => void;
   openChat: (uuid: string) => void;
+  /** The chat button: the latest unread conversation, or else the latest one. */
+  openPanel: () => void;
   minimizeChat: () => void;
-  closeChat: (uuid: string) => void;
+  /** Leaves the window open with nothing selected. */
+  deselectChat: () => void;
+}
+
+/** Conversations worth listing, newest first: with something to show (opening a
+ *  chat creates an entry with no messages, and deleting one only hides what came
+ *  before `deletedBefore`) or with unread messages. */
+export function listedConversations(chatIndex: Record<string, ChatIndexEntry>): string[] {
+  return Object.entries(chatIndex)
+    .filter(
+      ([, e]) => (e.unreadCount || 0) > 0 || (!!e.lastTimestamp && !!e.lastMessage && (!e.deletedBefore || e.lastTimestamp > e.deletedBefore))
+    )
+    .sort(([, a], [, b]) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0))
+    .map(([uuid]) => uuid);
 }
 
 let unsubscribeIndex: (() => void) | null = null;
@@ -92,25 +109,8 @@ function watchFriendEvents(myUuid: string): () => void {
   return () => unsubs.forEach((u) => u());
 }
 
-// Chats you had minimized (visible as a bubble, not necessarily unread) stay
-// that way across an app restart instead of quietly closing — scoped per
-// account since the same PC can be shared by more than one Microsoft login.
-const pinnedStorageKey = (myUuid: string) => `alaunchi_pinned_chats_${myUuid}`;
-
-function loadPinnedUuids(myUuid: string): Set<string> {
-  try {
-    const raw = JSON.parse(localStorage.getItem(pinnedStorageKey(myUuid)) || "[]");
-    return new Set(Array.isArray(raw) ? raw : []);
-  } catch {
-    return new Set();
-  }
-}
-
-function savePinnedUuids(myUuid: string, pinnedUuids: Set<string>) {
-  localStorage.setItem(pinnedStorageKey(myUuid), JSON.stringify(Array.from(pinnedUuids)));
-}
-
-// Muted chats, same per-account scoping as the pinned ones.
+// Muted chats, per account: the same PC can be shared by more than one
+// Microsoft login.
 const mutedStorageKey = (myUuid: string) => `alaunchi_muted_chats_${myUuid}`;
 
 function loadMutedUuids(myUuid: string): Set<string> {
@@ -126,8 +126,8 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
   myUuid: null,
   chatIndex: {},
   directory: {},
+  panelOpen: false,
   openUuid: null,
-  pinnedUuids: new Set(),
   mutedUuids: new Set(),
 
   init: (myUuid) => {
@@ -135,7 +135,7 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
     unsubscribeIndex?.();
     unsubscribeDirectory?.();
     unsubscribeFriendEvents?.();
-    set({ myUuid, chatIndex: {}, directory: {}, openUuid: null, pinnedUuids: loadPinnedUuids(myUuid), mutedUuids: loadMutedUuids(myUuid) });
+    set({ myUuid, chatIndex: {}, directory: {}, panelOpen: false, openUuid: null, mutedUuids: loadMutedUuids(myUuid) });
 
     let previous: Record<string, ChatIndexEntry> = {};
     unsubscribeIndex = subscribeChatIndex(myUuid, (index) => {
@@ -156,17 +156,26 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
 
   openChat: (uuid) => {
     useHeaderOverlay.getState().close();
-    const { myUuid, pinnedUuids } = get();
-    const nextPinned = new Set(pinnedUuids);
-    nextPinned.add(uuid);
-    set({ openUuid: uuid, pinnedUuids: nextPinned });
-    if (myUuid) {
-      markConversationRead(myUuid, uuid).catch(() => {});
-      savePinnedUuids(myUuid, nextPinned);
+    const { myUuid } = get();
+    set({ panelOpen: true, openUuid: uuid });
+    if (myUuid) markConversationRead(myUuid, uuid).catch(() => {});
+  },
+
+  openPanel: () => {
+    const { chatIndex, openChat } = get();
+    const listed = listedConversations(chatIndex);
+    const target = listed.find((uuid) => (chatIndex[uuid]?.unreadCount || 0) > 0) ?? listed[0];
+    if (target) {
+      openChat(target);
+    } else {
+      useHeaderOverlay.getState().close();
+      set({ panelOpen: true, openUuid: null });
     }
   },
 
-  minimizeChat: () => set({ openUuid: null }),
+  minimizeChat: () => set({ panelOpen: false, openUuid: null }),
+
+  deselectChat: () => set({ openUuid: null }),
 
   toggleMute: (uuid) => {
     const { myUuid, mutedUuids } = get();
@@ -179,14 +188,6 @@ export const useChatHeads = create<ChatHeadsState>((set, get) => ({
         localStorage.setItem(mutedStorageKey(myUuid), JSON.stringify(Array.from(next)));
       } catch {}
     }
-  },
-
-  closeChat: (uuid) => {
-    const { myUuid, openUuid, pinnedUuids } = get();
-    const nextPinned = new Set(pinnedUuids);
-    nextPinned.delete(uuid);
-    set({ pinnedUuids: nextPinned, openUuid: openUuid === uuid ? null : openUuid });
-    if (myUuid) savePinnedUuids(myUuid, nextPinned);
   },
 }));
 
@@ -250,16 +251,3 @@ export const useHeaderOverlay = create<HeaderOverlayState>((set, get) => ({
   // open() puts it back to "menu", so it never reopens mid-skin-editing.
   close: () => set({ active: null }),
 }));
-
-/** Bubbles shown next to the players button: anything pinned (opened at least
- *  once and not closed) plus anything with unread messages, even if never
- *  opened yet. */
-export function useVisibleChatBubbles(): string[] {
-  const chatIndex = useChatHeads((s) => s.chatIndex);
-  const pinnedUuids = useChatHeads((s) => s.pinnedUuids);
-  const uuids = new Set(pinnedUuids);
-  for (const [uuid, entry] of Object.entries(chatIndex)) {
-    if ((entry.unreadCount || 0) > 0) uuids.add(uuid);
-  }
-  return Array.from(uuids);
-}

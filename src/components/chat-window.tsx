@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { format, formatDistanceToNow } from "date-fns";
@@ -5,7 +6,7 @@ import { es } from "date-fns/locale";
 import {
   Send,
   X,
-  Minus,
+  MessageCircle,
   ArrowDown,
   Paperclip,
   Download,
@@ -25,7 +26,7 @@ import {
 import { useLocation } from "wouter";
 import { LoaderIcon } from "@/components/loader-icon";
 import { installFromRecipe } from "@/lib/instance-recipe";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { Input } from "@/components/ui/input";
 import {
   getConversationId,
@@ -51,7 +52,6 @@ import { ChatContactRail } from "@/components/chat-contact-rail";
 import { ChatContentPicker } from "@/components/lazy-heavy";
 import { ChatServerPicker, SharedServerCard } from "@/components/chat-server-share";
 import { useSavedServers } from "@/lib/saved-servers";
-import { ChatModeSelector } from "@/components/chat-mode-selector";
 import type { ContentCategory, SharedContent } from "@/services/content-share";
 import { addToGallery, usePersonalLibrary } from "@/services/personal-library";
 import { cn } from "@/lib/utils";
@@ -102,27 +102,25 @@ function isNearBottom(el: HTMLDivElement): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
 }
 
-/** Floating panel for one open conversation — head/alias/status/playtime up
- *  top, messages, an input, and the contact rail on the left. Not a modal
- *  dialog, but a click outside it (or on its own bubble again) minimizes it
- *  back to the bubble; only the X in the header un-pins it entirely. Open,
- *  close, and minimize are all the same transition from here — they just
- *  differ in whether openUuid comes back later. */
+/** Floating chat panel — the contact rail on the left and the selected
+ *  conversation: head/alias/status/playtime up top, messages, an input. Not a
+ *  modal dialog: a click outside it, on the chat button or on the X closes it. */
 export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps) {
+  const panelOpen = useChatHeads((s) => s.panelOpen);
   const openUuid = useChatHeads((s) => s.openUuid);
   const chatIndex = useChatHeads((s) => s.chatIndex);
   const directory = useChatHeads((s) => s.directory);
   const minimizeChat = useChatHeads((s) => s.minimizeChat);
-  const closeChat = useChatHeads((s) => s.closeChat);
   const modpacks = useModpacks((s) => s.modpacks);
 
   // Sticky "who we're looking at" — openUuid itself flips to null the instant
-  // you minimize/close, but the panel stays mounted for its exit animation, so
-  // content has to keep reading from this instead or it'd flash blank mid-fade.
+  // you close the panel, but it stays mounted for its exit animation, so content
+  // has to keep reading from this instead or it'd flash blank mid-fade. With the
+  // panel open, null really means nothing's selected.
   const [displayUuid, setDisplayUuid] = useState<string | null>(null);
   useEffect(() => {
-    if (openUuid) setDisplayUuid(openUuid);
-  }, [openUuid]);
+    if (panelOpen) setDisplayUuid(openUuid);
+  }, [panelOpen, openUuid]);
 
   // Custom instances only load reliably once the Hub has been visited this
   // session — general-mode content sharing (picker + received-content cards,
@@ -132,19 +130,12 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
     useCustomInstances.getState().loadInstances().catch(() => {});
   }, []);
 
-  // Which mode (general / a specific carousel instance) this conversation is
-  // currently framed in. Applies defaultMode only the moment displayUuid
-  // actually changes to a *different* conversation — reopening the same one
-  // after minimizing keeps whatever mode you had picked, it doesn't snap back.
-  const [mode, setMode] = useState<ChatMode>(defaultMode);
-  const modeInitializedForUuid = useRef<string | null>(null);
-  useEffect(() => {
-    if (!displayUuid) return;
-    if (modeInitializedForUuid.current !== displayUuid) {
-      modeInitializedForUuid.current = displayUuid;
-      setMode(defaultMode);
-    }
-  }, [displayUuid, defaultMode]);
+  // Which mode (general / a specific carousel instance) the chat is in. There's
+  // no picker and nothing on screen says it any more: it simply follows where
+  // you are (the carousel's instance, or general elsewhere) and only travels
+  // with each message (carouselInstanceId) so the other side knows which
+  // instance to install shared content into.
+  const mode: ChatMode = defaultMode;
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // "Eliminar conversación" (chat-contact-rail.tsx's context menu) sets this
@@ -349,24 +340,6 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
     });
   }, [visibleMessages, refreshInstalledHashes]);
 
-  // Colors for the per-message "sent in {instance} mode" tag (see the render
-  // below) — resolved lazily per distinct carouselInstanceId actually seen in
-  // this conversation, not eagerly for every installed pack.
-  const [tagColors, setTagColors] = useState<Record<string, string>>({});
-  const requestedColorIds = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    for (const m of visibleMessages) {
-      const id = m.carouselInstanceId;
-      if (!id || requestedColorIds.current.has(id)) continue;
-      const pack = modpacks.find((p) => p.id === id);
-      if (!pack) continue;
-      requestedColorIds.current.add(id);
-      getInstanceAccentColor(pack).then((color) => {
-        setTagColors((prev) => ({ ...prev, [id]: color }));
-      });
-    }
-  }, [visibleMessages, modpacks]);
-
   const handleSend = () => {
     if (!draft.trim() || !displayUuid) return;
     const carouselInstanceId = mode.type === "carousel" ? mode.pack.id : undefined;
@@ -375,14 +348,14 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
   };
 
   const panelRef = useRef<HTMLDivElement | null>(null);
-  useDismissOnOutsideClick([panelRef], minimizeChat, !!openUuid);
-  // With several bubbles pinned (or a narrow window) the 52rem panel used to
-  // run past the right edge — it shifts left to open towards that side.
-  const panelShift = useKeepInViewport(panelRef, !!openUuid);
+  useDismissOnOutsideClick([panelRef], minimizeChat, panelOpen);
+  // In a narrow window the 52rem panel would run past the right edge — it
+  // shifts left to open towards that side.
+  const panelShift = useKeepInViewport(panelRef, panelOpen);
 
   return (
     <AnimatePresence>
-      {openUuid && (
+      {panelOpen && (
         <motion.button
           key="chat-backdrop"
           type="button"
@@ -395,7 +368,7 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
           className="fixed inset-0 z-30 cursor-default"
         />
       )}
-      {openUuid && (
+      {panelOpen && (
         <motion.div
           ref={panelRef}
           key="chat-panel"
@@ -404,28 +377,20 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
           exit={{ opacity: 0, y: 8, scale: 0.96 }}
           transition={{ duration: 0.15, ease: "easeOut" }}
           style={{ left: panelShift }}
-          className="absolute bottom-full left-0 mb-2 z-40 flex w-[52rem] max-w-[calc(100vw-24px)] h-[30rem] rounded-lg bg-card/95 backdrop-blur border border-white/10 shadow-2xl overflow-hidden"
+          className="absolute bottom-full left-0 mb-2 z-40 flex w-[52rem] max-w-[calc(100vw-24px)] h-[30rem] rounded-md bg-background/60 backdrop-blur-xl border border-transparent shadow-[0_8px_24px_rgba(0,0,0,0.35)] overflow-hidden"
         >
           <ChatContactRail
             myUuid={myUuid}
             mode={mode}
-            onModeChange={setMode}
             selectedUuid={displayUuid ?? ""}
             expanded={railExpanded}
             onToggleExpanded={() => setRailExpanded((v) => !v)}
           />
 
+          {displayUuid ? (
           <div className="flex-1 min-w-0 flex flex-col min-h-0">
-            <div className="px-4 py-3 border-b border-white/10 flex items-start gap-3">
+            <div className="px-4 py-3 border-b border-white/5 flex items-start gap-3">
               <div className="min-w-0 flex-1">
-                {/* Only shown here while the rail is collapsed — expanded, this
-                    same selector lives inside ChatContactRail instead (see
-                    railExpanded below and chat-contact-rail.tsx). */}
-                {!railExpanded && (
-                  <div className="mb-1">
-                    <ChatModeSelector mode={mode} onSelect={setMode} />
-                  </div>
-                )}
                 <motion.button
                   {...tapHover}
                   type="button"
@@ -454,26 +419,16 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                 </p>
               </div>
 
-              <div className="flex items-center gap-1 shrink-0">
+              <Hint label="Cerrar">
                 <motion.button
                   {...tapHover}
                   type="button"
                   onClick={minimizeChat}
-                  title="Minimizar"
-                  className="h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors"
-                >
-                  <Minus className="h-3.5 w-3.5" />
-                </motion.button>
-                <motion.button
-                  {...tapHover}
-                  type="button"
-                  onClick={() => displayUuid && closeChat(displayUuid)}
-                  title="Cerrar"
-                  className="h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors"
+                  className="h-6 w-6 shrink-0 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors"
                 >
                   <X className="h-3.5 w-3.5" />
                 </motion.button>
-              </div>
+              </Hint>
             </div>
 
             <div className="relative flex-1 min-h-0">
@@ -492,11 +447,6 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                   .sort((a, b) => a.timestamp - b.timestamp)
                   .map((m, i, sorted) => {
                     const isMe = m.senderUuid === myUuid;
-                    // Degradation rule: a message tagged with a carousel instance the
-                    // viewer doesn't have renders exactly like a general message — no
-                    // tag, nothing implying context they can't act on.
-                    const tagPack = m.carouselInstanceId ? modpacks.find((p) => p.id === m.carouselInstanceId) : undefined;
-                    const tagColor = m.carouselInstanceId ? tagColors[m.carouselInstanceId] : undefined;
                     return (
                       <Fragment key={m.id ?? i}>
                       {startsNewDay(m.timestamp, sorted[i - 1]?.timestamp) && <ChatDaySeparator timestamp={m.timestamp} />}
@@ -518,14 +468,6 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                           );
                         }}
                       >
-                        {tagPack && (
-                          <span
-                            className="mb-0.5 max-w-[75%] truncate rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white/90"
-                            style={{ backgroundColor: tagColor ?? "hsl(205 90% 55%)" }}
-                          >
-                            {tagPack.name}
-                          </span>
-                        )}
                         {m.deleted ? (
                           <DeletedMessageBubble mine={isMe} />
                         ) : m.instance ? (
@@ -578,40 +520,42 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
             <ChatMessageMenu menu={messageMenu.menu} onClose={messageMenu.close} />
             <AnimatePresence>
               {!atBottom && (
-                <motion.button
-                  type="button"
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.8 }}
-                  whileHover={{ scale: 1.08 }}
-                  whileTap={{ scale: 0.92 }}
-                  onClick={jumpToLatest}
-                  title="Ir a los mensajes más recientes"
-                  className="absolute bottom-3 right-3 h-8 w-8 flex items-center justify-center rounded-full bg-card border border-white/10 shadow-lg text-gray-200 hover:text-accent transition-colors"
-                >
-                  <ArrowDown className="h-4 w-4" />
-                </motion.button>
+                <Hint label="Ir a los mensajes más recientes">
+                  <motion.button
+                    type="button"
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    whileHover={{ scale: 1.08 }}
+                    whileTap={{ scale: 0.92 }}
+                    onClick={jumpToLatest}
+                    className="absolute bottom-3 right-3 h-8 w-8 flex items-center justify-center rounded-md bg-white/[0.14] backdrop-blur-md shadow-lg text-gray-200 hover:text-accent transition-colors"
+                  >
+                    <ArrowDown className="h-4 w-4" />
+                  </motion.button>
+                </Hint>
               )}
             </AnimatePresence>
             </div>
 
-            <div className="p-3 border-t border-white/10 flex items-center gap-2">
+            <div className="p-3 border-t border-white/5 flex items-center gap-2">
               <div className="relative">
-                <motion.button
-                  {...tapHover}
-                  type="button"
-                  onClick={() => {
-                    setShowContentPicker((v) => !v);
-                    setShowServerPicker(false);
-                  }}
-                  title="Enviar contenido"
-                  className={cn(
-                    "h-9 w-9 flex items-center justify-center rounded-md transition-colors shrink-0",
-                    showContentPicker ? "bg-accent/20 text-accent" : "bg-white/5 hover:bg-white/10 text-gray-300"
-                  )}
-                >
-                  <Paperclip className="h-4 w-4" />
-                </motion.button>
+                <Hint label="Enviar contenido">
+                  <motion.button
+                    {...tapHover}
+                    type="button"
+                    onClick={() => {
+                      setShowContentPicker((v) => !v);
+                      setShowServerPicker(false);
+                    }}
+                    className={cn(
+                      "h-9 w-9 flex items-center justify-center rounded-md transition-colors shrink-0",
+                      showContentPicker ? "bg-accent/20 text-accent" : "bg-white/[0.07] hover:bg-white/[0.14] text-gray-300"
+                    )}
+                  >
+                    <Paperclip className="h-4 w-4" />
+                  </motion.button>
+                </Hint>
                 <AnimatePresence>
                   {showContentPicker && displayUuid && (
                     <ChatContentPicker
@@ -626,21 +570,22 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                 </AnimatePresence>
               </div>
               <div className="relative">
-                <motion.button
-                  {...tapHover}
-                  type="button"
-                  onClick={() => {
-                    setShowServerPicker((v) => !v);
-                    setShowContentPicker(false);
-                  }}
-                  title="Compartir server"
-                  className={cn(
-                    "h-9 w-9 flex items-center justify-center rounded-md transition-colors shrink-0",
-                    showServerPicker ? "bg-accent/20 text-accent" : "bg-white/5 hover:bg-white/10 text-gray-300"
-                  )}
-                >
-                  <ServerIcon className="h-4 w-4" />
-                </motion.button>
+                <Hint label="Compartir server">
+                  <motion.button
+                    {...tapHover}
+                    type="button"
+                    onClick={() => {
+                      setShowServerPicker((v) => !v);
+                      setShowContentPicker(false);
+                    }}
+                    className={cn(
+                      "h-9 w-9 flex items-center justify-center rounded-md transition-colors shrink-0",
+                      showServerPicker ? "bg-accent/20 text-accent" : "bg-white/[0.07] hover:bg-white/[0.14] text-gray-300"
+                    )}
+                  >
+                    <ServerIcon className="h-4 w-4" />
+                  </motion.button>
+                </Hint>
                 <AnimatePresence>
                   {showServerPicker && displayUuid && (
                     <ChatServerPicker
@@ -661,20 +606,38 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                   if (e.key === "Enter") handleSend();
                 }}
                 placeholder="Escribe un mensaje..."
-                className="flex-1 bg-background/50 border-white/10"
+                className="flex-1 bg-white/[0.07] border-transparent"
               />
-              <motion.button
-                whileHover={draft.trim() ? { scale: 1.08 } : undefined}
-                whileTap={draft.trim() ? { scale: 0.9 } : undefined}
-                type="button"
-                onClick={handleSend}
-                disabled={!draft.trim()}
-                className="h-9 w-9 flex items-center justify-center rounded-md bg-accent hover:bg-accent/90 text-accent-foreground disabled:opacity-50 transition-colors shrink-0"
-              >
-                <Send className="h-4 w-4" />
-              </motion.button>
+              <Hint label="Enviar">
+                <motion.button
+                  whileHover={draft.trim() ? { scale: 1.08 } : undefined}
+                  whileTap={draft.trim() ? { scale: 0.9 } : undefined}
+                  type="button"
+                  onClick={handleSend}
+                  disabled={!draft.trim()}
+                  className="h-9 w-9 flex items-center justify-center rounded-md bg-accent hover:bg-accent/90 text-accent-foreground disabled:opacity-50 transition-colors shrink-0"
+                >
+                  <Send className="h-4 w-4" />
+                </motion.button>
+              </Hint>
             </div>
           </div>
+          ) : (
+            <div className="relative flex-1 min-w-0 flex flex-col items-center justify-center gap-2 p-6 text-center text-muted-foreground">
+              <Hint label="Cerrar">
+                <motion.button
+                  {...tapHover}
+                  type="button"
+                  onClick={minimizeChat}
+                  className="absolute top-3 right-4 h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </motion.button>
+              </Hint>
+              <MessageCircle className="h-6 w-6" />
+              <p className="text-sm">Elige una conversación o busca a alguien para empezar una.</p>
+            </div>
+          )}
         </motion.div>
       )}
     </AnimatePresence>
@@ -798,7 +761,7 @@ export function SharedContentCard({
       } else {
         await downloadInstanceFile(targetId, `${content.category}/${fileName}`, url, sha1);
       }
-      toast.success(`${content.displayName} instalado en ${targetName}.`);
+      notify.success(`${content.displayName} instalado en ${targetName}.`);
       onInstalled();
       setShowPicker(false);
     } catch (e: any) {
@@ -830,7 +793,7 @@ export function SharedContentCard({
       try {
         const base64 = await fetchAsBase64(content.downloadUrl);
         await saveToSkinLibrary(content.displayName, content.skinVariant ?? "classic", base64);
-        toast.success(`${content.displayName} instalado.`);
+        notify.success(`${content.displayName} instalado.`);
         onInstalled();
       } catch (e: any) {
         toast.error(e?.message || "Error al instalar.");
@@ -923,7 +886,7 @@ export function SharedContentCard({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 4 }}
               transition={{ duration: 0.12 }}
-              className="absolute bottom-full right-0 mb-1 z-50 w-52 max-h-56 overflow-y-auto rounded-lg bg-card border border-white/10 shadow-xl py-1"
+              className="absolute bottom-full right-0 mb-1 z-50 w-52 max-h-56 overflow-y-auto rounded-md bg-card border border-transparent shadow-xl py-1"
             >
               {checkingCompat ? (
                 <div className="flex items-center justify-center py-4">

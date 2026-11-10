@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { subscribeIconDecoration } from "@/services/public-profile";
+import { subscribeIconColors, subscribeIconDecoration } from "@/services/public-profile";
+import { flamesFilter, iconColorsFor } from "@/lib/icon-colors";
 import { TracedBorder } from "@/components/traced-border";
 import { LottieDecoration } from "@/components/lottie-decoration";
 import { RemappedLottie, type RingSource } from "@/components/remapped-lottie";
@@ -145,9 +146,12 @@ export function DecoratedIcon({
   radius: fixedRadius,
   className,
   replayKey,
+  colors,
   children,
 }: {
   decoration: string | undefined;
+  /** profiles/{uuid}/iconColors as stored (lib/icon-colors.ts); null = default colours. */
+  colors?: string | null;
   /** Each change replays the decoration (e.g. the chat contact just selected). */
   replayKey?: number;
   /** The head's size in px — measured from the wrapper when omitted. */
@@ -203,6 +207,7 @@ export function DecoratedIcon({
   if (!decorated && !className) return <>{children}</>;
   const size = fixedSize ?? measured;
   const radius = fixedRadius ?? size * 0.17;
+  const tint = iconColorsFor(decoration, colors);
 
   return (
     <div
@@ -221,12 +226,12 @@ export function DecoratedIcon({
       ) : (
         children
       )}
-      {size > 0 && decoration === "traced" && <TracedIcon size={size} radius={radius} replayKey={replay} />}
+      {size > 0 && decoration === "traced" && <TracedIcon size={size} radius={radius} replayKey={replay} colors={tint} />}
       {size > 0 && decoration === "orange-run" && (
-        <TracedIcon size={size} radius={radius} replayKey={replay} variant="run" />
+        <TracedIcon size={size} radius={radius} replayKey={replay} variant="run" colors={tint} />
       )}
       {size > 0 && decoration === "orange-ring" && (
-        <TracedIcon size={size} radius={radius} replayKey={replay} variant="ring" />
+        <TracedIcon size={size} radius={radius} replayKey={replay} variant="ring" colors={tint} />
       )}
       {size > 0 && round && (
         <LottieDecoration
@@ -247,7 +252,7 @@ export function DecoratedIcon({
           }}
         />
       )}
-      {size > 0 && frame?.rim && <RimLine size={size} radius={radius} color={frame.rim} />}
+      {size > 0 && frame?.rim && <RimLine size={size} radius={radius} color={decoration === "flames" && tint ? tint[0] : frame.rim} />}
       {size > 0 && frame && (
         <RemappedLottie
           load={frame.load}
@@ -257,6 +262,7 @@ export function DecoratedIcon({
           band={frame.band}
           once={frame.once}
           replayKey={replay}
+          filter={decoration === "flames" && tint ? flamesFilter(tint[0]) : undefined}
         />
       )}
       {size > 0 && decoration === "vines" && (
@@ -285,10 +291,13 @@ function TracedIcon({
   radius,
   replayKey,
   variant = "traced",
+  colors,
 }: {
   size: number;
   radius: number;
   replayKey: number;
+  /** [from, to] for Trazo, [colour] for Recorrido / Giro naranja. */
+  colors?: string[];
   /** "run" = Recorrido: two orange strokes from opposite corners filling the
    *  border between them (the LottieFiles "square frame" idea, as a fill).
    *  "ring" = Giro naranja: the LottieFiles "loading" spinner's stroke (its
@@ -309,8 +318,9 @@ function TracedIcon({
         strokeScale={k}
         replayEvery={60}
         replayKey={replayKey}
-        {...(variant === "run" ? { from: "#ff6f00", to: "#ff6f00", split: true } : {})}
-        {...(variant === "ring" ? { from: "#ff8e3a", to: "#ff8e3a", segments: 16 } : {})}
+        {...(variant === "traced" && colors?.length === 2 ? { from: colors[0], to: colors[1] } : {})}
+        {...(variant === "run" ? { from: colors?.[0] ?? "#ff6f00", to: colors?.[0] ?? "#ff6f00", split: true } : {})}
+        {...(variant === "ring" ? { from: colors?.[0] ?? "#ff8e3a", to: colors?.[0] ?? "#ff8e3a", segments: 16 } : {})}
       >
         <span />
       </TracedBorder>
@@ -379,7 +389,7 @@ function LookDecoratedIcon({
 }) {
   const look = useProfileLook(uuid);
   return (
-    <DecoratedIcon decoration={look?.iconDecoration} {...rest}>
+    <DecoratedIcon decoration={look?.iconDecoration} colors={look?.iconColors} {...rest}>
       {children}
     </DecoratedIcon>
   );
@@ -397,4 +407,17 @@ export function useLiveIconDecoration(uuid: string | null | undefined): string {
     return subscribeIconDecoration(uuid, setId);
   }, [uuid]);
   return id;
+}
+
+/** Live icon-decoration colours of one player (lib/icon-colors.ts); null = defaults. */
+export function useLiveIconColors(uuid: string | null | undefined): string | null {
+  const [value, setValue] = useState<string | null>(null);
+  useEffect(() => {
+    if (!uuid) {
+      setValue(null);
+      return;
+    }
+    return subscribeIconColors(uuid, setValue);
+  }, [uuid]);
+  return value;
 }

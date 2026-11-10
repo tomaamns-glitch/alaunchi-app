@@ -9,8 +9,8 @@ import {
   Globe,
   Image as ImageIcon,
   LayoutGrid,
+  MessageCircle,
   MessagesSquare,
-  Minus,
   Package,
   Paperclip,
   Send,
@@ -18,8 +18,6 @@ import {
   Shirt,
   Smile,
   Sparkles,
-  User,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -33,7 +31,7 @@ import { PlayerDecoratedIcon } from "@/components/icon-decoration";
 // First-login walkthrough of the Hub, in chapters: private instances, your
 // character, chat & friends, and online instances (how they unlock). Steps
 // point at elements tagged data-tour="…"; things that may not be on screen
-// yet for a new player (chat bubbles, an invite, the chat's share bar) are
+// yet for a new player (unread chats, an invite, the chat's share bar) are
 // shown as static samples inside the card instead.
 
 const doneKey = (uuid: string) => `alaunchi_tour_done:${uuid}`;
@@ -85,7 +83,7 @@ export const useTour = create<TourState>((set) => ({
 }));
 
 // ── Samples shown inside the card ────────────────────────────────────────────
-// Same look as the real thing (chat-bubble-row.tsx, invite-bubbles.tsx,
+// Same look as the real thing (chat-button.tsx, invite-bubbles.tsx,
 // chat-window.tsx), just static.
 
 function SampleHead({ name, size = "h-full w-full" }: { name: string; size?: string }) {
@@ -100,31 +98,17 @@ function SampleFrame({ children }: { children: ReactNode }) {
   return <div className="mt-3 rounded-lg border border-white/10 bg-black/30 p-3">{children}</div>;
 }
 
-function ChatBubblesSample() {
+function ChatButtonSample() {
   return (
     <SampleFrame>
-      <div className="flex items-center gap-1.5">
-        <div className="h-9 px-3 flex items-center gap-2 rounded-lg bg-white/5 border border-white/5">
-          <User className="h-4 w-4 text-gray-300" />
-          <span className="h-2 w-2 rounded-full bg-green-400" />
-        </div>
-        <div className="relative h-9 w-9 rounded-md border border-accent bg-accent/15">
-          <SampleHead name="Alex" />
-        </div>
-        <div className="relative h-9 w-9 rounded-md border border-white/10 bg-white/5">
-          <SampleHead name="Mario" />
+      <div className="flex items-center gap-2.5">
+        <div className="relative h-9 w-9 flex items-center justify-center rounded-md border border-white/10 bg-white/5 text-gray-200">
+          <MessageCircle className="h-4 w-4" />
           <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold border border-card flex items-center justify-center">
             2
           </span>
         </div>
-      </div>
-      <div className="mt-2.5 flex items-center gap-3 text-[11px] text-muted-foreground">
-        <span className="flex items-center gap-1">
-          <Minus className="h-3 w-3" /> minimiza, sigue fijado
-        </span>
-        <span className="flex items-center gap-1">
-          <X className="h-3 w-3" /> lo quita de la barra
-        </span>
+        <span className="text-[11px] text-muted-foreground">← el número rojo son mensajes sin leer</span>
       </div>
     </SampleFrame>
   );
@@ -179,7 +163,7 @@ function InviteSample() {
           <InstanceLogo invite={SAMPLE_INVITE} className="h-full w-full rounded-md" />
           <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500 border-2 border-card" />
         </div>
-        <span className="text-[11px] text-muted-foreground">← la burbuja aparece junto a tus chats</span>
+        <span className="text-[11px] text-muted-foreground">← la burbuja aparece junto al botón de chat</span>
       </div>
       <div className="rounded-xl bg-card/95 border border-white/10 p-3">
         <div className="flex items-start gap-3">
@@ -236,18 +220,20 @@ function WelcomeSample() {
 
 // ── Steps ────────────────────────────────────────────────────────────────────
 
-interface Chapter {
+export interface Chapter {
   label: string;
   icon: LucideIcon;
+  /** Welcome / goodbye: no progress segment of its own. */
+  intro?: boolean;
 }
 
-const CH_START: Chapter = { label: "Bienvenida", icon: Sparkles };
+export const CH_START: Chapter = { label: "Bienvenida", icon: Sparkles, intro: true };
 const CH_INSTANCES: Chapter = { label: "Tus instancias", icon: LayoutGrid };
 const CH_CHARACTER: Chapter = { label: "Tu personaje", icon: Shirt };
 const CH_CHAT: Chapter = { label: "Chat y amigos", icon: MessagesSquare };
 const CH_ONLINE: Chapter = { label: "Instancias online", icon: Globe };
 
-interface TourStep {
+export interface TourStep {
   chapter: Chapter;
   /** data-tour value to spotlight; none = centered card. */
   target?: string;
@@ -260,11 +246,11 @@ interface TourStep {
 }
 
 const openMenu = () => useHeaderOverlay.getState().openProfile("menu");
-const closeMenu = () => {
+export const closeMenu = () => {
   if (useHeaderOverlay.getState().active) useHeaderOverlay.getState().close();
 };
 
-const b = (text: string) => <b className="text-white font-semibold">{text}</b>;
+export const b = (text: string) => <b className="text-white font-semibold">{text}</b>;
 
 const STEPS: TourStep[] = [
   {
@@ -318,7 +304,7 @@ const STEPS: TourStep[] = [
     title: "Actividad",
     body: (
       <>
-        Aquí tienes tus notificaciones (solicitudes de amistad, mensajes sin leer, instancias que fallan) y qué
+        Aquí tienes tus notificaciones (solicitudes de amistad, invitaciones a instancias, instancias que fallan) y qué
         están haciendo tus amigos. {b("Pulsa el nombre de un amigo")} para abrir su chat. También puedes hacerlo desde
         tu menú → Amigos.
       </>
@@ -328,9 +314,9 @@ const STEPS: TourStep[] = [
   {
     chapter: CH_CHAT,
     target: "presence-button",
-    title: "Tus chats se quedan en la barra",
-    body: "Cuando abres el chat de un amigo, su cabeza se queda fijada en esta barra, a la izquierda junto a tu nombre, para volver a él con un clic. El número rojo son mensajes sin leer.",
-    sample: <ChatBubblesSample />,
+    title: "Todos tus chats, en un botón",
+    body: "El botón de chat está en esta barra, a la izquierda junto a tu nombre. Dentro tienes todas tus conversaciones y un buscador para empezar una nueva.",
+    sample: <ChatButtonSample />,
     enter: closeMenu,
   },
   {
@@ -363,7 +349,7 @@ const STEPS: TourStep[] = [
     title: "Así llega una invitación",
     body: (
       <>
-        Cuando un amigo te invita a una instancia online, te aparece una burbuja junto a tus chats. Ábrela y pulsa{" "}
+        Cuando un amigo te invita a una instancia online, te aparece una burbuja junto al botón de chat. Ábrela y pulsa{" "}
         {b("Aceptar")}: la instancia se desbloquea al momento.
       </>
     ),
@@ -419,15 +405,193 @@ function useTargetRect(target: string | undefined): Rect | null {
   return rect;
 }
 
+/** The spotlight + card of a walkthrough. The caller owns which step it is on
+ *  and what finishing does; this follows the step's target and keeps the card
+ *  inside the window. */
+export function TourRunner({
+  steps,
+  step,
+  setStep,
+  onFinish,
+  skippable = false,
+}: {
+  steps: TourStep[];
+  step: number;
+  setStep: (step: number) => void;
+  onFinish: () => void;
+  /** First-time walkthroughs are mandatory: no Saltar, no Esc. Only a replay can be skipped. */
+  skippable?: boolean;
+}) {
+  const current = steps[step];
+  const rect = useTargetRect(current?.target);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [cardHeight, setCardHeight] = useState(220);
+
+  useEffect(() => {
+    current?.enter?.();
+  }, [step, current]);
+
+  // Measured live: each step's card mounts after the previous one leaves
+  // (AnimatePresence mode="wait") and a sample can make it much taller — a
+  // one-off measurement kept the previous card's height and placed the new
+  // one partly below the window.
+  const [cardEl, setCardEl] = useState<HTMLDivElement | null>(null);
+  const setCardNode = (node: HTMLDivElement | null) => {
+    cardRef.current = node;
+    setCardEl(node);
+  };
+  useLayoutEffect(() => {
+    if (!cardEl) return;
+    setCardHeight(cardEl.offsetHeight);
+    const ro = new ResizeObserver(() => setCardHeight(cardEl.offsetHeight));
+    ro.observe(cardEl);
+    return () => ro.disconnect();
+  }, [cardEl]);
+
+  // Re-place on window resize too.
+  const [, setViewportTick] = useState(0);
+  useEffect(() => {
+    const onResize = () => setViewportTick((t) => t + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const finish = onFinish;
+  const isLast = step === steps.length - 1;
+  const next = () => (isLast ? finish() : setStep(step + 1));
+  const back = () => step > 0 && setStep(step - 1);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (skippable) finish();
+      }
+      else if (e.key === "ArrowRight" || e.key === "Enter") next();
+      else if (e.key === "ArrowLeft") back();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  if (!current) return null;
+
+  // Card goes under the spotlight if it fits, otherwise above; centered when
+  // the step has no target (or it isn't on screen). Whatever the case it's
+  // kept fully inside the window (under the titlebar, 16px from the bottom).
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const minTop = TITLEBAR_HEIGHT + 8;
+  const maxTop = Math.max(minTop, vh - cardHeight - 16);
+  const clampTop = (t: number) => Math.min(Math.max(t, minTop), maxTop);
+  let cardStyle: React.CSSProperties;
+  if (rect) {
+    const left = Math.min(Math.max(rect.left + rect.width / 2 - CARD_WIDTH / 2, 16), vw - CARD_WIDTH - 16);
+    const below = rect.top + rect.height + PAD + 12;
+    const above = rect.top - PAD - 12 - cardHeight;
+    const top = below + cardHeight <= vh - 16 ? below : above >= minTop ? above : clampTop(below);
+    cardStyle = { top: clampTop(top), left, width: CARD_WIDTH };
+  } else {
+    cardStyle = { top: clampTop(vh / 2 - cardHeight / 2), left: vw / 2 - CARD_WIDTH / 2, width: CARD_WIDTH };
+  }
+  // Even taller than the window (tiny window): scroll inside the card.
+  cardStyle.maxHeight = vh - minTop - 16;
+
+  const ChapterIcon = current.chapter.icon;
+  // Progress as one segment per chapter (filled as you go), not a step count.
+  const chapters = steps.reduce<Chapter[]>((acc, s) => (acc.includes(s.chapter) ? acc : [...acc, s.chapter]), []).filter(
+    (c) => !c.intro
+  );
+  const currentChapterIndex = chapters.indexOf(current.chapter);
+
+  return (
+    <div className="fixed inset-0 z-[200] pointer-events-none">
+      {/* Swallows clicks on the app while it runs; the titlebar stays usable
+          (window buttons). */}
+      <div className="absolute inset-x-0 bottom-0 pointer-events-auto" style={{ top: TITLEBAR_HEIGHT }} />
+
+      {rect ? (
+        <div
+          className="absolute rounded-md ring-2 ring-accent transition-all duration-300 ease-out"
+          style={{
+            top: rect.top - PAD,
+            left: rect.left - PAD,
+            width: rect.width + PAD * 2,
+            height: rect.height + PAD * 2,
+            boxShadow: "0 0 0 9999px rgba(0,0,0,0.65)",
+          }}
+        />
+      ) : (
+        <div className="absolute inset-0 bg-black/65" />
+      )}
+
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={step}
+          ref={setCardNode}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
+          className="absolute pointer-events-auto rounded-md border border-transparent bg-gray-500/20 backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.35)] overflow-hidden flex flex-col"
+          style={cardStyle}
+          role="dialog"
+          aria-label={current.title}
+        >
+          <div className="p-5 min-h-0 overflow-y-auto">
+            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-accent mb-1.5">
+              <ChapterIcon className="h-3.5 w-3.5" />
+              {current.chapter.label}
+            </p>
+            <h2 className="text-base font-bold text-white mb-1.5">{current.title}</h2>
+            <p className="text-sm text-muted-foreground leading-relaxed">{current.body}</p>
+            {current.sample}
+          </div>
+
+          <div className="shrink-0 flex items-center gap-3 px-5 py-3 border-t border-white/10 bg-white/[0.03]">
+            {currentChapterIndex >= 0 ? (
+              <div className="flex gap-1" aria-hidden>
+                {chapters.map((c, i) => (
+                  <span
+                    key={c.label}
+                    title={c.label}
+                    className={`h-1 w-5 rounded-full transition-colors ${i <= currentChapterIndex ? "bg-accent" : "bg-white/15"}`}
+                  />
+                ))}
+              </div>
+            ) : (
+              !isLast && skippable && (
+                <button type="button" onClick={finish} className="text-xs text-muted-foreground hover:text-white transition-colors">
+                  Saltar tutorial
+                </button>
+              )
+            )}
+            <div className="ml-auto flex gap-2">
+              {currentChapterIndex >= 0 && skippable && (
+                <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-white" onClick={finish}>
+                  Saltar
+                </Button>
+              )}
+              {step > 0 && !isLast && (
+                <Button variant="outline" size="sm" className="border-white/10" onClick={back}>
+                  Atrás
+                </Button>
+              )}
+              <Button size="sm" onClick={next}>
+                {step === 0 ? "Empezar" : isLast ? "Terminar" : "Siguiente"}
+              </Button>
+            </div>
+          </div>
+        </motion.div>
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export function OnboardingTour() {
   const [location] = useLocation();
   const uuid = useAuth((s) => s.uuid);
   const { requested, active, step, begin, setStep, end } = useTour();
   const onHub = location === "/hub";
-  const current = STEPS[step];
-  const rect = useTargetRect(active ? current?.target : undefined);
-  const cardRef = useRef<HTMLDivElement>(null);
-  const [cardHeight, setCardHeight] = useState(220);
 
   // Starts on its own after a real sign-in, once the Hub is up.
   useEffect(() => {
@@ -456,166 +620,11 @@ export function OnboardingTour() {
     if (active && !onHub) end();
   }, [active, onHub, end]);
 
-  useEffect(() => {
-    if (active) current?.enter?.();
-  }, [active, step, current]);
-
-  // Measured live: each step's card mounts after the previous one leaves
-  // (AnimatePresence mode="wait") and a sample can make it much taller — a
-  // one-off measurement kept the previous card's height and placed the new
-  // one partly below the window.
-  const [cardEl, setCardEl] = useState<HTMLDivElement | null>(null);
-  const setCardNode = (node: HTMLDivElement | null) => {
-    cardRef.current = node;
-    setCardEl(node);
-  };
-  useLayoutEffect(() => {
-    if (!cardEl) return;
-    setCardHeight(cardEl.offsetHeight);
-    const ro = new ResizeObserver(() => setCardHeight(cardEl.offsetHeight));
-    ro.observe(cardEl);
-    return () => ro.disconnect();
-  }, [cardEl]);
-
-  // Re-place on window resize too.
-  const [, setViewportTick] = useState(0);
-  useEffect(() => {
-    if (!active) return;
-    const onResize = () => setViewportTick((t) => t + 1);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [active]);
-
+  if (!active || !onHub) return null;
   const finish = () => {
     if (uuid) markTourDone(uuid);
     closeMenu();
     end();
   };
-  const isLast = step === STEPS.length - 1;
-  const next = () => (isLast ? finish() : setStep(step + 1));
-  const back = () => step > 0 && setStep(step - 1);
-
-  useEffect(() => {
-    if (!active) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") finish();
-      else if (e.key === "ArrowRight" || e.key === "Enter") next();
-      else if (e.key === "ArrowLeft") back();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
-
-  if (!active || !onHub || !current) return null;
-
-  // Card goes under the spotlight if it fits, otherwise above; centered when
-  // the step has no target (or it isn't on screen). Whatever the case it's
-  // kept fully inside the window (under the titlebar, 16px from the bottom).
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const minTop = TITLEBAR_HEIGHT + 8;
-  const maxTop = Math.max(minTop, vh - cardHeight - 16);
-  const clampTop = (t: number) => Math.min(Math.max(t, minTop), maxTop);
-  let cardStyle: React.CSSProperties;
-  if (rect) {
-    const left = Math.min(Math.max(rect.left + rect.width / 2 - CARD_WIDTH / 2, 16), vw - CARD_WIDTH - 16);
-    const below = rect.top + rect.height + PAD + 12;
-    const above = rect.top - PAD - 12 - cardHeight;
-    const top = below + cardHeight <= vh - 16 ? below : above >= minTop ? above : clampTop(below);
-    cardStyle = { top: clampTop(top), left, width: CARD_WIDTH };
-  } else {
-    cardStyle = { top: clampTop(vh / 2 - cardHeight / 2), left: vw / 2 - CARD_WIDTH / 2, width: CARD_WIDTH };
-  }
-  // Even taller than the window (tiny window): scroll inside the card.
-  cardStyle.maxHeight = vh - minTop - 16;
-
-  const ChapterIcon = current.chapter.icon;
-  // Progress as one segment per chapter (filled as you go), not a step count.
-  const chapters = STEPS.reduce<Chapter[]>((acc, s) => (acc.includes(s.chapter) ? acc : [...acc, s.chapter]), []).filter(
-    (c) => c !== CH_START
-  );
-  const currentChapterIndex = chapters.indexOf(current.chapter);
-
-  return (
-    <div className="fixed inset-0 z-[200] pointer-events-none">
-      {/* Swallows clicks on the app while it runs; the titlebar stays usable
-          (window buttons). */}
-      <div className="absolute inset-x-0 bottom-0 pointer-events-auto" style={{ top: TITLEBAR_HEIGHT }} />
-
-      {rect ? (
-        <div
-          className="absolute rounded-xl ring-2 ring-accent transition-all duration-300 ease-out"
-          style={{
-            top: rect.top - PAD,
-            left: rect.left - PAD,
-            width: rect.width + PAD * 2,
-            height: rect.height + PAD * 2,
-            boxShadow: "0 0 0 9999px rgba(0,0,0,0.65)",
-          }}
-        />
-      ) : (
-        <div className="absolute inset-0 bg-black/65" />
-      )}
-
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={step}
-          ref={setCardNode}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.18 }}
-          className="absolute pointer-events-auto rounded-xl border border-white/10 bg-card/95 backdrop-blur-md shadow-2xl overflow-hidden flex flex-col"
-          style={cardStyle}
-          role="dialog"
-          aria-label={current.title}
-        >
-          <div className="p-5 min-h-0 overflow-y-auto">
-            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-accent mb-1.5">
-              <ChapterIcon className="h-3.5 w-3.5" />
-              {current.chapter.label}
-            </p>
-            <h2 className="text-base font-bold text-white mb-1.5">{current.title}</h2>
-            <p className="text-sm text-muted-foreground leading-relaxed">{current.body}</p>
-            {current.sample}
-          </div>
-
-          <div className="shrink-0 flex items-center gap-3 px-5 py-3 border-t border-white/5 bg-black/20">
-            {currentChapterIndex >= 0 ? (
-              <div className="flex gap-1" aria-hidden>
-                {chapters.map((c, i) => (
-                  <span
-                    key={c.label}
-                    title={c.label}
-                    className={`h-1 w-5 rounded-full transition-colors ${i <= currentChapterIndex ? "bg-accent" : "bg-white/15"}`}
-                  />
-                ))}
-              </div>
-            ) : (
-              !isLast && (
-                <button type="button" onClick={finish} className="text-xs text-muted-foreground hover:text-white transition-colors">
-                  Saltar tutorial
-                </button>
-              )
-            )}
-            <div className="ml-auto flex gap-2">
-              {currentChapterIndex >= 0 && (
-                <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-white" onClick={finish}>
-                  Saltar
-                </Button>
-              )}
-              {step > 0 && !isLast && (
-                <Button variant="outline" size="sm" className="border-white/10" onClick={back}>
-                  Atrás
-                </Button>
-              )}
-              <Button size="sm" onClick={next}>
-                {step === 0 ? "Empezar" : isLast ? "Terminar" : "Siguiente"}
-              </Button>
-            </div>
-          </div>
-        </motion.div>
-      </AnimatePresence>
-    </div>
-  );
+  return <TourRunner steps={STEPS} step={step} setStep={setStep} onFinish={finish} skippable={!!uuid && !tourPending(uuid)} />;
 }

@@ -26,6 +26,7 @@ export function TracedBorder({
   replayKey = 0,
   split = false,
   segments,
+  className,
   children,
 }: {
   borderRadius?: number;
@@ -51,6 +52,7 @@ export function TracedBorder({
   /** Draw the border as this many separate pieces that appear one by one
    *  going round until it's complete ("Giro naranja", like its original). */
   segments?: number;
+  className?: string;
   children: ReactNode;
 }) {
   const gradientId = `traced-${useId().replace(/:/g, "")}`;
@@ -100,7 +102,7 @@ export function TracedBorder({
     ? `traced-border-draw 1.9s steps(${segments}, jump-start) 0s both`
     : undefined;
   return (
-    <div ref={rootRef} className={`relative isolate ${fill ? "h-full w-full" : ""}`} style={{ borderRadius }}>
+    <div ref={rootRef} className={`relative isolate ${fill ? "h-full w-full" : ""} ${className ?? ""}`} style={{ borderRadius }}>
       <svg
         aria-hidden
         className="pointer-events-none absolute inset-0 z-[2] h-full w-full overflow-visible"

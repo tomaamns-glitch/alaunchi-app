@@ -8,9 +8,10 @@ import { useLaunchModpack } from "@/hooks/use-launch-modpack";
 import { useInstanceProgress } from "@/hooks/use-instance-progress";
 import { InstanceProgressChip } from "@/components/instance-progress-chip";
 import { runStateBusyLabel } from "@/hooks/use-instance-run-state";
-import { useInstanceThumbnail } from "@/hooks/use-instance-thumbnail";
 import { Button } from "@/components/ui/button";
 import { LoaderIcon } from "@/components/loader-icon";
+import instanceVanillaIcon from "@/assets/instance-vanilla.png";
+import instanceModdedIcon from "@/assets/instance-modded.png";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -31,7 +32,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { deleteInstance, openInstanceFolder } from "@/services/electron";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 export interface TileDragProps {
   draggable: boolean;
@@ -65,8 +66,14 @@ interface InstanceTileProps {
 export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onRemoveFromFolder }: InstanceTileProps) {
   const { busy, running, runState, toggle } = useLaunchModpack(instance);
   const progress = useInstanceProgress(instance.id);
-  const shot = useInstanceThumbnail(instance.id);
-  const cover = shot || instance.bannerUrl || instance.imageUrl;
+  // Private (custom) and downloaded instances show only their icon — never a
+  // banner or a gallery image/screenshot. With no icon, the same default as a new
+  // instance: vanilla or modded. Online instances keep their banner.
+  const defaultCover = !instance.loaderType || instance.loaderType.toLowerCase() === "vanilla" ? instanceVanillaIcon : instanceModdedIcon;
+  const cover =
+    instance.source === "custom" || instance.isDownloaded
+      ? instance.imageUrl || defaultCover
+      : instance.bannerUrl || instance.imageUrl || defaultCover;
   const [sharing, setSharing] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -98,15 +105,11 @@ export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onR
           onDragLeave={drag.onDragLeave}
           onDrop={drag.onDrop}
           onDragEnd={drag.onDragEnd}
-          className={`group rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden hover:border-accent/40 transition-colors cursor-grab active:cursor-grabbing ${dragClasses(drag)}`}
+          className={`group rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden hover:border-accent/40 transition-colors duration-300 ease-out cursor-grab active:cursor-grabbing ${dragClasses(drag)}`}
         >
           <button type="button" onClick={onClick} className="block w-full text-left">
             <div className="relative aspect-square bg-black/50">
-              {cover ? (
-                <img src={cover} alt="" className="w-full h-full object-cover" draggable={false} />
-              ) : (
-                <div className="w-full h-full bg-gradient-to-br from-accent/15 to-black" />
-              )}
+              <img src={cover} alt="" className="w-full h-full object-cover" draggable={false} />
               <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/25" />
 
               <FavoriteStar
@@ -124,10 +127,10 @@ export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onR
                 </span>
               )}
 
-              <span className="absolute bottom-1.5 right-1.5 flex items-center gap-1.5 rounded-md bg-black/70 px-2 py-1 text-[11px] font-semibold leading-none text-white backdrop-blur-sm">
+              <span className="absolute bottom-2 right-2 flex items-center gap-2 rounded-md bg-black/70 px-2.5 py-1.5 text-[14px] font-semibold leading-none text-white backdrop-blur-sm">
                 {instance.minecraftVersion}
                 {instance.loaderType && instance.loaderType.toLowerCase() !== "vanilla" && (
-                  <LoaderIcon loader={instance.loaderType} className="h-4 w-4" title={instance.loaderType} />
+                  <LoaderIcon loader={instance.loaderType} className="h-6 w-6" title={instance.loaderType} />
                 )}
               </span>
             </div>
@@ -155,7 +158,7 @@ export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onR
               className={`w-full h-8 font-bold ${
                 running
                   ? ""
-                  : "bg-white/[0.06] text-muted-foreground group-hover:bg-accent group-hover:text-accent-foreground hover:bg-accent hover:text-accent-foreground"
+                  : "bg-white/[0.06] text-muted-foreground transition-colors duration-300 ease-out group-hover:bg-accent group-hover:text-accent-foreground hover:bg-accent hover:text-accent-foreground"
               }`}
               onClick={toggle}
               disabled={busy}
@@ -229,7 +232,7 @@ export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onR
     <ShareInstanceDialog instance={sharing ? instance : null} onOpenChange={(o) => !o && setSharing(false)} />
     <DuplicateInstanceDialog instance={duplicating ? instance : null} onOpenChange={(o) => !o && setDuplicating(false)} />
     <AlertDialog open={confirmDelete} onOpenChange={(o) => !deleting && setConfirmDelete(o)}>
-      <AlertDialogContent>
+      <AlertDialogContent className="border-transparent bg-gray-500/15 backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.35)] sm:rounded-md">
         <AlertDialogHeader>
           <AlertDialogTitle>¿Eliminar "{instance.name}"?</AlertDialogTitle>
           <AlertDialogDescription>
@@ -243,7 +246,9 @@ export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onR
           Conservar los archivos de la instancia
         </label>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={deleting}>Cancelar</AlertDialogCancel>
+          <AlertDialogCancel disabled={deleting} className="border-transparent bg-white/[0.07] hover:bg-white/[0.14]">
+            Cancelar
+          </AlertDialogCancel>
           <AlertDialogAction
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             disabled={deleting}

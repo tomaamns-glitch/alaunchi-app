@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useMemo, useState } from "react";
 import {
   Box,
@@ -16,7 +17,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -30,7 +31,11 @@ import { ImageLightbox } from "@/components/image-lightbox";
 import { ShareImageDialog, type ShareableImage } from "@/components/share-image-dialog";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
-import { listEmotes, listInstanceFiles, listSchematics } from "@/services/electron";
+import { downloadInstanceFile, listEmotes, listInstanceFiles, listSchematics } from "@/services/electron";
+import { findCompatibleInstances, listAllMyInstances, type CompatibleInstance } from "@/lib/content-compat";
+import { identifyLibraryFiles } from "@/services/mod-library";
+import type { Modpack } from "@/services/github";
+import { GLASS_MENU_LINE } from "@/components/content-context-menu";
 import { categoryOf, fileName as baseName, guessTitle, identifyModrinthFiles } from "@/services/modrinth";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -63,6 +68,9 @@ type Tab = "content" | "gallery";
  *  from it) and "Galería" (your screenshots and the ones friends sent). */
 export function PersonalLibraryPanel() {
   const [tab, setTab] = useState<Tab>("content");
+  // "Guardar" (browse an instance to save content) lives in the header's corner,
+  // so its state is here.
+  const [browsing, setBrowsing] = useState(false);
   const loaded = usePersonalLibrary((s) => s.loaded);
 
   useEffect(() => {
@@ -71,27 +79,37 @@ export function PersonalLibraryPanel() {
 
   return (
     <div className="h-full flex flex-col gap-3 min-h-0">
-      <div className="flex items-center gap-1 p-1 rounded-lg bg-white/5 border border-white/5 shrink-0 self-start">
-        {(["content", "gallery"] as Tab[]).map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setTab(t)}
-            className={cn(
-              "px-3 py-1 rounded-md text-xs font-semibold transition-colors",
-              tab === t ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-white"
-            )}
-          >
-            {t === "content" ? "Contenido" : "Galería"}
-          </button>
-        ))}
+      <div className="flex items-center justify-between gap-2 shrink-0">
+        <div className="flex items-center gap-1 p-1 rounded-md bg-white/[0.07] border border-transparent">
+          {(["content", "gallery"] as Tab[]).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => {
+                setTab(t);
+                setBrowsing(false);
+              }}
+              className={cn(
+                "px-3 py-1 rounded-md text-xs font-semibold transition-colors",
+                tab === t ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-white"
+              )}
+            >
+              {t === "content" ? "Contenido" : "Galería"}
+            </button>
+          ))}
+        </div>
+        {tab === "content" && !browsing && loaded && (
+          <Button size="sm" className="h-7 px-2.5 text-xs shrink-0" onClick={() => setBrowsing(true)}>
+            <Plus className="mr-1 h-3.5 w-3.5" /> Guardar
+          </Button>
+        )}
       </div>
       {!loaded ? (
         <div className="flex-1 flex items-center justify-center text-muted-foreground">
           <Loader2 className="h-5 w-5 animate-spin" />
         </div>
       ) : tab === "content" ? (
-        <ContentTab />
+        <ContentTab browsing={browsing} onCloseBrowsing={() => setBrowsing(false)} />
       ) : (
         <GalleryTab />
       )}
@@ -129,11 +147,10 @@ function ItemIcon({ iconUrl, category, className = "h-9 w-9" }: { iconUrl: strin
   );
 }
 
-function ContentTab() {
+function ContentTab({ browsing, onCloseBrowsing }: { browsing: boolean; onCloseBrowsing: () => void }) {
   const content = usePersonalLibrary((s) => s.content);
   const instances = useMyInstances();
   const [filter, setFilter] = useState<SavedContentCategory | "all">("all");
-  const [browsing, setBrowsing] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const visible = filter === "all" ? content : content.filter((c) => c.category === filter);
@@ -142,7 +159,7 @@ function ContentTab() {
     setBusyId(item.id);
     try {
       await installSavedContent(item.id, inst.id);
-      toast.success(`${item.displayName} instalado en ${inst.name}.`);
+      notify.success(`${item.displayName} instalado en ${inst.name}.`);
     } catch (e: any) {
       toast.error(e?.message || "No se pudo instalar.");
     } finally {
@@ -150,7 +167,7 @@ function ContentTab() {
     }
   };
 
-  if (browsing) return <InstanceBrowser instances={instances} onClose={() => setBrowsing(false)} />;
+  if (browsing) return <InstanceBrowser instances={instances} onClose={onCloseBrowsing} />;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col gap-2">
@@ -165,16 +182,13 @@ function ContentTab() {
                 "px-2 py-0.5 rounded-full text-[11px] border whitespace-nowrap transition-colors",
                 filter === c
                   ? "bg-accent text-accent-foreground border-transparent"
-                  : "bg-white/5 text-muted-foreground border-white/10 hover:bg-white/10"
+                  : "bg-white/[0.07] text-muted-foreground border-transparent hover:bg-white/[0.14]"
               )}
             >
               {c === "all" ? "Todo" : SAVED_CATEGORY_LABELS[c]}
             </button>
           ))}
         </div>
-        <Button size="sm" className="h-7 px-2.5 text-xs shrink-0" onClick={() => setBrowsing(true)}>
-          <Plus className="mr-1 h-3.5 w-3.5" /> Guardar
-        </Button>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 pr-1">
         {visible.length === 0 ? (
@@ -185,15 +199,19 @@ function ContentTab() {
           </p>
         ) : (
           visible.map((item) => (
-            <div key={item.id} className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-white/[0.04] border border-white/5">
+            <div key={item.id} className="flex items-center gap-2.5 px-2.5 py-2 rounded-md bg-white/[0.07] border border-transparent">
               <ItemIcon iconUrl={item.iconUrl} category={item.category} />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-gray-100 truncate">{item.displayName}</p>
                 <p className="text-[11px] text-muted-foreground truncate">
                   {SAVED_CATEGORY_LABELS[item.category]}
+                  {item.reference && " · referencia"}
                   {item.sourceName && ` · de ${item.sourceName}`}
                 </p>
               </div>
+              {item.reference ? (
+                <ReferenceInstallMenu item={item} />
+              ) : (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button size="sm" className="h-7 px-2 text-xs shrink-0" disabled={busyId === item.id}>
@@ -219,19 +237,105 @@ function ContentTab() {
                   )}
                 </DropdownMenuContent>
               </DropdownMenu>
-              <button
-                type="button"
-                onClick={() => removeContent(item.id).catch(() => toast.error("No se pudo quitar."))}
-                title="Quitar de la biblioteca"
-                className="h-7 w-7 shrink-0 flex items-center justify-center rounded-md text-gray-400 hover:text-destructive hover:bg-white/5 transition-colors"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
+              )}
+              <Hint label="Quitar de la biblioteca">
+                <button
+                  type="button"
+                  onClick={() => removeContent(item.id).catch(() => toast.error("No se pudo quitar."))}
+                  className="h-7 w-7 shrink-0 flex items-center justify-center rounded-md text-gray-400 hover:text-destructive hover:bg-white/5 transition-colors"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </Hint>
             </div>
           ))
         )}
       </div>
     </div>
+  );
+}
+
+/** "Instalar" for an item saved as a reference (no file stored): looks up, for
+ *  each of your instances, the version of the project that fits its Minecraft
+ *  version and loader. Instances with no compatible version are listed apart. */
+function ReferenceInstallMenu({ item }: { item: SavedContent }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ compatible: CompatibleInstance[]; incompatible: Modpack[] } | null>(null);
+
+  useEffect(() => {
+    if (!open || result || !item.modrinthProjectId) return;
+    let cancelled = false;
+    (async () => {
+      const [mine, compatible] = await Promise.all([
+        listAllMyInstances(),
+        findCompatibleInstances(item.modrinthProjectId!, item.category),
+      ]);
+      if (cancelled) return;
+      const ok = new Set(compatible.map((c) => c.pack.id));
+      setResult({ compatible, incompatible: mine.filter((p) => !ok.has(p.id)) });
+    })().catch(() => !cancelled && setResult({ compatible: [], incompatible: [] }));
+    return () => {
+      cancelled = true;
+    };
+  }, [open, result, item.modrinthProjectId, item.category]);
+
+  const install = async ({ pack, resolvedVersion: v }: CompatibleInstance) => {
+    setBusy(true);
+    try {
+      await downloadInstanceFile(pack.id, `${item.category}/${v.filename}`, v.url, v.sha1);
+      notify.success(`${item.displayName} ${v.versionNumber} instalado en ${pack.name}.`);
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudo instalar.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" className="h-7 px-2 text-xs shrink-0" disabled={busy}>
+          {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Download className="mr-1 h-3.5 w-3.5" />}
+          Instalar
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className={`relative max-h-72 overflow-y-auto ${GLASS_MENU_LINE}`}>
+        <DropdownMenuLabel className="text-xs">Instancias compatibles</DropdownMenuLabel>
+        {!result ? (
+          <DropdownMenuItem disabled>
+            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> Buscando versiones…
+          </DropdownMenuItem>
+        ) : result.compatible.length === 0 ? (
+          <DropdownMenuItem disabled>Ninguna de tus instancias es compatible</DropdownMenuItem>
+        ) : (
+          result.compatible.map((c) => (
+            <DropdownMenuItem key={c.pack.id} onClick={() => install(c)}>
+              {c.pack.imageUrl ? (
+                <img src={c.pack.imageUrl} alt="" className="mr-2 h-4 w-4 rounded-sm object-cover" />
+              ) : (
+                <Package className="mr-2 h-4 w-4" />
+              )}
+              <span className="truncate">{c.pack.name}</span>
+              <span className="ml-2 text-[10px] text-muted-foreground shrink-0">{c.resolvedVersion.versionNumber}</span>
+            </DropdownMenuItem>
+          ))
+        )}
+        {!!result?.incompatible.length && (
+          <>
+            <DropdownMenuLabel className="text-xs text-muted-foreground">No compatibles</DropdownMenuLabel>
+            {result.incompatible.map((p) => (
+              <DropdownMenuItem key={p.id} disabled className="text-xs">
+                <span className="truncate">{p.name}</span>
+                <span className="ml-2 text-[10px] shrink-0">
+                  {p.loaderType} {p.minecraftVersion}
+                </span>
+              </DropdownMenuItem>
+            ))}
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -292,9 +396,13 @@ function InstanceBrowser({
         }));
       }
       const files = (await listInstanceFiles(instanceId)).filter((f) => categoryOf(f.path) === category);
-      const matches = await identifyModrinthFiles(files.map((f) => ({ path: f.path, sha1: f.sha1 ?? undefined }))).catch(
-        () => new Map()
-      );
+      const toIdentify = files.map((f) => ({ path: f.path, sha1: f.sha1 ?? undefined }));
+      const [modrinth, group] = await Promise.all([
+        identifyModrinthFiles(toIdentify).catch(() => new Map()),
+        identifyLibraryFiles(toIdentify),
+      ]);
+      // Group-library mods aren't on Modrinth; Modrinth wins if both match.
+      const matches = new Map([...group, ...modrinth]);
       return files.map((f) => {
         const m = matches.get(f.path);
         return {
@@ -316,7 +424,11 @@ function InstanceBrowser({
   }, [instanceId, category]);
 
   const savedHashes = useMemo(
-    () => new Set(saved.filter((s) => s.category === category).map((s) => s.sha1)),
+    () => new Set(saved.filter((s) => s.category === category && !s.reference).map((s) => s.sha1)),
+    [saved, category]
+  );
+  const savedRefs = useMemo(
+    () => new Set(saved.filter((s) => s.category === category && s.reference).map((s) => s.modrinthProjectId)),
     [saved, category]
   );
 
@@ -348,7 +460,7 @@ function InstanceBrowser({
     <div className="flex-1 min-h-0 flex flex-col gap-2">
       <div className="flex items-center gap-1.5 shrink-0">
         <Select value={instanceId} onValueChange={setInstanceId}>
-          <SelectTrigger className="h-7 flex-1 min-w-0 text-xs bg-background/50 border-white/10">
+          <SelectTrigger className="h-7 flex-1 min-w-0 text-xs bg-white/[0.07] border-transparent">
             <SelectValue placeholder="Elige una instancia" />
           </SelectTrigger>
           <SelectContent>
@@ -360,7 +472,7 @@ function InstanceBrowser({
           </SelectContent>
         </Select>
         <Select value={category} onValueChange={(v) => setCategory(v as SavedContentCategory)}>
-          <SelectTrigger className="h-7 w-[8.5rem] text-xs bg-background/50 border-white/10">
+          <SelectTrigger className="h-7 w-[8.5rem] text-xs bg-white/[0.07] border-transparent">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -371,14 +483,15 @@ function InstanceBrowser({
             ))}
           </SelectContent>
         </Select>
-        <button
-          type="button"
-          onClick={onClose}
-          title="Volver a lo guardado"
-          className="h-7 w-7 shrink-0 flex items-center justify-center rounded-md text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <Hint label="Volver a lo guardado">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-7 w-7 shrink-0 flex items-center justify-center rounded-md text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </Hint>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 pr-1">
         {instances.length === 0 ? (
@@ -391,9 +504,10 @@ function InstanceBrowser({
           <p className="text-xs text-muted-foreground text-center py-8">Esta instancia no tiene {SAVED_CATEGORY_LABELS[category].toLowerCase()}.</p>
         ) : (
           items.map((item) => {
-            const isSaved = !!item.sha1 && savedHashes.has(item.sha1);
+            const isSaved =
+              (!!item.sha1 && savedHashes.has(item.sha1)) || (!!item.modrinthProjectId && savedRefs.has(item.modrinthProjectId));
             return (
-              <div key={item.path} className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/5">
+              <div key={item.path} className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md bg-white/[0.07] border border-transparent">
                 <ItemIcon iconUrl={item.iconUrl} category={category} className="h-8 w-8" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-gray-100 truncate">{item.displayName}</p>
@@ -473,15 +587,17 @@ function GalleryTab() {
                   {img.from.kind === "chat" ? `De ${img.from.username}` : img.from.name}
                 </p>
                 <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      className="absolute top-1 right-1 h-6 w-6 flex items-center justify-center rounded bg-black/60 text-white opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100 hover:bg-black/80 transition-opacity"
-                      aria-label="Opciones de la imagen"
-                    >
-                      <MoreVertical className="h-3.5 w-3.5" />
-                    </button>
-                  </DropdownMenuTrigger>
+                  <Hint label="Opciones de la imagen">
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className="absolute top-1 right-1 h-6 w-6 flex items-center justify-center rounded bg-black/60 text-white opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100 hover:bg-black/80 transition-opacity"
+                        aria-label="Opciones de la imagen"
+                      >
+                        <MoreVertical className="h-3.5 w-3.5" />
+                      </button>
+                    </DropdownMenuTrigger>
+                  </Hint>
                   <DropdownMenuContent align="end">
                     <DropdownMenuItem onClick={() => showGalleryFile(img.id)}>
                       <FolderOpen className="mr-2 h-4 w-4" /> Abrir carpeta

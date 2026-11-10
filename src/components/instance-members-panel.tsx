@@ -1,7 +1,9 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Loader2, Users } from "lucide-react";
 import { Head } from "@/components/player-picker";
 import { ProfileBannerRow } from "@/components/profile-banner-row";
+import { MoveBackButton } from "@/components/move-to-content-menu";
 import { subscribePresence, sortAllPresence, type PresenceEntry } from "@/services/presence";
 import { getNicknames } from "@/lib/nicknames";
 import { formatCompactAgo, formatPlaytime } from "@/lib/format";
@@ -14,25 +16,25 @@ import { cn } from "@/lib/utils";
  * Novedades; a footer popover when the window is narrow): everyone who has
  * played this instance —
  * the same `presence/{modpackId}` roster the group chat and the players panel
- * use — online first, then by last seen. `entries` overrides the live roster
- * (dev example pack).
+ * use — online first, then by last seen.
  */
 export function InstanceMembersPanel({
   modpackId,
-  entries,
   collapsed = false,
   onToggleCollapsed,
+  onMoveBack,
   className,
 }: {
   modpackId: string;
-  entries?: Record<string, PresenceEntry>;
   /** Only the header shows (the page's left column). */
   collapsed?: boolean;
   /** Shows the minimize/expand button in the header. */
   onToggleCollapsed?: () => void;
+  /** Moved to the manager: shows the button that sends it back to Inicio's footer. */
+  onMoveBack?: () => void;
   className?: string;
 }) {
-  const [members, setMembers] = useState<Record<string, PresenceEntry> | null>(entries ?? null);
+  const [members, setMembers] = useState<Record<string, PresenceEntry> | null>(null);
   // Whether each one has ALaunchi open (green dot) — `online` in the roster
   // only means "playing this instance right now".
   const [activity, setActivity] = useState<Record<string, UserActivity>>({});
@@ -41,33 +43,34 @@ export function InstanceMembersPanel({
   const myUuid = useAuth((s) => s.uuid);
 
   useEffect(() => {
-    if (entries) return;
     setMembers(null);
     return subscribePresence(modpackId, setMembers);
-  }, [modpackId, entries]);
+  }, [modpackId]);
 
   const roster = useMemo(() => (members ? sortAllPresence(members) : []), [members]);
 
   return (
-    <aside className={cn("flex flex-col rounded-md border border-white/10 bg-gray-500/10 backdrop-blur-md overflow-hidden", className)}>
+    <aside className={cn("flex flex-col rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden", className)}>
       <div className={cn("shrink-0 flex items-center gap-2 px-4 py-3", !collapsed && "border-b border-white/5")}>
         <Users className="h-4 w-4 text-accent" />
         <h3 className="text-sm font-semibold text-white">Participantes</h3>
         {members && (
           <span className="ml-auto text-[11px] text-muted-foreground">{roster.length}</span>
         )}
+        {onMoveBack && <MoveBackButton onClick={onMoveBack} className={!members ? "ml-auto" : undefined} />}
         {onToggleCollapsed && (
-          <button
-            type="button"
-            onClick={onToggleCollapsed}
-            title={collapsed ? "Desplegar" : "Minimizar"}
-            className={cn(
-              "h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors shrink-0",
-              !members && "ml-auto"
-            )}
-          >
-            <ChevronDown className={cn("h-4 w-4 transition-transform", collapsed && "-rotate-90")} />
-          </button>
+          <Hint label={collapsed ? "Desplegar" : "Minimizar"}>
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              className={cn(
+                "h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors shrink-0",
+                !members && !onMoveBack && "ml-auto"
+              )}
+            >
+              <ChevronDown className={cn("h-4 w-4 transition-transform", collapsed && "-rotate-90")} />
+            </button>
+          </Hint>
         )}
       </div>
 
@@ -86,13 +89,13 @@ export function InstanceMembersPanel({
             const connected = e.online || (!!status && status !== "offline");
             const ago = e.lastSeen > 0 ? formatCompactAgo(e.lastSeen) : null;
             return (
-              // Styled like their profile card (banner + frame), like the friends panel.
-              <ProfileBannerRow key={uuid} uuid={uuid} className="h-14">
+              // Their banner behind the row, without their profile frame.
+              <ProfileBannerRow key={uuid} uuid={uuid} frameless className="h-14">
                 <div className="relative shrink-0">
                   <Head uuid={uuid} username={e.username} className="h-8 w-8 border border-white/10" />
                   <span
                     title={connected ? "Conectado" : "Desconectado"}
-                    className={`absolute z-[2] -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-card ${
+                    className={`absolute z-[4] -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-card ${
                       connected ? "bg-green-500" : "bg-gray-500"
                     }`}
                   />

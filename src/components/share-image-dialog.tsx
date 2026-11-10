@@ -1,4 +1,4 @@
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { SendToFriendDialog } from "@/components/send-to-friend-dialog";
 import { useAuth } from "@/hooks/use-auth";
 import { uploadSharedContent, type SharedContent } from "@/services/content-share";
@@ -38,7 +38,7 @@ export function ShareImageDialog({
       downloadUrl,
     };
     await sendSharedContent(myUuid, myUsername, uuid, username, content);
-    toast.success(`Imagen enviada a ${username}.`);
+    notify.success(`Imagen enviada a ${username}.`);
   };
 
   return (

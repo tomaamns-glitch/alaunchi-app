@@ -31,7 +31,14 @@ export interface SavedContent {
   schematicSource?: "litematica" | "worldedit";
   /** Instance (or chat) it was saved from, for display. */
   sourceName?: string;
+  /** Saved as a reference only (no file on disk): a Modrinth project, or a "lib:"
+   *  project of the group's mod library. `modrinthProjectId` says which; the
+   *  right version for each instance is resolved when installing. */
+  reference?: boolean;
 }
+
+/** Categories whose items can be saved as a reference instead of a file. */
+const REFERENCE_CATEGORIES = new Set<SavedContentCategory>(["mods", "shaderpacks", "resourcepacks"]);
 
 export interface GalleryImage {
   id: string;
@@ -83,8 +90,11 @@ export async function saveContent(
   source: LibrarySource
 ): Promise<{ entry: SavedContent; alreadySaved: boolean }> {
   if (!isElectron) throw new Error("Solo disponible en la app.");
+  // Known to Modrinth or to the group's library → keep only the reference, the
+  // .jar / .zip is only stored for content that isn't published anywhere.
+  const reference = !!meta.modrinthProjectId && REFERENCE_CATEGORIES.has(meta.category);
   try {
-    const result = await eAPI.libraryAddContent({ meta, fileName, source });
+    const result = await eAPI.libraryAddContent({ meta: { ...meta, reference }, fileName, source });
     await refresh();
     return result;
   } catch (e) {

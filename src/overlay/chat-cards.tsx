@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import {
   Package,
   Sparkles,
@@ -118,7 +118,7 @@ export function ContentCard({ content, target }: { content: SharedContent; targe
           : content.category;
       await downloadInstanceFile(target.modpackId, `${folder}/${content.fileName}`, content.downloadUrl, content.sha1);
       target.onInstalled(content.sha1);
-      toast.success(`${content.displayName} instalado en ${target.name}`, { description: AFTER_INSTALL[content.category] });
+      notify.success(`${content.displayName} instalado en ${target.name}`, { description: AFTER_INSTALL[content.category] });
     } catch (e: any) {
       toast.error("No se pudo instalar", { description: e?.message });
     } finally {

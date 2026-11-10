@@ -46,6 +46,8 @@ interface ModrinthProjectFull {
   downloads: number;
   followers: number;
   gallery: Array<{ url: string; raw_url?: string; title?: string; featured: boolean }>;
+  organization?: string | null;
+  raw_icon_url?: string | null;
 }
 
 const API = "https://api.modrinth.com/v2";
@@ -292,6 +294,9 @@ export interface ModrinthProjectDetail {
   followers: number;
   /** `url` is often a 350px thumbnail; `rawUrl` is the original upload. */
   gallery: Array<{ url: string; rawUrl?: string; title?: string; featured?: boolean }>;
+  organizationId?: string;
+  /** The icon as uploaded (`icon_url` is a 96px thumbnail). */
+  rawIconUrl?: string;
 }
 
 const projectDetailCache = new Map<string, ModrinthProjectDetail | null>();
@@ -313,11 +318,34 @@ export async function getProjectDetail(projectId: string): Promise<ModrinthProje
       downloads: p.downloads ?? 0,
       followers: p.followers ?? 0,
       gallery: (p.gallery ?? []).map((g) => ({ url: g.url, rawUrl: g.raw_url, title: g.title, featured: g.featured })),
+      organizationId: p.organization ?? undefined,
+      rawIconUrl: p.raw_icon_url ?? undefined,
     };
     projectDetailCache.set(projectId, detail);
     return detail;
   } catch {
     projectDetailCache.set(projectId, null);
+    return null;
+  }
+}
+
+/** Who publishes a project: its organization if it has one (only in the v3 API),
+ *  otherwise the owner of its team. null = couldn't find out. */
+export async function getProjectAuthor(projectId: string, hasOrganization: boolean): Promise<string | null> {
+  try {
+    if (hasOrganization) {
+      const res = await fetch(`https://api.modrinth.com/v3/project/${projectId}/organization`);
+      if (res.ok) {
+        const org = await res.json();
+        if (org?.name) return org.name;
+      }
+    }
+    const res = await fetch(`${API}/project/${projectId}/members`);
+    if (!res.ok) return null;
+    const members: Array<{ role?: string; user?: { username?: string } }> = await res.json();
+    const owner = members.find((m) => m.role === "Owner") ?? members[0];
+    return owner?.user?.username ?? null;
+  } catch {
     return null;
   }
 }
@@ -393,10 +421,13 @@ export async function searchProjects(
   offset = 0,
   limit = SEARCH_PAGE_SIZE,
   sort: ModrinthSort = "relevance",
-  genreCategory?: string | null
+  genreCategory?: string | null,
+  /** Only mods that run on a server (client-only ones are left out). */
+  serverSide = false
 ): Promise<ModrinthSearchHit[]> {
   try {
     const facets = [[`project_type:${PROJECT_TYPE[category]}`], [`versions:${gameVersion}`]];
+    if (serverSide) facets.push(["server_side:required", "server_side:optional"]);
     if (category === "mods") facets.push([`categories:${loader}`]);
     if (genreCategory) facets.push([`categories:${genreCategory}`]);
     const params = new URLSearchParams({
@@ -535,6 +566,14 @@ export interface ModpackVersion {
   url: string;
   sha1: string;
   size: number;
+  changelog: string;
+}
+
+export const SUPPORTED_MODPACK_LOADERS = new Set(["fabric", "forge", "neoforge"]);
+
+/** Whether ALaunchi can install this version (Quilt-only packs, for one, it can't). */
+export function isSupportedModpackVersion(v: ModpackVersion): boolean {
+  return v.loaders.length === 0 || v.loaders.some((l) => SUPPORTED_MODPACK_LOADERS.has(l)) || v.loaders.includes("minecraft");
 }
 
 /** Every version of a modpack that ships an .mrpack, newest first. */
@@ -559,6 +598,7 @@ export async function listModpackVersions(projectId: string): Promise<ModpackVer
           url: file.url,
           sha1: file.hashes?.sha1 ?? "",
           size: file.size ?? 0,
+          changelog: v.changelog ?? "",
         } as ModpackVersion;
       })
       .filter((v): v is ModpackVersion => v !== null);

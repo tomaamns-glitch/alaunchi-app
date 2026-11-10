@@ -1,16 +1,20 @@
+import { Hint } from "@/components/hint";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { format, formatDistanceToNowStrict, isToday, isYesterday } from "date-fns";
 import { es } from "date-fns/locale";
-import { ArrowLeft, ArrowDown, Search, Send, MessageCircle, X, Trash2, Pin, Users } from "lucide-react";
+import { ArrowLeft, ArrowDown, Paperclip, Search, Send, MessageCircle, X, Trash2, Pin, Users } from "lucide-react";
 import {
   subscribeMessages,
   sendMessage,
+  sendSharedContent,
   markConversationRead,
   getConversationId,
   type ChatMessage,
 } from "@/services/chat";
-import { sendGroupMessage } from "@/services/group-chat";
+import { sendGroupMessage, sendGroupContent } from "@/services/group-chat";
+import type { SharedContent } from "@/services/content-share";
+import { AttachPicker } from "./chat-attach";
 import { listInstanceFiles, type OverlayState } from "@/services/electron";
 import { subscribePresence, type PresenceEntry } from "@/services/presence";
 import { getNicknames } from "@/lib/nicknames";
@@ -236,6 +240,7 @@ export function ConversationView({
   header,
   messages,
   onSend,
+  onSendContent,
   target,
   group = false,
   placeholder,
@@ -244,6 +249,8 @@ export function ConversationView({
   header: ReactNode;
   messages: ThreadMessage[] | null;
   onSend: (text: string) => Promise<void>;
+  /** Sends something picked from the running instance (the paperclip). */
+  onSendContent: (content: SharedContent) => Promise<void>;
   target: RunningTarget | null;
   group?: boolean;
   placeholder: string;
@@ -252,7 +259,9 @@ export function ConversationView({
   const me = useOverlayStore((s) => s.me)!;
   const nicknames = useMemo(() => getNicknames(), []);
   const [draft, setDraft] = useState("");
+  const openChat = useOverlayStore((s) => s.openChat);
   const [sending, setSending] = useState(false);
+  const [attachOpen, setAttachOpen] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const [lightbox, setLightbox] = useState<{ src: string; title: string } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -339,10 +348,32 @@ export function ConversationView({
                 <div className={cn("flex items-end gap-2", mine ? "justify-end" : "justify-start", first ? "mt-2.5" : "mt-0.5")}>
                   {/* Group: the head sits next to the last message of each run. */}
                   {showSender && (
-                    <span className="w-7 shrink-0">{last && <PlayerHead uuid={m.senderUuid} name={sender} size={28} />}</span>
+                    <span className="w-7 shrink-0">
+                      {last && (
+                        <Hint label={`Chat con ${sender}`}>
+                          <button
+                            type="button"
+                            onClick={() => openChat(m.senderUuid, m.senderUsername)}
+                            aria-label={`Chat con ${sender}`}
+                            className="block transition-opacity hover:opacity-80"
+                          >
+                            <PlayerHead uuid={m.senderUuid} name={sender} size={28} />
+                          </button>
+                        </Hint>
+                      )}
+                    </span>
                   )}
                   <div className={cn("flex min-w-0 max-w-[80%] flex-col", mine ? "items-end" : "items-start")}>
-                    {showSender && first && <span className="mb-0.5 ml-1 text-[11px] font-semibold text-accent">{sender}</span>}
+                    {showSender && first && (
+                      <button
+                        type="button"
+                        onClick={() => openChat(m.senderUuid, m.senderUsername)}
+                        title={`Chat con ${sender}`}
+                        className="mb-0.5 ml-1 text-[11px] font-semibold text-accent transition-opacity hover:opacity-80"
+                      >
+                        {sender}
+                      </button>
+                    )}
                     {body}
                   </div>
                 </div>
@@ -354,17 +385,32 @@ export function ConversationView({
 
       <AnimatePresence>
         {!atBottom && (
-          <motion.button
-            type="button"
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 6 }}
-            onClick={() => scrollToEnd(true)}
-            aria-label="Ir al final"
-            className="absolute bottom-[68px] right-4 flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-[#1c1c20] text-gray-200 shadow-lg transition-colors hover:text-accent"
-          >
-            <ArrowDown className="h-4 w-4" />
-          </motion.button>
+          <Hint label="Ir al final">
+            <motion.button
+              type="button"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              onClick={() => scrollToEnd(true)}
+              aria-label="Ir al final"
+              className="absolute bottom-[68px] right-4 flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-[#1c1c20] text-gray-200 shadow-lg transition-colors hover:text-accent"
+            >
+              <ArrowDown className="h-4 w-4" />
+            </motion.button>
+          </Hint>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {attachOpen && target && (
+          <AttachPicker
+            target={target}
+            onSend={async (c) => {
+              await onSendContent(c);
+              scrollToEnd(true);
+            }}
+            onClose={() => setAttachOpen(false)}
+          />
         )}
       </AnimatePresence>
 
@@ -375,7 +421,23 @@ export function ConversationView({
           send();
         }}
       >
-        <div className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-black/30 pl-3.5 pr-1 transition-colors focus-within:border-accent/60 focus-within:ring-2 focus-within:ring-accent/15">
+        <div className={cn("flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-black/30 pr-1 transition-colors focus-within:border-accent/60 focus-within:ring-2 focus-within:ring-accent/15", target ? "pl-1.5" : "pl-3.5")}>
+          {target && (
+            <Hint label="Adjuntar de la instancia">
+              <button
+                type="button"
+                onClick={() => setAttachOpen((o) => !o)}
+                aria-label="Adjuntar de la instancia"
+                title={`Compartir algo de ${target.name}`}
+                className={cn(
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-white/10",
+                  attachOpen ? "text-accent" : "text-gray-400 hover:text-gray-200",
+                )}
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
+            </Hint>
+          )}
           <input
             ref={inputRef}
             value={draft}
@@ -384,14 +446,16 @@ export function ConversationView({
             maxLength={2000}
             className="min-w-0 flex-1 bg-transparent text-[13px] text-white outline-none placeholder:text-gray-500"
           />
-          <button
-            type="submit"
-            disabled={!draft.trim() || sending}
-            aria-label="Enviar"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground transition-[filter,opacity,transform] hover:brightness-110 active:scale-95 disabled:opacity-30"
-          >
-            <Send className="h-3.5 w-3.5" />
-          </button>
+          <Hint label="Enviar">
+            <button
+              type="submit"
+              disabled={!draft.trim() || sending}
+              aria-label="Enviar"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground transition-[filter,opacity,transform] hover:brightness-110 active:scale-95 disabled:opacity-30"
+            >
+              <Send className="h-3.5 w-3.5" />
+            </button>
+          </Hint>
         </div>
       </form>
 
@@ -437,6 +501,7 @@ function DirectConversation({ otherUuid, target }: { otherUuid: string; target: 
       placeholder={`Mensaje para ${otherName}`}
       emptyTitle={`Saluda a ${otherName}`}
       onSend={(text) => sendMessage(me.uuid, me.username, otherUuid, username, text)}
+      onSendContent={(content) => sendSharedContent(me.uuid, me.username, otherUuid, username, content, target?.modpackId)}
       header={
         <>
           <IconButton icon={ArrowLeft} label="Volver" onClick={() => openChat(null)} />
@@ -482,6 +547,7 @@ function GroupConversation({ instance, target }: { instance: Instance; target: R
       placeholder={`Mensaje para ${instance.name}`}
       emptyTitle="Nadie ha escrito todavía"
       onSend={(text) => sendGroupMessage(instance.groupKey!, me.uuid, me.username, text)}
+      onSendContent={(content) => sendGroupContent(instance.groupKey!, me.uuid, me.username, content)}
       header={
         <>
           <IconButton icon={ArrowLeft} label="Volver" onClick={() => openChat(null)} />

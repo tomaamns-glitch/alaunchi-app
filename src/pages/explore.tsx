@@ -1,41 +1,39 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { formatDistanceToNow, format } from "date-fns";
 import { es } from "date-fns/locale";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize from "rehype-sanitize";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import {
   ArrowLeft,
   Building2,
   Calendar,
   Compass,
+  Check,
   Download,
   ExternalLink,
   Heart,
+  FileText,
+  History,
   Image as ImageIcon,
-  List,
   Loader2,
-  Package,
   Search,
-  Sparkles,
   User,
   Users,
 } from "lucide-react";
-import { HTML_SANITIZE_SCHEMA } from "@/lib/markdown-schema";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AppBackground } from "@/components/app-background";
 import { ProjectIcon } from "@/components/admin-modrinth-browser";
-import { ModpackDetail } from "@/components/modrinth-modpacks-dialog";
+import { ModpackDetail, FilterSelect as VersionFilterSelect, LOADER_LABEL, compareMcVersionsDesc } from "@/components/modrinth-modpacks-dialog";
+import { ModrinthSummary } from "@/components/modrinth-summary";
+import { ImageLightbox } from "@/components/image-lightbox";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { downloadInstanceFile, listInstanceFiles } from "@/services/electron";
-import { identifyModrinthFiles } from "@/services/modrinth";
+import { identifyModrinthFiles, getProjectDetail, type ModrinthProjectDetail } from "@/services/modrinth";
 import type { Modpack } from "@/services/github";
 import {
   exploreCategories,
@@ -480,7 +478,6 @@ function ProjectView({
   const [members, setMembers] = useState<ExploreMember[]>([]);
   const [orgName, setOrgName] = useState<{ handle: string; name: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"description" | "gallery" | "versions">("description");
 
   useEffect(() => {
     let cancelled = false;
@@ -546,8 +543,178 @@ function ProjectView({
   }
 
   return (
-    <div>
-      <div className="relative overflow-hidden border-b border-white/10">
+    <ContentProjectView project={project} members={members} orgName={orgName} onBack={onBack} onOpenCreator={onOpenCreator} />
+  );
+}
+
+function BackButton({ onBack }: { onBack: () => void }) {
+  return (
+    <Hint label="Volver">
+      <button
+        type="button"
+        onClick={onBack}
+        className="h-8 w-8 shrink-0 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+        aria-label="Volver"
+      >
+        <ArrowLeft className="h-4 w-4" />
+      </button>
+    </Hint>
+  );
+}
+
+function SideBlock({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-md bg-white/[0.04] p-3 space-y-1.5">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</p>
+      {children}
+    </div>
+  );
+}
+
+type ContentSection = "summary" | "versions" | "images";
+const CONTENT_SECTIONS: { id: ContentSection; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { id: "summary", label: "Resumen", icon: FileText },
+  { id: "versions", label: "Versiones", icon: History },
+  { id: "images", label: "Imágenes", icon: ImageIcon },
+];
+
+/** A mod / shader / resource pack / data pack: the same layout as a modpack's page
+ *  (header, Resumen · Versiones · Imágenes, install bar at the bottom). */
+function ContentProjectView({
+  project,
+  members,
+  orgName,
+  onBack,
+  onOpenCreator,
+}: {
+  project: ExploreProject;
+  members: ExploreMember[];
+  orgName: { handle: string; name: string } | null;
+  onBack: () => void;
+  onOpenCreator: (handle: string, prefer: "user" | "organization") => void;
+}) {
+  const isMod = project.projectType === "mod";
+  const folder = TYPE_FOLDER[project.projectType];
+  const [section, setSection] = useState<ContentSection>("summary");
+  const [actionsEl, setActionsEl] = useState<HTMLDivElement | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<{ src: string; title?: string } | null>(null);
+
+  // The project's images with their originals; the explore data's urls stand in meanwhile.
+  const [galleryDetail, setGalleryDetail] = useState<ModrinthProjectDetail["gallery"] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setGalleryDetail(null);
+    getProjectDetail(project.id).then((d) => !cancelled && setGalleryDetail(d?.gallery ?? null));
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
+  const gallery: ModrinthProjectDetail["gallery"] = galleryDetail ?? project.gallery.map((g) => ({ url: g.url, title: g.title }));
+
+  // Versions, with a Minecraft + loader filter (Versiones only) that cascade into each other.
+  const [versions, setVersions] = useState<ExploreVersion[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setVersions(null);
+    exploreVersions(project.id).then((v) => !cancelled && setVersions(v));
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
+  const [mcFilter, setMcFilter] = useState("");
+  const [loaderFilter, setLoaderFilter] = useState("");
+  const [versionId, setVersionId] = useState<string | null>(null);
+  const mcOptions = useMemo(
+    () =>
+      [...new Set((versions ?? []).filter((v) => !loaderFilter || v.loaders.includes(loaderFilter)).flatMap((v) => v.gameVersions))].sort(
+        compareMcVersionsDesc
+      ),
+    [versions, loaderFilter]
+  );
+  const loaderOptions = useMemo(
+    () =>
+      [...new Set((versions ?? []).filter((v) => !mcFilter || v.gameVersions.includes(mcFilter)).flatMap((v) => v.loaders))]
+        .filter((l) => l !== "minecraft")
+        .sort(),
+    [versions, mcFilter]
+  );
+  useEffect(() => {
+    if (mcFilter && !mcOptions.includes(mcFilter)) setMcFilter("");
+    if (loaderFilter && !loaderOptions.includes(loaderFilter)) setLoaderFilter("");
+  }, [mcOptions, loaderOptions, mcFilter, loaderFilter]);
+  const filteredVersions = useMemo(
+    () => (versions ?? []).filter((v) => (!mcFilter || v.gameVersions.includes(mcFilter)) && (!loaderFilter || v.loaders.includes(loaderFilter))),
+    [versions, mcFilter, loaderFilter]
+  );
+  // A filter that hides the chosen version drops the choice (back to "latest compatible").
+  useEffect(() => {
+    if (versionId && !filteredVersions.some((v) => v.versionId === versionId)) setVersionId(null);
+  }, [filteredVersions, versionId]);
+  const chosen = versions?.find((v) => v.versionId === versionId) ?? null;
+
+  // Installed instances where this could go. With a version chosen, it has to fit
+  // that version; mods need a matching loader; locked instances are left out.
+  const custom = useCustomInstances((s) => s.instances);
+  const loadInstances = useCustomInstances((s) => s.loadInstances);
+  const online = useModpacks((s) => s.modpacks);
+  useEffect(() => {
+    if (custom.length === 0) loadInstances();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const candidates = useMemo(() => {
+    const loaders = chosen ? chosen.loaders : project.loaders;
+    const games = chosen ? chosen.gameVersions : project.gameVersions;
+    const all: Modpack[] = [...custom, ...online.filter((p) => p.installed && !p.lockContent)];
+    return all.filter((p) => {
+      if (isMod && (!p.loaderType || p.loaderType === "vanilla" || !loaders.includes(p.loaderType))) return false;
+      return games.length === 0 || games.includes(p.minecraftVersion);
+    });
+  }, [custom, online, project, chosen, isMod]);
+  const [target, setTarget] = useState("");
+  useEffect(() => {
+    if (!candidates.some((c) => c.id === target)) setTarget(candidates[0]?.id ?? "");
+  }, [candidates, target]);
+  const [busy, setBusy] = useState(false);
+
+  const install = async () => {
+    const inst = candidates.find((c) => c.id === target);
+    if (!inst || !folder) return;
+    setBusy(true);
+    try {
+      const loader = isMod ? inst.loaderType : null;
+      const main = chosen ?? (await exploreVersions(project.id, { loader, gameVersion: inst.minecraftVersion }))[0];
+      if (!main) throw new Error(`No hay ninguna versión para Minecraft ${inst.minecraftVersion}${loader ? ` con ${loader}` : ""}.`);
+      // What's already there, by Modrinth project (so a dependency isn't added twice).
+      const files = await listInstanceFiles(inst.id);
+      const matches = await identifyModrinthFiles(files.map((f) => ({ path: f.path, sha1: f.sha1 })));
+      const present = new Set([...matches.values()].map((m) => m.projectId));
+      if (present.has(project.id)) {
+        notify.info(`${project.title} ya está instalado en ${inst.name}.`);
+        return;
+      }
+      await downloadInstanceFile(inst.id, `${folder}/${main.filename}`, main.url, main.sha1 || undefined);
+      let deps = 0;
+      if (isMod) {
+        for (const depId of main.requiredProjectIds) {
+          if (present.has(depId)) continue;
+          const [dv] = await exploreVersions(depId, { loader, gameVersion: inst.minecraftVersion });
+          if (!dv) continue;
+          await downloadInstanceFile(inst.id, `mods/${dv.filename}`, dv.url, dv.sha1 || undefined);
+          present.add(depId);
+          deps++;
+        }
+      }
+      notify.success(`${project.title} instalado en ${inst.name}${deps ? ` (+${deps} ${deps === 1 ? "dependencia" : "dependencias"})` : ""}.`);
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudo instalar.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="h-full flex flex-col min-h-0">
+      <div className="relative shrink-0 overflow-hidden border-b border-white/10">
         {project.gallery[0] && (
           <div className="absolute inset-0 opacity-25">
             <img src={project.gallery[0].url} alt="" className="w-full h-full object-cover" />
@@ -588,285 +755,234 @@ function ProjectView({
                   {c}
                 </span>
               ))}
-              {project.loaders.length > 0 && (
-                <span className="text-[10px] text-muted-foreground capitalize">{project.loaders.join(" · ")}</span>
-              )}
+              {project.loaders.length > 0 && <span className="text-[10px] text-muted-foreground capitalize">{project.loaders.join(" · ")}</span>}
             </div>
           </div>
-          <InstallBox project={project} />
         </div>
       </div>
 
-      <div className="flex gap-6 p-5">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1 border-b border-white/10 mb-4">
-            {([
-              { id: "description", label: "Descripción", icon: Sparkles },
-              { id: "gallery", label: `Imágenes (${project.gallery.length})`, icon: ImageIcon },
-              { id: "versions", label: "Versiones", icon: List },
-            ] as const).map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => setTab(t.id)}
-                className={cn(
-                  "relative flex items-center gap-1.5 px-2.5 pb-2 pt-1 text-sm transition-colors",
-                  tab === t.id ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+      {/* Section buttons; the summary's translation toggle portals into the right-hand slot. */}
+      <div className="px-5 py-2.5 shrink-0 flex items-center gap-2 border-b border-white/5">
+        <div className="flex items-center gap-1 p-1 rounded-md bg-white/[0.07]">
+          {CONTENT_SECTIONS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setSection(id)}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold transition-colors",
+                section === id ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-white"
+              )}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
+        <div ref={setActionsEl} className="ml-auto flex items-center gap-2" />
+      </div>
+
+      {section === "versions" && versions && versions.length > 0 && (
+        <div className="px-5 py-2.5 shrink-0 flex items-center gap-2 border-b border-white/5">
+          <VersionFilterSelect
+            value={mcFilter}
+            onChange={setMcFilter}
+            options={[{ value: "", label: "Todas las versiones de Minecraft" }, ...mcOptions.map((v) => ({ value: v, label: `Minecraft ${v}` }))]}
+          />
+          {isMod && (
+            <VersionFilterSelect
+              value={loaderFilter}
+              onChange={setLoaderFilter}
+              options={[{ value: "", label: "Cualquier loader" }, ...loaderOptions.map((l) => ({ value: l, label: LOADER_LABEL[l] ?? l }))]}
+            />
+          )}
+          <span className="ml-auto text-[11px] text-muted-foreground">
+            {filteredVersions.length} {filteredVersions.length === 1 ? "versión" : "versiones"}
+          </span>
+        </div>
+      )}
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-4">
+        {section === "summary" && (
+          <div className="flex gap-6">
+            <div className="min-w-0 flex-1">
+              <ModrinthSummary projectId={project.id} onOpenImage={setLightboxImage} actionsEl={actionsEl} showGallery={false} />
+            </div>
+            <aside className="hidden lg:block w-60 shrink-0 space-y-4 text-xs pt-4">
+              <SideBlock title="Creadores">
+                {orgName && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenCreator(orgName.handle, "organization")}
+                    className="w-full flex items-center gap-2 rounded-md p-1.5 hover:bg-white/10 text-left"
+                  >
+                    <Building2 className="h-4 w-4 text-muted-foreground" />
+                    <span className="truncate">{orgName.name}</span>
+                  </button>
                 )}
-              >
-                <t.icon className="h-3.5 w-3.5" /> {t.label}
-                {tab === t.id && <motion.span layoutId="explore-project-tab" className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-accent" />}
-              </button>
-            ))}
-          </div>
-          {tab === "description" ? (
-            project.body ? (
-              <div className="prose prose-sm prose-invert max-w-none prose-img:rounded-md prose-a:text-accent select-text">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  rehypePlugins={[rehypeRaw, [rehypeSanitize, HTML_SANITIZE_SCHEMA]]}
-                  components={{ a: ({ node: _n, ...props }) => <a {...props} target="_blank" rel="noreferrer" /> }}
-                >
-                  {project.body}
-                </ReactMarkdown>
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">Sin descripción.</p>
-            )
-          ) : tab === "gallery" ? (
-            project.gallery.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Este proyecto no tiene imágenes.</p>
-            ) : (
-              <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
-                {project.gallery.map((g) => (
-                  <a key={g.url} href={g.url} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-md bg-white/[0.04]">
-                    <img src={g.url} alt={g.title ?? ""} loading="lazy" className="w-full aspect-video object-cover hover:scale-105 transition-transform" />
+                {members.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => onOpenCreator(m.username, "user")}
+                    className="w-full flex items-center gap-2 rounded-md p-1.5 hover:bg-white/10 text-left"
+                  >
+                    <CreatorAvatar url={m.avatarUrl} name={m.username} kind="user" className="h-7 w-7" />
+                    <span className="min-w-0">
+                      <span className="block truncate text-gray-100">{m.username}</span>
+                      <span className="block truncate text-[10px] text-muted-foreground">{m.role}</span>
+                    </span>
+                  </button>
+                ))}
+              </SideBlock>
+              <SideBlock title="Detalles">
+                <p className="flex items-center gap-1.5 text-muted-foreground">
+                  <Calendar className="h-3 w-3" /> Publicado el {format(new Date(project.published), "d MMM yyyy", { locale: es })}
+                </p>
+                {project.license && <p className="text-muted-foreground">Licencia: {project.license}</p>}
+                {project.gameVersions.length > 0 && (
+                  <p className="text-muted-foreground">
+                    Minecraft {project.gameVersions[0]}
+                    {project.gameVersions.length > 1 ? ` – ${project.gameVersions[project.gameVersions.length - 1]}` : ""}
+                  </p>
+                )}
+              </SideBlock>
+              <SideBlock title="Enlaces">
+                {project.links.map((l) => (
+                  <a key={l.url} href={l.url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-muted-foreground hover:text-accent">
+                    <ExternalLink className="h-3 w-3" /> {l.label}
                   </a>
                 ))}
-              </div>
-            )
-          ) : (
-            <VersionList projectId={project.id} />
-          )}
-        </div>
-
-        <aside className="hidden lg:block w-60 shrink-0 space-y-4 text-xs">
-          <SideBlock title="Creadores">
-            {orgName && (
-              <button
-                type="button"
-                onClick={() => onOpenCreator(orgName.handle, "organization")}
-                className="w-full flex items-center gap-2 rounded-md p-1.5 hover:bg-white/10 text-left"
-              >
-                <Building2 className="h-4 w-4 text-muted-foreground" />
-                <span className="truncate">{orgName.name}</span>
-              </button>
-            )}
-            {members.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => onOpenCreator(m.username, "user")}
-                className="w-full flex items-center gap-2 rounded-md p-1.5 hover:bg-white/10 text-left"
-              >
-                <CreatorAvatar url={m.avatarUrl} name={m.username} kind="user" className="h-7 w-7" />
-                <span className="min-w-0">
-                  <span className="block truncate text-gray-100">{m.username}</span>
-                  <span className="block truncate text-[10px] text-muted-foreground">{m.role}</span>
-                </span>
-              </button>
-            ))}
-          </SideBlock>
-          <SideBlock title="Detalles">
-            <p className="flex items-center gap-1.5 text-muted-foreground">
-              <Calendar className="h-3 w-3" /> Publicado el {format(new Date(project.published), "d MMM yyyy", { locale: es })}
-            </p>
-            {project.license && <p className="text-muted-foreground">Licencia: {project.license}</p>}
-            {project.gameVersions.length > 0 && (
-              <p className="text-muted-foreground">
-                Minecraft {project.gameVersions[0]}
-                {project.gameVersions.length > 1 ? ` – ${project.gameVersions[project.gameVersions.length - 1]}` : ""}
-              </p>
-            )}
-          </SideBlock>
-          <SideBlock title="Enlaces">
-            {project.links.map((l) => (
-              <a key={l.url} href={l.url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-muted-foreground hover:text-accent">
-                <ExternalLink className="h-3 w-3" /> {l.label}
-              </a>
-            ))}
-          </SideBlock>
-        </aside>
-      </div>
-    </div>
-  );
-}
-
-function BackButton({ onBack }: { onBack: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onBack}
-      className="h-8 w-8 shrink-0 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-      aria-label="Volver"
-    >
-      <ArrowLeft className="h-4 w-4" />
-    </button>
-  );
-}
-
-function SideBlock({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-md bg-white/[0.04] p-3 space-y-1.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</p>
-      {children}
-    </div>
-  );
-}
-
-function VersionList({ projectId }: { projectId: string }) {
-  const [versions, setVersions] = useState<ExploreVersion[] | null>(null);
-  useEffect(() => {
-    exploreVersions(projectId).then(setVersions);
-  }, [projectId]);
-  if (!versions) {
-    return (
-      <div className="flex items-center text-muted-foreground text-sm">
-        <Loader2 className="h-4 w-4 animate-spin mr-2" /> Cargando versiones…
-      </div>
-    );
-  }
-  return (
-    <div className="space-y-1.5">
-      {versions.slice(0, 50).map((v) => (
-        <div key={v.versionId} className="flex items-center gap-3 rounded-md bg-white/[0.04] px-3 py-2 text-xs">
-          <span
-            className={cn(
-              "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase",
-              v.versionType === "release" ? "bg-green-500/15 text-green-400" : v.versionType === "beta" ? "bg-amber-500/15 text-amber-300" : "bg-red-500/15 text-red-400"
-            )}
-          >
-            {v.versionType === "release" ? "R" : v.versionType === "beta" ? "B" : "A"}
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-gray-100 truncate">{v.name || v.versionNumber}</p>
-            <p className="text-[10px] text-muted-foreground truncate capitalize">
-              {v.loaders.join(", ")} · {v.gameVersions.slice(0, 4).join(", ")}
-              {v.gameVersions.length > 4 ? "…" : ""}
-            </p>
+              </SideBlock>
+            </aside>
           </div>
-          <span className="shrink-0 text-muted-foreground">{formatDistanceToNow(new Date(v.datePublished), { locale: es, addSuffix: true })}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
+        )}
 
-/** Install a mod / shader / resource pack into one of your instances (required mod dependencies too). */
-function InstallBox({ project }: { project: ExploreProject }) {
-  const custom = useCustomInstances((s) => s.instances);
-  const loadInstances = useCustomInstances((s) => s.loadInstances);
-  const online = useModpacks((s) => s.modpacks);
-  useEffect(() => {
-    if (custom.length === 0) loadInstances();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const folder = TYPE_FOLDER[project.projectType];
+        {section === "versions" && (
+          <section className="space-y-1.5 pt-4">
+            {versions === null ? (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Cargando versiones...
+              </div>
+            ) : versions.length === 0 ? (
+              <p className="text-xs text-amber-400">Este proyecto no tiene versiones.</p>
+            ) : filteredVersions.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-8 text-center">Ninguna versión coincide con esos filtros.</p>
+            ) : (
+              <>
+                {folder && (
+                  <p className="text-[11px] text-muted-foreground pb-1">
+                    Elige una versión para instalar esa en concreto; sin elegir, se instala la última compatible con la instancia.
+                  </p>
+                )}
+                {filteredVersions.slice(0, 100).map((v) => {
+                  const selected = v.versionId === versionId;
+                  return (
+                    <button
+                      key={v.versionId}
+                      type="button"
+                      disabled={!folder}
+                      onClick={() => setVersionId(selected ? null : v.versionId)}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-3 py-2 rounded-md border text-left transition-colors disabled:cursor-default",
+                        selected ? "bg-accent/15 border-accent/50" : "bg-gray-500/10 border-transparent hover:bg-white/[0.08] disabled:hover:bg-gray-500/10"
+                      )}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-sm font-medium text-white truncate">{v.name || v.versionNumber}</span>
+                          {v.versionType !== "release" && (
+                            <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] text-gray-200 shrink-0">{v.versionType}</span>
+                          )}
+                        </span>
+                        <span className="block text-[11px] text-muted-foreground mt-0.5 truncate capitalize">
+                          {v.loaders.filter((l) => l !== "minecraft").join(", ")}
+                          {v.loaders.length ? " · " : ""}Minecraft {v.gameVersions.slice(0, 4).join(", ")}
+                          {v.gameVersions.length > 4 ? "…" : ""} · hace {formatDistanceToNow(new Date(v.datePublished), { locale: es })} ·{" "}
+                          {formatCount(v.downloads)} descargas
+                        </span>
+                      </span>
+                      {selected && <Check className="h-4 w-4 text-accent shrink-0" />}
+                    </button>
+                  );
+                })}
+              </>
+            )}
+          </section>
+        )}
 
-  // Installed instances where this could go: mods need a matching loader;
-  // instances that lock their content are left out.
-  const candidates = useMemo(() => {
-    const all: Modpack[] = [...custom, ...online.filter((p) => p.installed && !p.lockContent)];
-    return all.filter((p) => {
-      if (project.projectType === "mod" && (!p.loaderType || p.loaderType === "vanilla" || !project.loaders.includes(p.loaderType))) return false;
-      return project.gameVersions.length === 0 || project.gameVersions.includes(p.minecraftVersion);
-    });
-  }, [custom, online, project]);
-
-  const [target, setTarget] = useState<string>("");
-  useEffect(() => {
-    if (!target && candidates[0]) setTarget(candidates[0].id);
-  }, [candidates, target]);
-  const [busy, setBusy] = useState(false);
-
-  if (!folder) {
-    return (
-      <div className="shrink-0 w-56 rounded-md bg-white/[0.06] p-3 text-xs text-muted-foreground">
-        Los data packs se instalan dentro de cada mundo.{" "}
-        <a href={`https://modrinth.com/${project.projectType}/${project.slug}`} target="_blank" rel="noreferrer" className="text-accent hover:underline">
-          Descárgalo en Modrinth
-        </a>
-        .
-      </div>
-    );
-  }
-
-  const install = async () => {
-    const inst = candidates.find((c) => c.id === target);
-    if (!inst) return;
-    setBusy(true);
-    try {
-      const loader = project.projectType === "mod" ? inst.loaderType : null;
-      const [main] = await exploreVersions(project.id, { loader, gameVersion: inst.minecraftVersion });
-      if (!main) throw new Error(`No hay ninguna versión para Minecraft ${inst.minecraftVersion}${loader ? ` con ${loader}` : ""}.`);
-      // What's already there, by Modrinth project (so a dependency isn't added twice).
-      const files = await listInstanceFiles(inst.id);
-      const matches = await identifyModrinthFiles(files.map((f) => ({ path: f.path, sha1: f.sha1 })));
-      const present = new Set([...matches.values()].map((m) => m.projectId));
-      if (present.has(project.id)) {
-        toast.info(`${project.title} ya está instalado en ${inst.name}.`);
-        return;
-      }
-      await downloadInstanceFile(inst.id, `${folder}/${main.filename}`, main.url, main.sha1 || undefined);
-      let deps = 0;
-      if (project.projectType === "mod") {
-        for (const depId of main.requiredProjectIds) {
-          if (present.has(depId)) continue;
-          const [dv] = await exploreVersions(depId, { loader, gameVersion: inst.minecraftVersion });
-          if (!dv) continue;
-          await downloadInstanceFile(inst.id, `mods/${dv.filename}`, dv.url, dv.sha1 || undefined);
-          present.add(depId);
-          deps++;
-        }
-      }
-      toast.success(`${project.title} instalado en ${inst.name}${deps ? ` (+${deps} ${deps === 1 ? "dependencia" : "dependencias"})` : ""}.`);
-    } catch (e: any) {
-      toast.error(e?.message || "No se pudo instalar.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="shrink-0 w-60 rounded-md bg-white/[0.06] p-3 space-y-2">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-        <Package className="h-3 w-3" /> Instalar en
-      </p>
-      {candidates.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          {project.projectType === "mod"
-            ? "Ninguna de tus instancias tiene un loader y una versión compatibles."
-            : "Ninguna de tus instancias tiene una versión compatible."}
-        </p>
-      ) : (
-        <>
-          <Select value={target} onValueChange={setTarget}>
-            <SelectTrigger className="h-8 border-transparent bg-white/[0.06] text-xs focus:ring-0">
-              <SelectValue placeholder="Elige una instancia" />
-            </SelectTrigger>
-            <SelectContent className="max-h-72">
-              {candidates.map((c) => (
-                <SelectItem key={c.id} value={c.id} className="text-xs">
-                  {c.name} · {c.minecraftVersion}
-                </SelectItem>
+        {section === "images" &&
+          (gallery.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+              <ImageIcon className="h-6 w-6" />
+              <p className="text-sm">Este proyecto no tiene imágenes en Modrinth.</p>
+            </div>
+          ) : (
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-4">
+              {gallery.map((image) => (
+                <button type="button" key={image.url} onClick={() => setLightboxImage({ src: image.rawUrl || image.url, title: image.title })} className="block">
+                  <img
+                    src={image.url}
+                    alt={image.title || ""}
+                    loading="lazy"
+                    className="w-full aspect-video object-cover rounded-md border border-white/10 hover:border-white/30 transition-colors"
+                  />
+                </button>
               ))}
-            </SelectContent>
-          </Select>
-          <Button onClick={install} disabled={busy || !target} className="w-full h-8 bg-accent text-accent-foreground hover:bg-accent/90 border-transparent gap-1.5">
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} Instalar
-          </Button>
-        </>
-      )}
+            </div>
+          ))}
+      </div>
+
+      {/* Install bar. */}
+      <div className="px-5 py-3 border-t border-white/5 flex items-center gap-3 shrink-0">
+        {!folder ? (
+          <p className="text-xs text-muted-foreground">
+            Los data packs se instalan dentro de cada mundo.{" "}
+            <a href={`https://modrinth.com/${project.projectType}/${project.slug}`} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+              Descárgalo en Modrinth
+            </a>
+            .
+          </p>
+        ) : (
+          <>
+            <p className="min-w-0 flex-1 text-xs text-muted-foreground truncate">
+              {candidates.length === 0
+                ? isMod
+                  ? "Ninguna de tus instancias tiene un loader y una versión compatibles."
+                  : "Ninguna de tus instancias tiene una versión compatible."
+                : chosen
+                  ? `Versión ${chosen.versionNumber}`
+                  : "Se instala la última versión compatible"}
+              {chosen && (
+                <button type="button" onClick={() => setVersionId(null)} className="ml-2 text-accent hover:underline">
+                  Quitar
+                </button>
+              )}
+            </p>
+            {candidates.length > 0 && (
+              <>
+                <Select value={target} onValueChange={setTarget}>
+                  <SelectTrigger className="h-9 w-56 border-transparent bg-white/[0.06] text-xs focus:ring-0">
+                    <SelectValue placeholder="Elige una instancia" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    {candidates.map((c) => (
+                      <SelectItem key={c.id} value={c.id} className="text-xs">
+                        {c.name} · {c.minecraftVersion}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button onClick={install} disabled={busy || !target} className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold">
+                  {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                  {busy ? "Instalando..." : "Instalar"}
+                </Button>
+              </>
+            )}
+          </>
+        )}
+      </div>
+      <ImageLightbox image={lightboxImage} onClose={() => setLightboxImage(null)} />
     </div>
   );
 }

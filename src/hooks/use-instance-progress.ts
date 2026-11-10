@@ -124,6 +124,11 @@ function ensureStarted() {
     // The update of the same "actualizar y jugar" ended just before.
     const chain = chained.has(id) && prev?.kind === "install" && prev.stage === "done" && !prev.doneAt;
     chained.delete(id);
+    if (d.stage === "prepared") {
+      // A new instance finished downloading what its first launch needs.
+      update(id, { kind: "launch", stage: "prepared", label: d.label, phaseProgress: 1, progress: 1, doneAt: performance.now() });
+      return;
+    }
     if (d.stage === "error") {
       update(id, {
         kind: "launch",

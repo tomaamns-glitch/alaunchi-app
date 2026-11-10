@@ -1,6 +1,7 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, ExternalLink, Github, Loader2, Lock, Globe, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { useMySource, useIsCreator } from "@/hooks/use-my-source";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useAuth } from "@/hooks/use-auth";
@@ -63,13 +64,13 @@ export function MyRepoCard() {
         }
       }
       if (result.isPrivate !== isPrivate) {
-        toast.info(
+        notify.info(
           result.isPrivate
             ? "GitHub dice que el repo es privado: se ha marcado como privado."
             : "GitHub dice que el repo es público: no hace falta token de lectura."
         );
       }
-      toast.success(
+      notify.success(
         result.initialized
           ? "Repositorio conectado y preparado (se creó modpacks.json vacío)."
           : "Repositorio conectado. Ya puedes publicar desde ADMIN."
@@ -210,9 +211,11 @@ export function MyRepoCard() {
             {saving ? "Comprobando con GitHub..." : "Comprobar y guardar"}
           </Button>
           {(stored.repoUrl || stored.adminToken) && (
-            <Button variant="outline" onClick={handleClear} disabled={saving} title="Quitar repositorio">
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            <Hint label="Quitar repositorio">
+              <Button variant="outline" onClick={handleClear} disabled={saving}>
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </Hint>
           )}
         </div>
       </CardContent>

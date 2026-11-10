@@ -16,17 +16,29 @@ export interface EmoteKeyframe {
   easingArg: number | null;
 }
 
+/** One animated axis. `null` = disabled in the file: Minecraft leaves that axis
+ *  at whatever the vanilla pose already had. An enabled axis with no keyframes
+ *  is NOT the same — it holds the part's default value (see emote-animation.ts). */
+export type EmoteAxis = EmoteKeyframe[] | null;
+
+/** Raw values exactly as stored in the file, which are exactly what
+ *  playerAnimator (dev.kosmx.playerAnim) feeds the model: absolute ModelPart
+ *  values in Minecraft's own model space (pixels, Y down, rest offsets
+ *  included — e.g. right_arm x ≈ -5, y ≈ 2), rotations in radians. The "body"
+ *  part is the whole player (position in blocks), "torso" is the body cuboid. */
 export interface EmoteBoneTrack {
-  posX: EmoteKeyframe[];
-  posY: EmoteKeyframe[];
-  posZ: EmoteKeyframe[];
-  rotX: EmoteKeyframe[];
-  rotY: EmoteKeyframe[];
-  rotZ: EmoteKeyframe[];
-  bend: EmoteKeyframe[];
-  scaleX: EmoteKeyframe[];
-  scaleY: EmoteKeyframe[];
-  scaleZ: EmoteKeyframe[];
+  posX: EmoteAxis;
+  posY: EmoteAxis;
+  posZ: EmoteAxis;
+  rotX: EmoteAxis;
+  rotY: EmoteAxis;
+  rotZ: EmoteAxis;
+  /** Direction of the bend axis around the part's vertical axis ("axis" in Emotecraft JSON). */
+  bendAxis: EmoteAxis;
+  bend: EmoteAxis;
+  scaleX: EmoteAxis;
+  scaleY: EmoteAxis;
+  scaleZ: EmoteAxis;
 }
 
 export interface ParsedEmote {
@@ -43,12 +55,23 @@ export interface ParsedEmote {
   iconDataUrl: string | null;
 }
 
-// left_item/right_item hold model transforms skinview3d's PlayerObject has no
-// slot for — dropped rather than mis-applied to a body part.
+// Held items have no model in the preview.
 const ITEM_BONES = new Set(["left_item", "right_item"]);
 
 function emptyTrack(): EmoteBoneTrack {
-  return { posX: [], posY: [], posZ: [], rotX: [], rotY: [], rotZ: [], bend: [], scaleX: [], scaleY: [], scaleZ: [] };
+  return {
+    posX: null,
+    posY: null,
+    posZ: null,
+    rotX: null,
+    rotY: null,
+    rotZ: null,
+    bendAxis: null,
+    bend: null,
+    scaleX: null,
+    scaleY: null,
+    scaleZ: null,
+  };
 }
 
 // UniversalAnimLoader.getCorrectPlayerBoneName: the file stores camelCase
@@ -57,86 +80,10 @@ function toCanonicalBoneName(name: string): string {
   return name.replace(/([A-Z])/g, "_$1").toLowerCase();
 }
 
+// AnimationBuilder: head and the item parts are the only non-bendable ones —
+// any other name (incl. unknown parts, via getOrCreatePart) carries bend axes.
 function isBendBone(name: string): boolean {
   return name !== "head" && name !== "left_item" && name !== "right_item";
-}
-
-interface BoneTransform {
-  /** Position keyframe values are stored as (delta*sign + posDef), not a raw
-   *  offset — posDef is that bone's rest position, in the same space Minecraft's
-   *  own vanilla ModelPart uses. */
-  posDef: [number, number, number];
-  /** Only the torso/body bone's position is additionally in "blocks" rather
-   *  than the "pixel" units (1/16 block) everything else uses. */
-  posMul: number;
-  posNegate: [boolean, boolean, boolean];
-  rotNegate: [boolean, boolean, boolean];
-}
-
-// Per-bone/per-axis decode parameters — reverse-engineered from the library
-// Emotecraft's EmoteDataPacket actually serializes with today: PlayerAnimationLibrary
-// (github.com/PlayerAnimationLibrary/PlayerAnimationLibrary, package
-// com.zigythebird.playeranimcore) — NOT the older dev.kosmx.playerAnim library some
-// older docs/mirrors still reference, which has different (and for this purpose,
-// misleading) internals.
-//
-// Two real transforms are folded together here:
-//  1. LegacyAnimationBinary.readPart()'s own wire decode: value = (raw - posDef) *
-//     (isBody ? 16 : 1) * (formatNegate ? -1 : 1). posDef values come from
-//     PlayerAnimatorLoader.DEFAULT_VALUES, Minecraft's own vanilla ModelPart rest
-//     offsets for each limb (matches PlayerModelMixin's own hardcoded constants).
-//  2. RenderUtil.copyVanillaPart()/translatePartToBone()'s bone-space conversion:
-//     the runtime negates Y (only, never Z) when converting between Minecraft's raw
-//     ModelPart space and its own internal bone space — for position only, rotation
-//     is carried through with no sign change at all.
-// The format's own Y-negate and the bone-space Y-negate cancel out for every bone
-// except body/cape, which is why most rows below have no sign flips at all once
-// posDef is subtracted — only body and cape need any negation.
-const BONE_TRANSFORMS: Record<string, BoneTransform> = {
-  head: { posDef: [0, 0, 0], posMul: 1, posNegate: [false, false, false], rotNegate: [false, false, false] },
-  torso: { posDef: [0, 0, 0], posMul: 1, posNegate: [false, false, false], rotNegate: [false, false, false] },
-  right_arm: { posDef: [-5, 2, 0], posMul: 1, posNegate: [false, false, false], rotNegate: [false, false, false] },
-  left_arm: { posDef: [5, 2, 0], posMul: 1, posNegate: [false, false, false], rotNegate: [false, false, false] },
-  right_leg: { posDef: [-1.9, 12, 0.1], posMul: 1, posNegate: [false, false, false], rotNegate: [false, false, false] },
-  left_leg: { posDef: [1.9, 12, 0.1], posMul: 1, posNegate: [false, false, false], rotNegate: [false, false, false] },
-  // LegacyAnimationBinary.readPart() does pass mul=isBody (i.e. *16) for the torso's
-  // position axes, matching a "value *= 16" step also visible in PlayerAnimatorLoader's
-  // JSON-authoring path — but applying that literally here produced a body delta an
-  // order of magnitude larger than every other bone's in a real test file (Z decoded
-  // to +30.8 units vs. 0-2 for everything else, matching a visibly detached torso in
-  // testing). Whatever that *16 is for on the Java side, it isn't "how far to move
-  // skinview3d's body bone" in the same units as the rest of this table — so it's
-  // deliberately left out here. Revisit if a real emote turns up needing it.
-  // Same story for rotation: the "isBody" negate this derived from the wire format
-  // (X and Y both) produced a torso that leans the wrong way in testing — dropped
-  // for the same reason as posMul above.
-  body: { posDef: [0, 0, 0], posMul: 1, posNegate: [true, true, false], rotNegate: [false, false, false] },
-  cape: { posDef: [0, 0, 0], posMul: 1, posNegate: [true, false, true], rotNegate: [true, false, true] },
-};
-
-function decodePositionAxis(keyframes: EmoteKeyframe[], def: number, mul: number, negate: boolean): EmoteKeyframe[] {
-  if (keyframes.length === 0 || (def === 0 && mul === 1 && !negate)) return keyframes;
-  const sign = negate ? -1 : 1;
-  return keyframes.map((k) => ({ ...k, value: (k.value - def) * mul * sign }));
-}
-
-function decodeRotationAxis(keyframes: EmoteKeyframe[], negate: boolean): EmoteKeyframe[] {
-  if (!negate || keyframes.length === 0) return keyframes;
-  return keyframes.map((k) => ({ ...k, value: -k.value }));
-}
-
-/** Applies BONE_TRANSFORMS to a just-parsed track's position/rotation axes in
- *  place — the parser's own keyframe values are the raw wire encoding, not yet
- *  the delta this bone should actually be moved/rotated by. */
-function applyBoneTransform(track: EmoteBoneTrack, name: string): void {
-  const t = BONE_TRANSFORMS[name];
-  if (!t) return;
-  track.posX = decodePositionAxis(track.posX, t.posDef[0], t.posMul, t.posNegate[0]);
-  track.posY = decodePositionAxis(track.posY, t.posDef[1], t.posMul, t.posNegate[1]);
-  track.posZ = decodePositionAxis(track.posZ, t.posDef[2], t.posMul, t.posNegate[2]);
-  track.rotX = decodeRotationAxis(track.rotX, t.rotNegate[0]);
-  track.rotY = decodeRotationAxis(track.rotY, t.rotNegate[1]);
-  track.rotZ = decodeRotationAxis(track.rotZ, t.rotNegate[2]);
 }
 
 class Cursor {
@@ -175,7 +122,7 @@ class Cursor {
   }
 }
 
-function readKeyframeTrack(c: Cursor, animVersion: number, keyframeSize: number): EmoteKeyframe[] {
+function readKeyframeTrack(c: Cursor, animVersion: number, keyframeSize: number): EmoteAxis {
   // version>=2 always writes enabled(bool)+count(int); version 1 packs "disabled"
   // as count=-1 with no separate bool (LegacyAnimationBinary.readKeyframes).
   let enabled: boolean;
@@ -189,7 +136,7 @@ function readKeyframeTrack(c: Cursor, animVersion: number, keyframeSize: number)
   }
   if (!enabled) {
     if (length > 0) c.pos += length * keyframeSize;
-    return [];
+    return null;
   }
   const keyframes: EmoteKeyframe[] = [];
   for (let i = 0; i < length; i++) {
@@ -205,7 +152,8 @@ function readKeyframeTrack(c: Cursor, animVersion: number, keyframeSize: number)
     keyframes.push({ tick, value, easing, easingArg });
     c.pos = start + keyframeSize; // fields read may be fewer bytes than the slot; jump to the declared size regardless
   }
-  return keyframes;
+  // State.addKeyFrame inserts after any keyframe with the same tick: a stable sort by tick.
+  return keyframes.map((k, i) => [k, i] as const).sort((a, b) => a[0].tick - b[0].tick || a[1] - b[1]).map(([k]) => k);
 }
 
 function readBoneTrack(c: Cursor, name: string, animVersion: number, keyframeSize: number): EmoteBoneTrack {
@@ -217,7 +165,7 @@ function readBoneTrack(c: Cursor, name: string, animVersion: number, keyframeSiz
   track.rotY = readKeyframeTrack(c, animVersion, keyframeSize);
   track.rotZ = readKeyframeTrack(c, animVersion, keyframeSize);
   if (isBendBone(name)) {
-    readKeyframeTrack(c, animVersion, keyframeSize); // discarded legacy Y-axis bend
+    track.bendAxis = readKeyframeTrack(c, animVersion, keyframeSize);
     track.bend = readKeyframeTrack(c, animVersion, keyframeSize);
   }
   if (animVersion >= 3) {
@@ -225,8 +173,21 @@ function readBoneTrack(c: Cursor, name: string, animVersion: number, keyframeSiz
     track.scaleY = readKeyframeTrack(c, animVersion, keyframeSize);
     track.scaleZ = readKeyframeTrack(c, animVersion, keyframeSize);
   }
-  applyBoneTransform(track, name);
   return track;
+}
+
+/** Emotecraft writes these header strings as JSON text (Gson's
+ *  JsonElement.toString), so they usually arrive wrapped in quotes. */
+function unquote(s: string): string {
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    try {
+      const v: unknown = JSON.parse(s);
+      if (typeof v === "string") return v;
+    } catch {
+      /* not JSON after all */
+    }
+  }
+  return s;
 }
 
 /** Parses a whole .emotecraft file (as raw bytes) into keyframe tracks per
@@ -251,7 +212,7 @@ export function parseEmotecraft(bytes: Uint8Array): ParsedEmote {
 
     if (id === 0x11) {
       const hc = new Cursor(new DataView(slice.buffer, slice.byteOffset, slice.byteLength), 0);
-      header = { name: hc.str(), description: hc.str(), author: hc.str() };
+      header = { name: unquote(hc.str()), description: unquote(hc.str()), author: unquote(hc.str()) };
     } else if (id === 0x00) {
       anim = parseAnimationData(slice, ver);
     } else if (id === 0x12) {
@@ -300,7 +261,12 @@ function parseAnimationData(bytes: Uint8Array, animVersion: number) {
     }
   }
 
-  return { beginTick, endTick, stopTick, isLoop, returnTick, easeBefore, bones };
+  // KeyframeAnimation's constructor normalizes the timing the same way.
+  const begin = Math.max(beginTick, 0);
+  const end = Math.max(begin + 1, endTick);
+  const stop = stopTick <= endTick ? end + 3 : stopTick;
+  const ret = isLoop ? Math.min(Math.max(returnTick, 0), end) : returnTick;
+  return { beginTick: begin, endTick: end, stopTick: stop, isLoop, returnTick: ret, easeBefore, bones };
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {

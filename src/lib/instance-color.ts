@@ -1,4 +1,5 @@
 import { extractDominantColor } from "@/lib/dominant-color";
+import { useAdaptiveColor } from "@/lib/adaptive-color";
 
 // Thin wrapper around extractDominantColor for coloring a single detached UI
 // element (a chat message's instance tag, the "Jugando a X" status) — NOT for
@@ -15,6 +16,7 @@ const FALLBACK_COLOR = "hsl(205 90% 55%)"; // matches --accent's default in inde
  *  useDynamicAccent uses, just scoped to one element via inline style instead
  *  of the global theme. */
 export function getInstanceAccentColor(instance: { id: string; imageUrl?: string | null }): Promise<string> {
+  if (!useAdaptiveColor.getState().enabled) return Promise.resolve(FALLBACK_COLOR);
   const cached = colorCache.get(instance.id);
   if (cached) return cached;
 

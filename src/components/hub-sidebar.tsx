@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useState } from "react";
 import { Check, Folder, LayoutGrid, MoreVertical, Pencil, Plus, Star, Trash2 } from "lucide-react";
 import { useInstanceFolders, type InstanceFolder } from "@/hooks/use-instance-folders";
@@ -74,9 +75,11 @@ function FolderRow({
           autoFocus
           className="h-7 text-sm"
         />
-        <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={confirmRename} aria-label="Guardar nombre">
-          <Check className="h-3.5 w-3.5" />
-        </Button>
+        <Hint label="Guardar nombre">
+          <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={confirmRename} aria-label="Guardar nombre">
+            <Check className="h-3.5 w-3.5" />
+          </Button>
+        </Hint>
       </div>
     );
   }
@@ -99,15 +102,17 @@ function FolderRow({
         <span className="flex-1 min-w-0 truncate text-left">{folder.name}</span>
         <span className="text-xs text-muted-foreground shrink-0">{count}</span>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              onClick={(e) => e.stopPropagation()}
-              className="h-5 w-5 shrink-0 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-opacity"
-            >
-              <MoreVertical className="h-3.5 w-3.5" />
-            </button>
-          </DropdownMenuTrigger>
+          <Hint label="Opciones de la carpeta">
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                onClick={(e) => e.stopPropagation()}
+                className="h-5 w-5 shrink-0 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-opacity"
+              >
+                <MoreVertical className="h-3.5 w-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+          </Hint>
           <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
             <DropdownMenuItem
               onClick={() => {
@@ -195,14 +200,16 @@ export function HubSidebar({
       <div>
         <div className="flex items-center justify-between px-2 mb-1.5">
           <span className="text-xs font-semibold text-muted-foreground tracking-wide uppercase">Carpetas</span>
-          <button
-            type="button"
-            onClick={onNewFolder}
-            aria-label="Nueva carpeta"
-            className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground hover:text-white hover:bg-white/10 transition-colors"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
+          <Hint label="Nueva carpeta">
+            <button
+              type="button"
+              onClick={onNewFolder}
+              aria-label="Nueva carpeta"
+              className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground hover:text-white hover:bg-white/10 transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          </Hint>
         </div>
         <div className="space-y-0.5">
           {folders.length === 0 ? (

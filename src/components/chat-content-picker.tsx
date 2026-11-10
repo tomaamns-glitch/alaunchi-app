@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Package, Sparkles, Image as ImageIcon, Smile, Loader2, ArrowLeft, Send, Box, Shirt, Camera, Star } from "lucide-react";
@@ -11,11 +12,10 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { usePlayerSkinUrl } from "@/hooks/use-player-head";
 import { useEmotePreview } from "@/hooks/use-emote-preview";
-import { EmoteAnimation } from "@/lib/emote-animation";
-import { SkinViewer3D } from "@/components/skin-viewer-3d";
+import { EmoteViewer } from "@/components/emote-viewer";
 import type { ChatMode } from "@/components/chat-window";
 import type { Modpack } from "@/services/github";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 
 interface ChatContentPickerProps {
   myUuid: string;
@@ -123,10 +123,6 @@ export function ChatContentPicker({
 
   const myPreviewSkinUrl = usePlayerSkinUrl(myUuid);
   const previewEmoteData = useEmotePreview(previewingEmote?.sourceInstanceId, previewingEmote?.fileName);
-  const previewAnimation = useMemo(
-    () => (previewEmoteData ? new EmoteAnimation(previewEmoteData) : null),
-    [previewEmoteData]
-  );
 
   useEffect(() => {
     setPreviewingEmote(null);
@@ -318,7 +314,7 @@ export function ChatContentPicker({
 
       if (onSendContent) await onSendContent(content);
       else await sendSharedContent(myUuid, myUsername, otherUuid ?? "", otherUsername ?? "", content, carouselInstanceId);
-      toast.success(`${item.displayName} compartido.`);
+      notify.success(`${item.displayName} compartido.`);
       onClose();
     } catch (e: any) {
       toast.error(e?.message || "Error al compartir.");
@@ -333,7 +329,7 @@ export function ChatContentPicker({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 8, scale: 0.96 }}
       transition={{ duration: 0.15, ease: "easeOut" }}
-      className="absolute bottom-full left-0 mb-2 z-40 w-72 rounded-lg bg-card/95 backdrop-blur border border-white/10 shadow-2xl overflow-hidden"
+      className="absolute bottom-full left-0 mb-2 z-40 w-72 rounded-md bg-card/95 backdrop-blur border border-transparent shadow-2xl overflow-hidden"
     >
       {!category ? (
         <div className="p-3 grid grid-cols-2 gap-2">
@@ -358,15 +354,17 @@ export function ChatContentPicker({
       ) : (
         <div className="flex flex-col max-h-80">
           <div className="flex items-center gap-2 p-2 border-b border-white/10 shrink-0">
-            <motion.button
-              whileHover={{ scale: 1.08 }}
-              whileTap={{ scale: 0.9 }}
-              type="button"
-              onClick={() => (previewingEmote ? setPreviewingEmote(null) : setCategory(null))}
-              className="h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-300"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-            </motion.button>
+            <Hint label="Volver">
+              <motion.button
+                whileHover={{ scale: 1.08 }}
+                whileTap={{ scale: 0.9 }}
+                type="button"
+                onClick={() => (previewingEmote ? setPreviewingEmote(null) : setCategory(null))}
+                className="h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-300"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+              </motion.button>
+            </Hint>
             <span className="text-xs font-semibold text-white truncate">
               {previewingEmote ? previewingEmote.displayName : CATEGORY_META[category].label}
             </span>
@@ -375,14 +373,8 @@ export function ChatContentPicker({
           {previewingEmote ? (
             <div className="p-3 flex flex-col items-center gap-3">
               <div className="flex items-center justify-center bg-black/30 rounded-md w-full h-48">
-                {myPreviewSkinUrl && previewAnimation ? (
-                  <SkinViewer3D
-                    skinUrl={myPreviewSkinUrl}
-                    animation={previewAnimation}
-                    width={130}
-                    height={182}
-                    className="cursor-grab active:cursor-grabbing"
-                  />
+                {myPreviewSkinUrl && previewEmoteData ? (
+                  <EmoteViewer skinUrl={myPreviewSkinUrl} emote={previewEmoteData} width={264} height={192} compact />
                 ) : (
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 )}

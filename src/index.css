@@ -356,25 +356,26 @@
   --accent: 208 92% 44%;
   --accent-foreground: 0 0% 100%;
   /* Not pure white: a soft blue-gray base with slightly off-white cards. */
-  --background: 216 30% 89%;
-  --foreground: 222 32% 12%;
-  --border: 216 24% 79%;
-  --card: 214 35% 95%;
-  --card-foreground: 222 32% 12%;
-  --card-border: 216 24% 81%;
-  --popover: 214 35% 96%;
-  --popover-foreground: 222 32% 12%;
-  --popover-border: 216 24% 81%;
-  --secondary: 216 28% 85%;
-  --secondary-foreground: 222 32% 12%;
-  --muted: 216 28% 85%;
-  --muted-foreground: 220 14% 36%;
-  --input: 216 22% 73%;
-  --sidebar: 216 30% 87%;
-  --sidebar-foreground: 222 32% 12%;
-  --sidebar-border: 216 24% 79%;
-  --sidebar-accent: 216 28% 83%;
-  --sidebar-accent-foreground: 222 32% 12%;
+  /* Toned down: the old 89–96 % made everything glare white. */
+  --background: 220 2% 77%;
+  --foreground: 222 20% 12%;
+  --border: 220 2% 67%;
+  --card: 220 2% 84%;
+  --card-foreground: 222 20% 12%;
+  --card-border: 220 2% 70%;
+  --popover: 220 2% 85%;
+  --popover-foreground: 222 20% 12%;
+  --popover-border: 220 2% 70%;
+  --secondary: 220 2% 73%;
+  --secondary-foreground: 222 20% 12%;
+  --muted: 220 2% 73%;
+  --muted-foreground: 220 4% 34%;
+  --input: 220 2% 61%;
+  --sidebar: 220 2% 75%;
+  --sidebar-foreground: 222 20% 12%;
+  --sidebar-border: 220 2% 67%;
+  --sidebar-accent: 220 2% 71%;
+  --sidebar-accent-foreground: 222 20% 12%;
   --button-outline: rgba(0, 0, 0, 0.1);
   --badge-outline: rgba(0, 0, 0, 0.05);
   --elevate-1: rgba(0, 0, 0, 0.03);
@@ -382,7 +383,7 @@
 
   --color-white: oklch(21% 0.035 262);
   /* "black" fills (bg-black/30 behind icons…) become a light blue-gray, not white. */
-  --color-black: oklch(96% 0.014 250);
+  --color-black: oklch(84% 0.002 250);
   --color-gray-50: oklch(13% 0.028 261.692);
   --color-gray-100: oklch(21% 0.034 264.665);
   --color-gray-200: oklch(27.8% 0.033 256.848);
@@ -391,9 +392,9 @@
   --color-gray-500: oklch(55.1% 0.027 264.364);
   --color-gray-600: oklch(70.7% 0.022 261.325);
   --color-gray-700: oklch(87.2% 0.01 258.338);
-  --color-gray-800: oklch(92.8% 0.006 264.531);
-  --color-gray-900: oklch(96.7% 0.003 264.542);
-  --color-gray-950: oklch(98.5% 0.002 247.839);
+  --color-gray-800: oklch(82% 0.001 260);
+  --color-gray-900: oklch(85% 0.001 260);
+  --color-gray-950: oklch(87% 0.001 255);
 }
 
 /* Real white/black where the color is ON a solid colored surface (badges,
@@ -428,3 +429,85 @@
   --tw-prose-td-borders: #e5e7eb;
 }
 
+
+/* Character decoration previews (components/effect-swatch.tsx). */
+@keyframes swatch-fall {
+  from { transform: translate(0, 0) rotate(0deg); }
+  to { transform: translate(8px, 110px) rotate(200deg); }
+}
+@keyframes swatch-rise {
+  from { transform: translate(0, 0); opacity: 0.95; }
+  to { transform: translate(-6px, -110px); opacity: 0; }
+}
+@keyframes swatch-float {
+  0%, 100% { transform: translate(0, 0); opacity: 0.4; }
+  50% { transform: translate(5px, -8px); opacity: 1; }
+}
+@keyframes swatch-twinkle {
+  0%, 100% { opacity: 0.1; transform: scale(0.6); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+@keyframes swatch-inward {
+  from { transform: translate(0, 0); opacity: 0; }
+  30% { opacity: 1; }
+  to { transform: translate(var(--tw-swatch-x, 10px), var(--tw-swatch-y, 10px)) scale(0.4); opacity: 0; }
+}
+@keyframes swatch-low {
+  0%, 100% { transform: translateX(0) scale(1); opacity: 0.35; }
+  50% { transform: translateX(6px) scale(1.4); opacity: 0.8; }
+}
+
+/* GLASS OFF (Personalizar → Efecto glass): a solid look of its own, not just
+   "glass minus the blur" — which left every panel see-through and, painted over
+   with one flat colour, made buttons vanish into the bars they sit on.
+   · no backdrop blur anywhere;
+   · the glass SURFACES (panels, bars, menus: a blur + a gray/background/card
+     fill) become solid, in two depths, with a 1px rim, a faint top light and a
+     soft shadow, so they stand off what's behind them;
+   · everything ON them keeps its own fill — the white/accent tints of buttons
+     and chips now read as raised controls on a solid surface.
+   Unlayered, so these win over the utilities without !important. */
+:root {
+  --solid-1: 220 7% 11%;
+  --solid-2: 220 7% 14%;
+  --solid-pop: 220 7% 12.5%;
+  --solid-rim: 0 0% 100% / 0.07;
+  --solid-light: 0 0% 100% / 0.035;
+  --solid-shadow: 0 0% 0% / 0.35;
+}
+:root[data-theme="light"] {
+  --solid-1: 220 2% 84%;
+  --solid-2: 220 2% 80%;
+  --solid-pop: 220 2% 86%;
+  --solid-rim: 220 3% 30% / 0.13;
+  --solid-light: 0 0% 100% / 0.22;
+  --solid-shadow: 220 4% 25% / 0.14;
+}
+:root[data-glass="off"] [class*="backdrop-blur"] {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root[data-glass="off"] [class*="backdrop-blur"]:is(
+    [class~="bg-gray-500/10"],
+    [class~="bg-gray-500/15"],
+    [class~="bg-gray-500/20"],
+    [class~="bg-gray-500/30"],
+    [class~="bg-background/60"],
+    [class~="bg-background/80"],
+    [class~="bg-card/50"],
+    [class~="bg-card/80"],
+    [class~="bg-card/95"]
+  ) {
+  background-color: hsl(var(--solid-1));
+  background-image: linear-gradient(180deg, hsl(var(--solid-light)), transparent 60px);
+  box-shadow: inset 0 0 0 1px hsl(var(--solid-rim)), 0 8px 22px -6px hsl(var(--solid-shadow));
+}
+/* The lighter of two side-by-side surfaces stays a step lighter (e.g. the two
+   halves of Editar perfil). */
+:root[data-glass="off"] [class*="backdrop-blur"]:is([class~="bg-gray-500/20"], [class~="bg-gray-500/30"]) {
+  background-color: hsl(var(--solid-2));
+}
+/* Menus, popovers and floating cards sit a little above the panels. */
+:root[data-glass="off"] [class*="backdrop-blur"]:is([class~="bg-background/60"], [class~="bg-background/80"], [class~="bg-card/95"]) {
+  background-color: hsl(var(--solid-pop));
+}

@@ -145,9 +145,11 @@ export function ElectricBorder({
     let lastDpr = Math.min(window.devicePixelRatio || 1, 2);
 
     const updateSize = () => {
-      const rect = container.getBoundingClientRect();
-      width = rect.width + borderOffset * 2;
-      height = rect.height + borderOffset * 2;
+      // offsetWidth/Height, not getBoundingClientRect: the latter includes
+      // transforms, and inside something opening with a zoom (dialogs start at
+      // 95 %) the border was sized for the shrunken card and stayed off-centre.
+      width = container.offsetWidth + borderOffset * 2;
+      height = container.offsetHeight + borderOffset * 2;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = width * dpr;
       canvas.height = height * dpr;

@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import {
@@ -38,10 +39,12 @@ import {
   getProfileCustomization,
   publishProfile,
   type ProfileVisibility,
+  getPublishedPlaytime,
 } from "@/services/public-profile";
 import { toSkinEffect } from "@/lib/decoration-catalog";
 import { buildInstanceRecipe } from "@/lib/instance-recipe";
 import { formatPlaytime } from "@/lib/format";
+import { localPlaytimeFor } from "@/lib/playtime";
 import type { Modpack } from "@/services/github";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -165,6 +168,9 @@ export default function Profile() {
   const [bio, setBio] = useState("");
   const [avatarDecoration, setAvatarDecoration] = useState("none");
   const [frame, setFrame] = useState("none");
+  const [frameColor, setFrameColor] = useState<string | null>(null);
+  const [hideInstances, setHideInstances] = useState(false);
+  const [hideFavorites, setHideFavorites] = useState(false);
   const devBannerVideo = useDevBannerOverride((s) => s.videoUrl);
 
   useEffect(() => {
@@ -181,8 +187,11 @@ export default function Profile() {
     // page is what actually adds them all up.
     getInstalledModpacksMeta()
       .then((meta) => {
-        const total = Object.values(meta).reduce((sum: number, m: any) => sum + (m?.totalPlaytimeMs || 0), 0);
+        const total = localPlaytimeFor(meta as Record<string, any>, uuid);
         setTotalPlaytimeMs(total);
+        // What this PC knows can be less than the real total (new PC, other
+        // device): show the published one if it's higher.
+        if (uuid) getPublishedPlaytime(uuid).then((remote) => remote > total && setTotalPlaytimeMs(remote)).catch(() => {});
       })
       .catch(() => {});
   }, [isAuthenticated]);
@@ -197,6 +206,9 @@ export default function Profile() {
         setBio(c.bio);
         setAvatarDecoration(c.avatarDecoration);
         setFrame(c.frame);
+        setFrameColor(c.frameColor);
+        setHideInstances(c.hideInstances);
+        setHideFavorites(c.hideFavorites);
       })
       .catch(() => {});
   }, [uuid]);
@@ -255,7 +267,7 @@ export default function Profile() {
     <div className="min-h-full bg-background text-foreground flex flex-col">
       <main className="flex-1 overflow-y-auto px-6 py-6">
         <div className="max-w-5xl w-full mx-auto space-y-6">
-          <ProfileFrame frame={frame}>
+          <ProfileFrame frame={frame} color={frameColor}>
           <div className="relative rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden">
             <div className="absolute inset-0">
               {devBannerVideo ? (
@@ -268,15 +280,17 @@ export default function Profile() {
             </div>
 
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="absolute top-3 right-3 z-10 flex h-8 w-8 items-center justify-center rounded-md bg-black/50 backdrop-blur-sm text-gray-200 hover:bg-black/70 hover:text-white transition-colors"
-                  aria-label="Opciones del perfil"
-                >
-                  <MoreVertical className="h-4 w-4" />
-                </button>
-              </DropdownMenuTrigger>
+              <Hint label="Opciones del perfil">
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="absolute top-3 right-3 z-10 flex h-8 w-8 items-center justify-center rounded-md bg-black/50 backdrop-blur-sm text-gray-200 hover:bg-black/70 hover:text-white transition-colors"
+                    aria-label="Opciones del perfil"
+                  >
+                    <MoreVertical className="h-4 w-4" />
+                  </button>
+                </DropdownMenuTrigger>
+              </Hint>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => setEditOpen(true)}>
                   <Pencil className="mr-2 h-4 w-4" />
@@ -325,8 +339,8 @@ export default function Profile() {
 
                 <div className="mt-auto flex flex-wrap items-center gap-x-8 gap-y-3 pt-3 border-t border-white/5">
                   <Stat icon={<Clock className="h-4 w-4" />} value={formatPlaytime(totalPlaytimeMs)} label="Tiempo jugado" />
-                  <Stat icon={<Gamepad2 className="h-4 w-4" />} value={String(totalInstances)} label="Instancias" />
-                  <Stat icon={<Heart className="h-4 w-4" />} value={String(totalFavorites)} label="Favoritas" />
+                  {!hideInstances && <Stat icon={<Gamepad2 className="h-4 w-4" />} value={String(totalInstances)} label="Instancias" />}
+                  {!hideFavorites && <Stat icon={<Heart className="h-4 w-4" />} value={String(totalFavorites)} label="Favoritas" />}
                 </div>
               </div>
             </div>

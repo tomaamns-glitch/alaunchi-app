@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
@@ -8,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import {
   Save,
   LogOut,
@@ -32,6 +33,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useTour } from "@/components/onboarding-tour";
+import { useOnlineTour } from "@/components/online-tour";
+import { startManagerTour } from "@/components/manager-tour";
+import { useCustomInstances } from "@/hooks/use-custom-instances";
+import { useModpacks } from "@/hooks/use-modpacks";
 import { Switch } from "@/components/ui/switch";
 import { readSettings, writeSettings, isElectron, getDataDir, chooseDataDir, openDataDir, checkOverlayShortcut, DEFAULT_OVERLAY_SHORTCUT } from "@/services/electron";
 import {
@@ -41,8 +46,7 @@ import {
   playNotificationSound,
   type NotificationSoundId,
 } from "@/lib/notification-sound";
-import { useTheme, type Theme } from "@/lib/theme";
-import { useAnimatedBackground } from "@/lib/animated-background";
+import { AdaptiveColorPanel, AnimatedBackgroundPanel, GlassPanel, NotificationSoundPanel, Panel, ThemePanel } from "@/components/launcher-appearance";
 import { cn } from "@/lib/utils";
 
 type SectionId = "storage" | "personalization" | "developer" | "account";
@@ -149,30 +153,6 @@ export default function Settings() {
   );
 }
 
-function Panel({
-  icon: Icon,
-  title,
-  description,
-  children,
-}: {
-  icon: LucideIcon;
-  title: string;
-  description?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className={cn(GLASS, "p-5 space-y-4")}>
-      <div>
-        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-          <Icon className="h-4 w-4 text-accent" /> {title}
-        </h3>
-        {description && <p className="text-xs text-muted-foreground mt-1">{description}</p>}
-      </div>
-      {children}
-    </section>
-  );
-}
-
 function StorageSection() {
   const [maxMemoryMb, setMaxMemoryMb] = useState(2048);
   const [dataDir, setDataDir] = useState("");
@@ -204,7 +184,7 @@ function StorageSection() {
       if (result.canceled) return;
       setDataDir(result.path || dataDir);
       setDataDirCustom(true);
-      toast.success("Carpeta actualizada. Reinicia ALaunchi para aplicar el cambio.");
+      notify.success("Carpeta actualizada. Reinicia ALaunchi para aplicar el cambio.");
     } finally {
       setChangingDataDir(false);
     }
@@ -259,52 +239,16 @@ function StorageSection() {
 }
 
 function PersonalizationSection() {
-  const [notificationSound, setNotificationSoundState] = useState<NotificationSoundId>(() => getNotificationSound());
-
-  const handleChange = (id: NotificationSoundId) => {
-    setNotificationSoundState(id);
-    setNotificationSound(id);
-    playNotificationSound(id);
-  };
-
   return (
     <>
     <ThemePanel />
+    <GlassPanel />
+    <AdaptiveColorPanel />
     <AnimatedBackgroundPanel />
     <BackgroundPanel />
     <DiscordPanel />
     <IngameOverlayPanel />
-    <Panel
-      icon={Bell}
-      title="Notificaciones"
-      description="Sonido de los avisos: mensajes, solicitudes de amistad, invitaciones y quién se conecta. Con ALaunchi minimizado, además, sale la notificación de Windows."
-    >
-      <div className="flex items-center gap-2">
-        <Select value={notificationSound} onValueChange={(v) => handleChange(v as NotificationSoundId)}>
-          <SelectTrigger className="bg-background/50 border-white/10 text-white flex-1">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {NOTIFICATION_SOUNDS.map((s) => (
-              <SelectItem key={s.id} value={s.id}>
-                {s.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="border-white/10"
-          onClick={() => playNotificationSound(notificationSound)}
-          disabled={notificationSound === "none"}
-          title="Probar sonido"
-        >
-          <Volume2 className="h-4 w-4" />
-        </Button>
-      </div>
-    </Panel>
+    <NotificationSoundPanel />
     <TourPanel />
     </>
   );
@@ -318,39 +262,52 @@ function TourPanel() {
       title="Tutorial"
       description="El recorrido rápido por ALaunchi que sale la primera vez que inicias sesión: instancias, tu menú, el personaje y las instancias online."
     >
-      <Button
-        type="button"
-        variant="outline"
-        className="border-white/10"
-        onClick={() => {
-          useTour.getState().request();
-          setLocation("/hub");
-        }}
-      >
-        Ver el tutorial de nuevo
-      </Button>
-    </Panel>
-  );
-}
-
-function AnimatedBackgroundPanel() {
-  const enabled = useAnimatedBackground((s) => s.enabled);
-  const setEnabled = useAnimatedBackground((s) => s.setEnabled);
-  return (
-    <Panel
-      icon={Sparkles}
-      title="Fondo animado"
-      description={
-        enabled
-          ? "La luz en movimiento detrás de Mis instancias y del gestor de cada instancia."
-          : "Fondo quieto: una nube suave del mismo color, sin movimiento. Gasta menos."
-      }
-    >
-      <div className="flex items-center justify-between gap-3">
-        <Label htmlFor="animated-background" className="text-sm text-gray-100">
-          Fondo en movimiento
-        </Label>
-        <Switch id="animated-background" checked={enabled} onCheckedChange={setEnabled} />
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          className="border-white/10"
+          onClick={() => {
+            useTour.getState().request();
+            setLocation("/hub");
+          }}
+        >
+          Ver el tutorial de nuevo
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="border-white/10"
+          onClick={() => {
+            useOnlineTour.getState().request();
+            setLocation("/");
+          }}
+        >
+          Instancias online
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="border-white/10"
+          onClick={() =>
+            startManagerTour("private", setLocation, async () => {
+              await useCustomInstances.getState().loadInstances().catch(() => {});
+              return useCustomInstances.getState().instances[0]?.id;
+            })
+          }
+        >
+          Gestor de instancias privadas
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="border-white/10"
+          onClick={() =>
+            startManagerTour("online", setLocation, async () => useModpacks.getState().modpacks.find((m) => m.installed)?.id)
+          }
+        >
+          Contenido de instancias online
+        </Button>
       </div>
     </Panel>
   );
@@ -548,71 +505,6 @@ function IngameOverlayPanel() {
         </button>
       </div>
     </Panel>
-  );
-}
-
-const THEMES: { id: Theme; label: string; icon: LucideIcon }[] = [
-  { id: "dark", label: "Oscuro", icon: Moon },
-  { id: "light", label: "Claro", icon: Sun },
-];
-
-function ThemePanel() {
-  const theme = useTheme((s) => s.theme);
-  const setTheme = useTheme((s) => s.setTheme);
-  return (
-    <Panel icon={Palette} title="Apariencia" description="El tema de toda la app. Se guarda en este equipo.">
-      <div className="grid grid-cols-2 gap-3">
-        {THEMES.map((t) => {
-          const active = theme === t.id;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTheme(t.id)}
-              className={cn(
-                "relative rounded-xl border p-2 text-left transition-colors",
-                active ? "border-accent ring-2 ring-accent/30" : "border-white/10 hover:border-white/25"
-              )}
-            >
-              <ThemePreview theme={t.id} />
-              <div className="mt-2 flex items-center gap-1.5 px-1 text-sm font-medium text-gray-100">
-                <t.icon className="h-4 w-4 text-accent" />
-                {t.label}
-                {active && <Check className="ml-auto h-4 w-4 text-accent" />}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </Panel>
-  );
-}
-
-/** A tiny drawing of the app in that theme — fixed colors on purpose, so both
- *  previews look right whichever theme is active. */
-function ThemePreview({ theme }: { theme: Theme }) {
-  const c =
-    theme === "dark"
-      ? { bg: "#0d0d0d", card: "#1a1a1a", line: "#2a2a2a", text: "#e5e7eb", soft: "#3a3a3a" }
-      : { bg: "#eef0f4", card: "#ffffff", line: "#dde1e8", text: "#1f2937", soft: "#cfd5de" };
-  return (
-    <div className="h-24 rounded-lg overflow-hidden flex flex-col gap-1.5 p-2" style={{ background: c.bg }}>
-      <div className="h-4 rounded flex items-center gap-1 px-1.5" style={{ background: c.card, border: `1px solid ${c.line}` }}>
-        <span className="h-1.5 w-8 rounded-full" style={{ background: c.text }} />
-      </div>
-      <div className="flex-1 flex gap-1.5">
-        <div className="w-1/3 rounded flex flex-col gap-1 p-1" style={{ background: c.card, border: `1px solid ${c.line}` }}>
-          <span className="h-1.5 rounded-full" style={{ background: "hsl(205 85% 50%)" }} />
-          <span className="h-1.5 rounded-full" style={{ background: c.soft }} />
-          <span className="h-1.5 rounded-full" style={{ background: c.soft }} />
-        </div>
-        <div className="flex-1 rounded p-1.5 flex flex-col gap-1" style={{ background: c.card, border: `1px solid ${c.line}` }}>
-          <span className="h-1.5 w-2/3 rounded-full" style={{ background: c.text }} />
-          <span className="h-1.5 w-full rounded-full" style={{ background: c.soft }} />
-          <span className="h-1.5 w-4/5 rounded-full" style={{ background: c.soft }} />
-        </div>
-      </div>
-    </div>
   );
 }
 

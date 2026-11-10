@@ -1,5 +1,7 @@
 import { onPlaytimeSessionEnded } from "./electron";
-import { markOffline, updatePlaytime } from "./presence";
+import { markOffline, addPlaytime } from "./presence";
+import { addProfilePlaytime } from "./public-profile";
+import { normUuid } from "@/lib/playtime";
 import { markAppOnline } from "./user-activity";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -10,11 +12,16 @@ import { useAuth } from "@/hooks/use-auth";
  *  unified activity status back to plain "online" (see markPlayingInstance's
  *  call sites for where it gets set to "playing" in the first place). */
 export function initPresenceSync() {
-  onPlaytimeSessionEnded(({ modpackId, totalPlaytimeMs }) => {
+  onPlaytimeSessionEnded(({ modpackId, totalPlaytimeMs, sessionMs, accountUuid }) => {
     const { uuid, username } = useAuth.getState();
     if (!uuid || !username) return;
+    // The session belongs to the account that launched it, which may not be the
+    // one signed in now (account switched while playing): if it's another one,
+    // its time is not ours to add.
+    if (accountUuid && normUuid(accountUuid) !== normUuid(uuid)) return;
     markOffline(modpackId, uuid, username).catch(() => {});
-    updatePlaytime(modpackId, uuid, totalPlaytimeMs).catch(() => {});
+    addPlaytime(modpackId, uuid, sessionMs ?? 0, totalPlaytimeMs).catch(() => {});
+    addProfilePlaytime(uuid, sessionMs ?? 0).catch(() => {});
     markAppOnline(uuid, username).catch(() => {});
   });
 

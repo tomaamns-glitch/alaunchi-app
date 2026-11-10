@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, Globe, Loader2, Minus, X } from "lucide-react";
@@ -24,32 +25,32 @@ export function InviteBubbles() {
       {invites.map((inv) => {
         const active = openKey === inv.key;
         return (
-          <motion.button
-            key={inv.key}
-            layout
-            initial={{ opacity: 0, scale: 0.7 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.7 }}
-            whileHover={{ scale: 1.08 }}
-            whileTap={{ scale: 0.92 }}
-            transition={{ duration: 0.15 }}
-            type="button"
-            onClick={() => {
-              if (active) return minimize();
-              // Only one footer popup at a time.
-              useChatHeads.getState().minimizeChat();
-              useHeaderOverlay.getState().close();
-              open(inv.key);
-            }}
-            title={`Invitación a ${inv.modpackName}`}
-            aria-label={`Invitación de ${inv.fromUsername} a ${inv.modpackName}`}
-            className={`relative h-9 w-9 shrink-0 rounded-md border transition-colors ${
-              active ? "border-accent bg-accent/15" : "border-white/10 bg-white/5 hover:bg-white/10"
-            }`}
-          >
-            <InstanceLogo invite={inv} className="h-full w-full rounded-md" />
-            <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500 border-2 border-card" />
-          </motion.button>
+          <Hint label={`Invitación a ${inv.modpackName}`} key={inv.key}>
+            <motion.button
+              layout
+              initial={{ opacity: 0, scale: 0.7 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.7 }}
+              whileHover={{ scale: 1.08 }}
+              whileTap={{ scale: 0.92 }}
+              transition={{ duration: 0.15 }}
+              type="button"
+              onClick={() => {
+                if (active) return minimize();
+                // Only one footer popup at a time.
+                useChatHeads.getState().minimizeChat();
+                useHeaderOverlay.getState().close();
+                open(inv.key);
+              }}
+              aria-label={`Invitación de ${inv.fromUsername} a ${inv.modpackName}`}
+              className={`relative h-9 w-9 shrink-0 rounded-md border transition-colors ${
+                active ? "border-accent bg-accent/15" : "border-white/10 bg-white/5 hover:bg-white/10"
+              }`}
+            >
+              <InstanceLogo invite={inv} className="h-full w-full rounded-md" />
+              <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500 border-2 border-card" />
+            </motion.button>
+          </Hint>
         );
       })}
     </AnimatePresence>
@@ -63,7 +64,7 @@ export function InviteCard() {
   const invite = useInvites((s) => (s.openKey ? s.invites[s.openKey] : undefined));
   const busyKey = useInvites((s) => s.busyKey);
   const { minimize, dismissFromBar, accept, reject } = useInvites.getState();
-  const chatOpen = useChatHeads((s) => s.openUuid);
+  const chatOpen = useChatHeads((s) => s.panelOpen);
   const overlay = useHeaderOverlay((s) => s.active);
   const cardRef = useRef<HTMLDivElement | null>(null);
 
@@ -95,22 +96,24 @@ export function InviteCard() {
           )}
           <div className="relative p-4">
             <div className="absolute top-2 right-2 flex items-center gap-0.5">
-              <button
-                type="button"
-                onClick={minimize}
-                title="Minimizar"
-                className="h-6 w-6 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-gray-200 transition-colors"
-              >
-                <Minus className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => dismissFromBar(invite.key)}
-                title="Cerrar (seguirá pendiente en Instancias online)"
-                className="h-6 w-6 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-gray-200 transition-colors"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
+              <Hint label="Minimizar">
+                <button
+                  type="button"
+                  onClick={minimize}
+                  className="h-6 w-6 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-gray-200 transition-colors"
+                >
+                  <Minus className="h-3.5 w-3.5" />
+                </button>
+              </Hint>
+              <Hint label="Cerrar (seguirá pendiente en Instancias online)">
+                <button
+                  type="button"
+                  onClick={() => dismissFromBar(invite.key)}
+                  className="h-6 w-6 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-gray-200 transition-colors"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </Hint>
             </div>
 
             <div className="flex items-center gap-3 pr-12">

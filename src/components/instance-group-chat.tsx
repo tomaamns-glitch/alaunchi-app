@@ -1,7 +1,8 @@
+import { Hint } from "@/components/hint";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { AnimatePresence, motion } from "framer-motion";
-import { MessagesSquare, Minus, Paperclip, Send, Users } from "lucide-react";
+import { ChevronDown, MessagesSquare, Minus, Paperclip, Send, Users } from "lucide-react";
 import { format } from "date-fns";
 import { ChatDaySeparator, startsNewDay } from "@/components/chat-day-separator";
 import { ChatMessageMenu, DeletedMessageBubble, useMessageMenu } from "@/components/chat-message-menu";
@@ -28,6 +29,7 @@ import type { Modpack } from "@/services/github";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { ChatContentPicker } from "@/components/lazy-heavy";
 import { SharedContentCard } from "@/components/chat-window";
+import { MoveBackButton, MoveToContentMenu } from "@/components/move-to-content-menu";
 
 function newestFromOthers(messages: GroupMessage[], myUuid: string): number {
   let newest = 0;
@@ -121,6 +123,8 @@ function GroupChatBody({
   myUsername,
   room,
   onMinimize,
+  onMoveBack,
+  onChatOpened,
   panel = false,
 }: {
   pack: Modpack;
@@ -128,6 +132,10 @@ function GroupChatBody({
   myUsername: string;
   room: GroupRoom;
   onMinimize?: () => void;
+  /** Panel moved to the manager: sends it back to Inicio's footer. */
+  onMoveBack?: () => void;
+  /** After opening a private chat, for pages without a chat window of their own. */
+  onChatOpened?: () => void;
   /** The online instance page: plain "Chat de grupo" header like its other
    *  panels (no instance, player count or heads — the page already shows them). */
   panel?: boolean;
@@ -136,6 +144,13 @@ function GroupChatBody({
   const [draft, setDraft] = useState("");
   const [showContentPicker, setShowContentPicker] = useState(false);
   const messageMenu = useMessageMenu();
+  // Clicking someone opens your private chat with them (and closes the group
+  // popup, which gives way to any 1:1 chat opening).
+  const openChatWith = useChatHeads((s) => s.openChat);
+  const openChat = (uuid: string) => {
+    openChatWith(uuid);
+    onChatOpened?.();
+  };
 
   const send = () => {
     if (!draft.trim()) return;
@@ -150,20 +165,24 @@ function GroupChatBody({
       {panel ? (
         <div className="shrink-0 flex items-center gap-2 px-4 py-3 border-b border-white/5">
           <MessagesSquare className="h-4 w-4 text-accent" />
-          <h3 className="text-sm font-semibold text-white">Chat de grupo</h3>
-          {onMinimize && (
-            <button
-              type="button"
-              onClick={onMinimize}
-              title="Minimizar"
-              className="ml-auto h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors shrink-0"
-            >
-              <Minus className="h-3.5 w-3.5" />
-            </button>
-          )}
+          <h3 className="text-sm font-semibold text-white">Chat grupal</h3>
+          <div className="ml-auto flex items-center gap-0.5">
+            {onMoveBack && <MoveBackButton onClick={onMoveBack} />}
+            {onMinimize && (
+              <Hint label="Minimizar">
+                <button
+                  type="button"
+                  onClick={onMinimize}
+                  className="h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors shrink-0"
+                >
+                  <ChevronDown className="h-4 w-4 transition-transform" />
+                </button>
+              </Hint>
+            )}
+          </div>
         </div>
       ) : (
-      <div className="px-4 py-3 border-b border-white/10 flex items-center gap-3">
+      <div className="px-4 py-3 border-b border-white/5 flex items-center gap-3">
         <InstanceAvatar pack={pack} className="h-9 w-9" />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-white truncate">Chat de {pack.name}</p>
@@ -173,23 +192,35 @@ function GroupChatBody({
             {onlineCount > 0 && <span className="text-green-400">· {onlineCount} en línea</span>}
           </p>
         </div>
+        {/* Only who's playing this instance right now (`online` in its roster). */}
         <div className="flex -space-x-1.5">
-          {roster.slice(0, 6).map(([uuid, e]) => (
-            <div key={uuid} className="relative" title={nicknames[uuid] || e.username}>
-              <Head uuid={uuid} username={e.username} className="h-6 w-6 border border-card" />
-              {e.online && <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 border border-card" />}
-            </div>
-          ))}
+          {roster
+            .filter(([, e]) => e.online)
+            .slice(0, 6)
+            .map(([uuid, e]) => (
+              <Hint label={nicknames[uuid] || e.username} key={uuid}>
+                <button
+                  type="button"
+                  disabled={uuid === myUuid}
+                  onClick={() => openChat(uuid)}
+                  aria-label={`Chat con ${nicknames[uuid] || e.username}`}
+                  className="block transition-opacity enabled:hover:opacity-80"
+                >
+                  <Head uuid={uuid} username={e.username} className="h-6 w-6 border border-card" />
+                </button>
+              </Hint>
+            ))}
         </div>
         {onMinimize && (
-          <button
-            type="button"
-            onClick={onMinimize}
-            title="Minimizar"
-            className="h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors shrink-0"
-          >
-            <Minus className="h-3.5 w-3.5" />
-          </button>
+          <Hint label="Minimizar">
+            <button
+              type="button"
+              onClick={onMinimize}
+              className="h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors shrink-0"
+            >
+              <Minus className="h-3.5 w-3.5" />
+            </button>
+          </Hint>
         )}
       </div>
       )}
@@ -225,13 +256,36 @@ function GroupChatBody({
               >
                 {!isMe && (
                   <div className="w-7 shrink-0">
-                    {startsRun && <Head uuid={m.senderUuid} username={m.senderUsername} className="h-7 w-7" />}
+                    {startsRun && (
+                      <Hint label={`Chat con ${nameOf(m)}`}>
+                        <button
+                          type="button"
+                          onClick={() => openChat(m.senderUuid)}
+                          aria-label={`Chat con ${nameOf(m)}`}
+                          className="block transition-opacity hover:opacity-80"
+                        >
+                          <Head uuid={m.senderUuid} username={m.senderUsername} className="h-7 w-7" />
+                        </button>
+                      </Hint>
+                    )}
                   </div>
                 )}
                 <div className={cn("flex flex-col max-w-[75%]", isMe ? "items-end" : "items-start")}>
                   {startsRun && (
                     <span className="text-[10px] text-muted-foreground mb-0.5 px-1">
-                      {isMe ? "Tú" : nameOf(m)} · {m.timestamp ? format(m.timestamp, "HH:mm") : ""}
+                      {isMe ? (
+                        "Tú"
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => openChat(m.senderUuid)}
+                          title={`Chat con ${nameOf(m)}`}
+                          className="hover:text-accent transition-colors"
+                        >
+                          {nameOf(m)}
+                        </button>
+                      )}{" "}
+                      · {m.timestamp ? format(m.timestamp, "HH:mm") : ""}
                     </span>
                   )}
                   {m.deleted ? (
@@ -265,19 +319,20 @@ function GroupChatBody({
       </div>
 
       <ChatMessageMenu menu={messageMenu.menu} onClose={messageMenu.close} />
-      <div className="p-3 border-t border-white/10 flex items-center gap-2">
+      <div className="p-3 border-t border-white/5 flex items-center gap-2">
         <div className="relative">
-          <button
-            type="button"
-            onClick={() => setShowContentPicker((v) => !v)}
-            title="Enviar contenido"
-            className={cn(
-              "h-9 w-9 flex items-center justify-center rounded-md transition-colors shrink-0",
-              showContentPicker ? "bg-accent/20 text-accent" : "bg-white/5 hover:bg-white/10 text-gray-300"
-            )}
-          >
-            <Paperclip className="h-4 w-4" />
-          </button>
+          <Hint label="Enviar contenido">
+            <button
+              type="button"
+              onClick={() => setShowContentPicker((v) => !v)}
+              className={cn(
+                "h-9 w-9 flex items-center justify-center rounded-md transition-colors shrink-0",
+                showContentPicker ? "bg-accent/20 text-accent" : "bg-white/[0.07] hover:bg-white/[0.14] text-gray-300"
+              )}
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+          </Hint>
           <AnimatePresence>
             {showContentPicker && (
               <ChatContentPicker
@@ -301,17 +356,19 @@ function GroupChatBody({
           }}
           maxLength={2000}
           placeholder={`Escribe a todos los de ${pack.name}…`}
-          className="flex-1 min-w-0 h-9 rounded-md bg-background/50 border border-white/10 px-3 text-sm text-white placeholder:text-muted-foreground focus:outline-none focus:border-accent/50"
+          className="flex-1 min-w-0 h-9 rounded-md bg-white/[0.07] border border-transparent px-3 text-sm text-white placeholder:text-muted-foreground focus:outline-none focus:border-accent/50"
         />
-        <button
-          type="button"
-          onClick={send}
-          disabled={!draft.trim()}
-          className="h-9 w-9 shrink-0 flex items-center justify-center rounded-md bg-accent text-accent-foreground disabled:opacity-40 hover:bg-accent/90 transition-colors"
-          aria-label="Enviar"
-        >
-          <Send className="h-4 w-4" />
-        </button>
+        <Hint label="Enviar">
+          <button
+            type="button"
+            onClick={send}
+            disabled={!draft.trim()}
+            className="h-9 w-9 shrink-0 flex items-center justify-center rounded-md bg-accent text-accent-foreground disabled:opacity-40 hover:bg-accent/90 transition-colors"
+            aria-label="Enviar"
+          >
+            <Send className="h-4 w-4" />
+          </button>
+        </Hint>
       </div>
     </>
   );
@@ -334,12 +391,18 @@ export function InstanceGroupChat({
   myUsername,
   plainHeader = false,
   onlyWhenUnread = false,
+  onMoveToContent,
+  card = false,
 }: {
   pack: Modpack;
   myUuid: string;
   myUsername: string;
+  /** Inicio's footer: logo + "Chat de grupo" + unread count instead of the bare logo. */
+  card?: boolean;
   /** The online instance page's header ("Chat de grupo", see GroupChatBody's `panel`). */
   plainHeader?: boolean;
+  /** Adds "Mover a Contenido" on right click. */
+  onMoveToContent?: () => void;
   /** Notification mode (GroupChatNotifications): the button only shows while
    *  there are unread messages or the room is open. Stays mounted regardless,
    *  to keep listening. */
@@ -354,10 +417,10 @@ export function InstanceGroupChat({
 
   // Another footer popup (account, players) or a 1:1 chat opening closes this one.
   const overlayActive = useHeaderOverlay((s) => s.active);
-  const openUuid = useChatHeads((s) => s.openUuid);
+  const chatOpen = useChatHeads((s) => s.panelOpen);
   useEffect(() => {
-    if (overlayActive || openUuid) setOpen(false);
-  }, [overlayActive, openUuid]);
+    if (overlayActive || chatOpen) setOpen(false);
+  }, [overlayActive, chatOpen]);
   // Switching carousel instance closes the room of the previous one.
   useEffect(() => setOpen(false), [room.groupKey]);
   // Another group chat button opening closes this one.
@@ -380,7 +443,7 @@ export function InstanceGroupChat({
   if (onlyWhenUnread && !open && room.unread === 0) return null;
 
   return (
-    <div className="relative" data-keep-popups-open>
+    <div className="relative" data-keep-popups-open data-tour={card ? "online-group-chat" : undefined}>
       <AnimatePresence>
         {open && (
           <motion.div
@@ -390,56 +453,150 @@ export function InstanceGroupChat({
             exit={{ opacity: 0, y: 8, scale: 0.96 }}
             transition={{ duration: 0.15, ease: "easeOut" }}
             style={{ left: panelShift }}
-            className="absolute bottom-full left-0 mb-2 z-40 flex flex-col w-[36rem] max-w-[calc(100vw-24px)] h-[30rem] rounded-lg bg-card/95 backdrop-blur border border-white/10 shadow-2xl overflow-hidden"
+            className="absolute bottom-full left-0 mb-2 z-40 flex flex-col w-[36rem] max-w-[calc(100vw-24px)] h-[30rem] rounded-md bg-background/60 backdrop-blur-xl border border-transparent shadow-[0_8px_24px_rgba(0,0,0,0.35)] overflow-hidden"
           >
             <GroupChatBody pack={pack} myUuid={myUuid} myUsername={myUsername} room={room} onMinimize={() => setOpen(false)} panel={plainHeader} />
           </motion.div>
         )}
       </AnimatePresence>
 
-      <motion.button
-        ref={buttonRef}
-        type="button"
-        onClick={toggle}
-        aria-label={`Chat de grupo de ${pack.name}`}
-        title={`Chat de grupo de ${pack.name}`}
-        // Same 38px box, radius and border as the other footer buttons
-        // (account, players, Contenido) — the instance logo fills it edge to
-        // edge, so switching carousel packs never changes the button's size.
-        className={cn(
-          "relative h-[38px] w-[38px] shrink-0 flex items-center justify-center rounded-lg border transition-colors",
-          open ? "border-accent bg-accent/15" : "border-white/5 bg-white/5 hover:bg-white/10"
-        )}
-      >
-        <InstanceAvatar pack={pack} className="h-full w-full rounded-[7px] text-sm" />
-        <span className="absolute -bottom-1 -left-1 h-4 w-4 flex items-center justify-center rounded-full bg-card border border-white/10">
-          <Users className="h-2.5 w-2.5 text-accent" />
-        </span>
-        <AnimatePresence>
-          {room.unread > 0 && (
-            <motion.span
-              initial={{ opacity: 0, scale: 0.4 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.4 }}
-              transition={{ duration: 0.15 }}
-              className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none border border-card"
-            >
-              {room.unread > 99 ? "99+" : room.unread}
-            </motion.span>
+      <MoveToContentMenu onMove={onMoveToContent}>
+      {card ? (
+        <GroupChatCardButton pack={pack} room={room} open={open} buttonRef={buttonRef} onClick={toggle} />
+      ) : (
+      <Hint label={`Chat grupal de ${pack.name}`}>
+        <motion.button
+          ref={buttonRef}
+          type="button"
+          onClick={toggle}
+          aria-label={`Chat grupal de ${pack.name}`}
+          // Same 38px box, radius and border as the other footer buttons
+          // (account, players, Contenido) — the instance logo fills it edge to
+          // edge, so switching carousel packs never changes the button's size.
+          className={cn(
+            "relative h-[38px] w-[38px] shrink-0 flex items-center justify-center rounded-md border transition-colors",
+            open ? "border-accent bg-accent/15" : "border-transparent bg-white/[0.07] backdrop-blur-md hover:bg-white/[0.14]"
           )}
-        </AnimatePresence>
-      </motion.button>
+        >
+          <InstanceAvatar pack={pack} className="h-full w-full rounded-[5px] text-sm" />
+          <span className="absolute -bottom-1 -left-1 h-4 w-4 flex items-center justify-center rounded-full bg-card border border-white/10">
+            <Users className="h-2.5 w-2.5 text-accent" />
+          </span>
+          <AnimatePresence>
+            {room.unread > 0 && (
+              <motion.span
+                initial={{ opacity: 0, scale: 0.4 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.4 }}
+                transition={{ duration: 0.15 }}
+                className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none border border-card"
+              >
+                {room.unread > 99 ? "99+" : room.unread}
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </motion.button>
+      </Hint>
+      )}
+      </MoveToContentMenu>
     </div>
   );
 }
 
-/** The same group chat, always open as a column (the online instance page,
- *  /online/:id) — while it's on screen everything counts as read. */
-export function InstanceGroupChatPanel({ pack, myUuid, myUsername }: { pack: Modpack; myUuid: string; myUsername: string }) {
-  const room = useGroupRoom(pack, myUuid, true);
+/** Inicio's footer version: same 38px height, radius and glass as the bar's
+ *  other buttons — instance logo, "Chat de grupo" and the unread count. */
+function GroupChatCardButton({
+  pack,
+  room,
+  open,
+  buttonRef,
+  onClick,
+}: {
+  pack: Modpack;
+  room: GroupRoom;
+  open: boolean;
+  buttonRef: React.RefObject<HTMLButtonElement | null>;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      onClick={onClick}
+      aria-label={`Chat grupal de ${pack.name}`}
+      title={`Chat grupal de ${pack.name}`}
+      className={cn(
+        "relative h-[38px] flex items-center gap-2 pl-1 pr-3 rounded-md border backdrop-blur-md transition-colors",
+        open ? "border-accent bg-accent/15" : "border-transparent bg-white/[0.07] hover:bg-white/[0.14]"
+      )}
+    >
+      <InstanceAvatar pack={pack} className="h-[30px] w-[30px] shrink-0 rounded-[5px] text-xs" />
+      <span className="text-sm font-medium text-white whitespace-nowrap">Chat grupal</span>
+      {room.unread > 0 && (
+        <span className="shrink-0 min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none">
+          {room.unread > 99 ? "99+" : room.unread}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/** The same group chat as a column (the online instance page, /online/:id) —
+ *  while it's on screen everything counts as read. Minimized, only the header
+ *  shows, with what's unread: messages keep counting and sounding like a closed popup. */
+export function InstanceGroupChatPanel({
+  pack,
+  myUuid,
+  myUsername,
+  collapsed = false,
+  onToggleCollapsed,
+  onMoveBack,
+  onChatOpened,
+}: {
+  pack: Modpack;
+  myUuid: string;
+  myUsername: string;
+  collapsed?: boolean;
+  /** Shows the minimize/expand button in the header. */
+  onToggleCollapsed?: () => void;
+  /** Moved to the manager: shows the button that sends it back to Inicio's footer. */
+  onMoveBack?: () => void;
+  /** After opening a private chat, for pages without a chat window of their own. */
+  onChatOpened?: () => void;
+}) {
+  const room = useGroupRoom(pack, myUuid, !collapsed);
+  if (collapsed) {
+    return (
+      <aside className="flex flex-col rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden">
+        <div className="shrink-0 flex items-center gap-2 px-4 py-3">
+          <MessagesSquare className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-semibold text-white">Chat grupal</h3>
+          {room.unread > 0 && (
+            <span className="min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none">
+              {room.unread > 99 ? "99+" : room.unread}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-0.5">
+            {onMoveBack && <MoveBackButton onClick={onMoveBack} />}
+            {onToggleCollapsed && (
+              <Hint label="Desplegar">
+                <button
+                  type="button"
+                  onClick={onToggleCollapsed}
+                  className="h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors shrink-0"
+                >
+                  <ChevronDown className="h-4 w-4 -rotate-90 transition-transform" />
+                </button>
+              </Hint>
+            )}
+          </div>
+        </div>
+      </aside>
+    );
+  }
   return (
     <aside className="h-full flex flex-col rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden">
-      <GroupChatBody pack={pack} myUuid={myUuid} myUsername={myUsername} room={room} panel />
+      <GroupChatBody pack={pack} myUuid={myUuid} myUsername={myUsername} room={room} onMinimize={onToggleCollapsed} onMoveBack={onMoveBack} onChatOpened={onChatOpened} panel />
     </aside>
   );
 }

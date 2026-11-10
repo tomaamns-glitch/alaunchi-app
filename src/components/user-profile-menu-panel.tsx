@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useState } from "react";
 import {
   Boxes,
@@ -10,17 +11,14 @@ import {
   Lock,
   MessageSquare,
   MoreVertical,
-  Play,
-  Square,
   UserMinus,
   UserPlus,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { useModpacks } from "@/hooks/use-modpacks";
-import { useLaunchModpack } from "@/hooks/use-launch-modpack";
 import { usePlayerSkinUrl } from "@/hooks/use-player-head";
 import { useChatHeads } from "@/hooks/use-chat-heads";
-import { SkinViewerAnimated } from "@/components/lazy-heavy";
+import { CharacterCard } from "@/components/character-card";
 import { ProfileFrame } from "@/components/profile-frame";
 import { InstallFavoriteDialog } from "@/components/install-favorite-dialog";
 import { subscribeProfile, visibleOnlineInstances, type PublicProfileSnapshot, type PublicInstanceSummary } from "@/services/public-profile";
@@ -30,6 +28,7 @@ import { toSkinEffect } from "@/lib/decoration-catalog";
 import { installOnlineInstance } from "@/lib/install-online-instance";
 import { installFromRecipe } from "@/lib/instance-recipe";
 import { formatPlaytime } from "@/lib/format";
+import { subscribePlayerPlaytime } from "@/services/presence";
 import type { Modpack } from "@/services/github";
 import type { FavoriteCategory, FavoriteEntry } from "@/services/favorites";
 import {
@@ -63,13 +62,15 @@ interface UserProfileMenuViewProps {
   backButton?: React.ReactNode;
   /** Navigates somewhere, closing the account menu. */
   onNavigate: (path: string) => void;
+  /** The account menu finished opening (see CharacterCard). */
+  ready?: boolean;
 }
 
 /** Someone else's profile inside the account menu: their character on the
  *  left (same spot/size as yours in the other screens), a compact card +
  *  content tabs on the right. EXPERIMENTAL — the full /profile/:uuid page
  *  (pages/public-profile.tsx) is untouched and still reachable from ⋮. */
-export function UserProfileMenuView({ targetUuid, myUuid, myUsername, backButton, onNavigate }: UserProfileMenuViewProps) {
+export function UserProfileMenuView({ targetUuid, myUuid, myUsername, backButton, onNavigate, ready = true }: UserProfileMenuViewProps) {
   const { modpacks, loadModpacks } = useModpacks();
   const openChat = useChatHeads((s) => s.openChat);
   const [profile, setProfile] = useState<PublicProfileSnapshot | null | undefined>(undefined);
@@ -121,26 +122,19 @@ export function UserProfileMenuView({ targetUuid, myUuid, myUsername, backButton
 
   return (
     <div className="flex gap-6">
-      <div className="flex flex-col items-center gap-2 shrink-0">
-        <div className="rounded-xl bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.18),transparent_70%)]">
-          {profile && skinUrl ? (
-            <SkinViewerAnimated
-              key={`${targetUuid}:${profile.avatarDecoration}`}
-              skinUrl={skinUrl}
-              variant="auto-detect"
-              width={190}
-              height={254}
-              effect={toSkinEffect(profile.avatarDecoration)}
-              className="cursor-grab active:cursor-grabbing"
-            />
-          ) : (
-            <div className="w-[190px] h-[254px] flex items-center justify-center">
-              {profile !== null && <Loader2 className="h-5 w-5 animate-spin text-accent/60" />}
-            </div>
-          )}
-        </div>
+      {/* Same card as your own character in the menu. Keyed by player so
+          switching profiles starts from a fresh viewer. */}
+      <CharacterCard
+        key={targetUuid}
+        skinUrl={profile ? skinUrl : null}
+        effect={profile ? toSkinEffect(profile.avatarDecoration) : "none"}
+        ready={ready}
+        loading={profile !== null}
+        frame={profile?.frameOnCharacter ? profile.frame : null}
+        frameColor={profile?.frameColor}
+      >
         {backButton}
-      </div>
+      </CharacterCard>
 
       <div className="w-[29rem] h-[300px]">
         {profile === undefined ? (
@@ -153,6 +147,7 @@ export function UserProfileMenuView({ targetUuid, myUuid, myUsername, backButton
           </div>
         ) : (
           <UserProfileBody
+            targetUuid={targetUuid}
             profile={profile}
             modpacks={modpacks}
             friendState={isFriend ? "friends" : sentRequest ? "sent" : "none"}
@@ -171,6 +166,7 @@ export function UserProfileMenuView({ targetUuid, myUuid, myUsername, backButton
 }
 
 function UserProfileBody({
+  targetUuid,
   profile,
   modpacks,
   friendState,
@@ -181,6 +177,7 @@ function UserProfileBody({
   onOpenFullPage,
   onOpenOnline,
 }: {
+  targetUuid: string;
   profile: PublicProfileSnapshot;
   modpacks: Modpack[];
   friendState: "none" | "sent" | "friends";
@@ -199,7 +196,7 @@ function UserProfileBody({
 
   return (
     <div className="h-full flex flex-col gap-2.5 min-h-0">
-      <ProfileFrame frame={profile.frame}>
+      <ProfileFrame frame={profile.frame} color={profile.frameColor}>
         <div className="relative rounded-md border border-transparent overflow-hidden shrink-0">
           <div className="absolute inset-0">
             <BannerMedia src={profile.bannerUrl || DEFAULT_PROFILE_BANNER} className="w-full h-full object-cover" />
@@ -221,15 +218,17 @@ function UserProfileBody({
               </HeaderButton>
             )}
             <DropdownMenu modal={false}>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="flex h-7 w-7 items-center justify-center rounded-md bg-black/50 backdrop-blur-sm text-gray-200 hover:bg-black/70 hover:text-white transition-colors"
-                  aria-label="Opciones del perfil"
-                >
-                  <MoreVertical className="h-3.5 w-3.5" />
-                </button>
-              </DropdownMenuTrigger>
+              <Hint label="Opciones del perfil">
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex h-7 w-7 items-center justify-center rounded-md bg-black/50 backdrop-blur-sm text-gray-200 hover:bg-black/70 hover:text-white transition-colors"
+                    aria-label="Opciones del perfil"
+                  >
+                    <MoreVertical className="h-3.5 w-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+              </Hint>
               <DropdownMenuContent align="end" className="z-[60]">
                 <DropdownMenuItem onClick={onOpenFullPage}>
                   <ExternalLink className="mr-2 h-4 w-4" />
@@ -254,8 +253,10 @@ function UserProfileBody({
             </div>
             <div className="mt-2 flex items-center gap-3.5 text-[11px] text-gray-300">
               <MiniStat icon={Clock} value={formatPlaytime(profile.totalPlaytimeMs)} title="Tiempo jugado" />
-              <MiniStat icon={Gamepad2} value={String(totalInstances)} title="Instancias" />
-              <MiniStat icon={Heart} value={String(profile.favorites?.length ?? 0)} title="Favoritas" />
+              {!profile.hideInstances && <MiniStat icon={Gamepad2} value={String(totalInstances)} title="Instancias" />}
+              {!profile.hideFavorites && (
+                <MiniStat icon={Heart} value={String(profile.favorites?.length ?? 0)} title="Favoritas" />
+              )}
             </div>
           </div>
         </div>
@@ -270,7 +271,7 @@ function UserProfileBody({
         </div>
       ) : (
         <>
-          <div className="flex items-center gap-1 p-0.5 rounded-lg bg-white/[0.04] border border-white/5 shrink-0">
+          <div className="flex items-center gap-1 p-0.5 rounded-md bg-white/[0.07] border border-transparent shrink-0">
             {TABS.map((t) => (
               <button
                 key={t.id}
@@ -286,15 +287,19 @@ function UserProfileBody({
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto space-y-1 pr-1">
-            {tab === "online" ? (
+            {tab !== "favorites" && profile.hideInstances ? (
+              <Empty text={`${profile.username} ha ocultado sus instancias.`} />
+            ) : tab === "favorites" && profile.hideFavorites ? (
+              <Empty text={`${profile.username} ha ocultado sus favoritos.`} />
+            ) : tab === "online" ? (
               onlinePacks.length === 0 ? (
                 <Empty text="No tiene ninguna instancia online que puedas ver." />
               ) : (
                 onlinePacks.map((pack) =>
                   pack.installed ? (
-                    <OwnedOnlineRow key={pack.id} pack={pack} onOpen={() => onOpenOnline(pack.id)} />
+                    <OwnedOnlineRow key={pack.id} pack={pack} playerUuid={targetUuid} onOpen={() => onOpenOnline(pack.id)} />
                   ) : (
-                    <UninstalledOnlineRow key={pack.id} pack={pack} />
+                    <UninstalledOnlineRow key={pack.id} pack={pack} playerUuid={targetUuid} />
                   )
                 )
               )
@@ -345,16 +350,17 @@ function HeaderButton({
   children: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      aria-label={title}
-      className="flex h-7 w-7 items-center justify-center rounded-md bg-black/50 backdrop-blur-sm text-gray-200 hover:bg-black/70 hover:text-white transition-colors disabled:opacity-60 disabled:hover:bg-black/50"
-    >
-      {children}
-    </button>
+    <Hint label={title}>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        aria-label={title}
+        className="flex h-7 w-7 items-center justify-center rounded-md bg-black/50 backdrop-blur-sm text-gray-200 hover:bg-black/70 hover:text-white transition-colors disabled:opacity-60 disabled:hover:bg-black/50"
+      >
+        {children}
+      </button>
+    </Hint>
   );
 }
 
@@ -381,7 +387,7 @@ function Empty({ text }: { text: string }) {
 
 function RowShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2.5 rounded-lg border border-white/5 bg-white/[0.03] px-2 py-1.5 hover:bg-white/[0.07] hover:border-white/10 transition-colors">
+    <div className="flex items-center gap-2.5 rounded-md border border-transparent bg-white/[0.07] px-2 py-1.5 hover:bg-white/[0.14] transition-colors">
       {children}
     </div>
   );
@@ -410,7 +416,7 @@ function RowAction({
       className={`h-7 w-7 shrink-0 flex items-center justify-center rounded-full transition-colors disabled:opacity-60 ${
         variant === "solid"
           ? "bg-accent text-accent-foreground hover:bg-accent/90"
-          : "border border-white/15 text-gray-300 hover:text-accent hover:border-accent/50"
+          : "border border-transparent bg-white/[0.07] text-gray-300 hover:text-accent hover:bg-white/[0.14]"
       }`}
     >
       {children}
@@ -430,24 +436,43 @@ function PackInfo({ name, minecraftVersion, loaderType, extra }: { name: string;
   );
 }
 
-/** A catalog modpack you ALSO have installed — your own launch flow. */
-function OwnedOnlineRow({ pack, onOpen }: { pack: Modpack; onOpen: () => void }) {
-  const { busy, running, toggle } = useLaunchModpack(pack);
+/** That player's hours on an online instance (presence/{id}/{uuid}). */
+function usePlayerPlaytime(modpackId: string, uuid: string): number | undefined {
+  const [ms, setMs] = useState<number | undefined>(undefined);
+  useEffect(() => subscribePlayerPlaytime(modpackId, uuid, setMs), [modpackId, uuid]);
+  return ms;
+}
+
+/** Name + how long the profile's owner has played it. */
+function OnlinePackInfo({ name, playtimeMs, extra }: { name: string; playtimeMs: number | undefined; extra?: string }) {
+  return (
+    <div className="flex-1 min-w-0">
+      <div className="text-xs font-semibold text-gray-100 truncate">{name}</div>
+      <div className="flex items-center gap-1 text-[10px] text-muted-foreground truncate">
+        <Clock className="h-2.5 w-2.5 shrink-0 text-accent" />
+        {playtimeMs ? formatPlaytime(playtimeMs) : "Sin partidas todavía"}
+        {extra && ` · ${extra}`}
+      </div>
+    </div>
+  );
+}
+
+/** A catalog modpack you ALSO have installed — opens it in the manager. */
+function OwnedOnlineRow({ pack, playerUuid, onOpen }: { pack: Modpack; playerUuid: string; onOpen: () => void }) {
+  const playtimeMs = usePlayerPlaytime(pack.id, playerUuid);
   return (
     <RowShell>
       <button type="button" onClick={onOpen} className="flex items-center gap-2.5 flex-1 min-w-0 text-left">
         <Thumb url={pack.imageUrl} fallback={pack.name} />
-        <PackInfo name={pack.name} minecraftVersion={pack.minecraftVersion} loaderType={pack.loaderType} />
+        <OnlinePackInfo name={pack.name} playtimeMs={playtimeMs} />
       </button>
-      <RowAction title={running ? "Cerrar Minecraft" : "Jugar"} onClick={toggle} disabled={busy}>
-        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : running ? <Square className="h-3 w-3 fill-current" /> : <Play className="h-3 w-3 fill-current" />}
-      </RowAction>
     </RowShell>
   );
 }
 
 /** A catalog modpack you don't have yet — same install as the home carousel. */
-function UninstalledOnlineRow({ pack }: { pack: Modpack }) {
+function UninstalledOnlineRow({ pack, playerUuid }: { pack: Modpack; playerUuid: string }) {
+  const playtimeMs = usePlayerPlaytime(pack.id, playerUuid);
   const [installing, setInstalling] = useState(false);
   const [done, setDone] = useState(false);
 
@@ -456,7 +481,7 @@ function UninstalledOnlineRow({ pack }: { pack: Modpack }) {
     try {
       if (!(await installOnlineInstance(pack))) return; // cancelled in the groups picker
       setDone(true);
-      toast.success(`${pack.name} instalado correctamente.`);
+      notify.success(`${pack.name} instalado correctamente.`);
     } catch (e: any) {
       toast.error(e?.message || "Error al instalar.");
     } finally {
@@ -467,7 +492,7 @@ function UninstalledOnlineRow({ pack }: { pack: Modpack }) {
   return (
     <RowShell>
       <Thumb url={pack.imageUrl} fallback={pack.name} />
-      <PackInfo name={pack.name} minecraftVersion={pack.minecraftVersion} loaderType={pack.loaderType} extra={done ? "Instalado" : undefined} />
+      <OnlinePackInfo name={pack.name} playtimeMs={playtimeMs} extra={done ? "Instalado" : undefined} />
       <RowAction title="Instalar" onClick={handleInstall} disabled={installing || done} variant="outline">
         {installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
       </RowAction>
@@ -485,7 +510,7 @@ function PrivateInstanceRow({ instance }: { instance: PublicInstanceSummary }) {
     try {
       const r = await installFromRecipe(instance.name, instance);
       setState("done");
-      toast.success(`${instance.name} creada — ${r.installedCount} de ${contentCount} elementos instalados.`);
+      notify.success(`${instance.name} creada — ${r.installedCount} de ${contentCount} elementos instalados.`);
     } catch (e: any) {
       setState("idle");
       toast.error(e?.message || "No se pudo crear la instancia.");

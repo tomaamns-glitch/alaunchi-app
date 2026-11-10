@@ -16,7 +16,7 @@ import {
   stopInstance,
   useInstanceRunState,
 } from "@/hooks/use-instance-run-state";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 
 export type LaunchStage = "idle" | "updating" | "launching";
 
@@ -58,7 +58,7 @@ export function useLaunchModpack(pack: Modpack | undefined) {
             token || undefined
           );
           updateModpackStatus(pack.id, { installed: true, installedVersion: manifest.version, updateAvailable: false });
-          toast.success(`${pack.name} actualizado a v${manifest.version}.`);
+          notify.success(`${pack.name} actualizado a v${manifest.version}.`);
         } catch (e) {
           reportCaughtError(`modpack:updating:${pack.id}`, e);
           throw e;

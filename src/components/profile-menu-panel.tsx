@@ -1,21 +1,21 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useState } from "react";
-import { Clock, ExternalLink, Gamepad2, Heart, Loader2, LogOut, MoreVertical, Palette, Pencil, Play, Square } from "lucide-react";
+import { Clock, ExternalLink, Gamepad2, Heart, Loader2, LogOut, MoreVertical, Pencil, Play, Square } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { useInstanceFolders } from "@/hooks/use-instance-folders";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
 import { useShowcaseSkin } from "@/hooks/use-showcase-skin";
-import { ProfileFrame } from "@/components/profile-frame";
 import { ProfileEditDialog } from "@/components/profile-edit-dialog";
-import { ProfileCustomizeDialog } from "@/components/lazy-heavy";
+import { MiniStat, ProfileBannerVisual, StatDivider } from "@/components/profile-banner-visual";
 import { getInstalledModpacksMeta } from "@/services/electron";
 import { getFavorites, type FavoriteCategory } from "@/services/favorites";
-import { DEFAULT_PROFILE_BANNER } from "@/services/banner";
 import { useDevBannerOverride } from "@/lib/dev-banner-override";
-import { getProfileCustomization, publishProfile, type ProfileVisibility } from "@/services/public-profile";
+import { getPublishedPlaytime, getProfileCustomization, publishProfile, type ProfileVisibility } from "@/services/public-profile";
 import { buildInstanceRecipe } from "@/lib/instance-recipe";
 import { formatPlaytime } from "@/lib/format";
+import { localPlaytimeFor } from "@/lib/playtime";
 import type { Modpack } from "@/services/github";
 import {
   DropdownMenu,
@@ -24,7 +24,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { BannerMedia } from "@/components/banner-media";
+
+const customizationCache = new Map<string, Awaited<ReturnType<typeof getProfileCustomization>>>();
 
 type Tab = "online" | "private" | "favorites";
 
@@ -61,13 +62,19 @@ export function ProfileBannerCard({ uuid, username, onNavigate }: ProfileMenuPan
 
   const [totalPlaytimeMs, setTotalPlaytimeMs] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
-  const [customizeOpen, setCustomizeOpen] = useState(false);
-  const [visibility, setVisibility] = useState<ProfileVisibility>("everyone");
-  const [bannerUrl, setBannerUrl] = useState<string | null>(null);
-  const [recentBanners, setRecentBanners] = useState<string[]>([]);
-  const [bio, setBio] = useState("");
-  const [avatarDecoration, setAvatarDecoration] = useState("none");
-  const [frame, setFrame] = useState("none");
+  // Seeded from the last read, so reopening the menu paints the real banner /
+  // frame / bio on the first frame instead of defaults that pop into place.
+  const cached = customizationCache.get(uuid);
+  const [visibility, setVisibility] = useState<ProfileVisibility>(cached?.visibility ?? "everyone");
+  const [bannerUrl, setBannerUrl] = useState<string | null>(cached?.bannerUrl ?? null);
+  const [recentBanners, setRecentBanners] = useState<string[]>(cached?.recentBanners ?? []);
+  const [bio, setBio] = useState(cached?.bio ?? "");
+  const [avatarDecoration, setAvatarDecoration] = useState(cached?.avatarDecoration ?? "none");
+  const [frame, setFrame] = useState(cached?.frame ?? "none");
+  const [frameColor, setFrameColor] = useState<string | null>(cached?.frameColor ?? null);
+  const [frameOnCharacter, setFrameOnCharacter] = useState(cached?.frameOnCharacter ?? false);
+  const [hideInstances, setHideInstances] = useState(cached?.hideInstances ?? false);
+  const [hideFavorites, setHideFavorites] = useState(cached?.hideFavorites ?? false);
 
   useEffect(() => {
     // Only if nobody has tried yet: Inicio swaps its whole screen (footer and
@@ -78,8 +85,11 @@ export function ProfileBannerCard({ uuid, username, onNavigate }: ProfileMenuPan
     loadInstances();
     getInstalledModpacksMeta()
       .then((meta) => {
-        const total = Object.values(meta).reduce((sum: number, m: any) => sum + (m?.totalPlaytimeMs || 0), 0);
+        const total = localPlaytimeFor(meta as Record<string, any>, uuid);
         setTotalPlaytimeMs(total);
+        // What this PC knows can be less than the real total (new PC, other
+        // device): show the published one if it's higher.
+        if (uuid) getPublishedPlaytime(uuid).then((remote) => remote > total && setTotalPlaytimeMs(remote)).catch(() => {});
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -88,12 +98,17 @@ export function ProfileBannerCard({ uuid, username, onNavigate }: ProfileMenuPan
   useEffect(() => {
     getProfileCustomization(uuid)
       .then((c) => {
+        customizationCache.set(uuid, c);
         setVisibility(c.visibility);
         setBannerUrl(c.bannerUrl);
         setRecentBanners(c.recentBanners);
         setBio(c.bio);
         setAvatarDecoration(c.avatarDecoration);
         setFrame(c.frame);
+        setFrameColor(c.frameColor);
+        setFrameOnCharacter(c.frameOnCharacter);
+        setHideInstances(c.hideInstances);
+        setHideFavorites(c.hideFavorites);
       })
       .catch(() => {});
   }, [uuid]);
@@ -104,7 +119,10 @@ export function ProfileBannerCard({ uuid, username, onNavigate }: ProfileMenuPan
   // Same republish as pages/profile.tsx — see the comment there.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    // Wait for the open animation to finish: building recipes + publishing
+    // competes with it for the main thread.
+    const timer = window.setTimeout(() => void run(), 700);
+    const run = async () => {
       const privateInstances = await Promise.all(
         starredPrivateInstances.map(async (i) => {
           const { recipe, unresolvedCount } = await buildInstanceRecipe(i.id).catch(() => ({ recipe: [], unresolvedCount: 0 }));
@@ -127,29 +145,49 @@ export function ProfileBannerCard({ uuid, username, onNavigate }: ProfileMenuPan
         onlineInstanceRefs: onlineInstances.filter((mp) => mp.repoUrl).map((mp) => ({ id: mp.id, repoUrl: mp.repoUrl! })),
         privateInstances,
       }).catch(() => {});
-    })();
+    };
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uuid, username, totalPlaytimeMs, onlineInstances.length, starredPrivateInstances.length]);
 
   const favorites = getFavorites();
 
+  const renderStats = (hidden: { hideInstances: boolean; hideFavorites: boolean }) => (
+    <>
+      <MiniStat icon={Clock} value={formatPlaytime(totalPlaytimeMs)} title="Tiempo jugado" />
+      {/* What you chose to hide (Editar perfil) leaves the banner too. */}
+      {!hidden.hideInstances && (
+        <>
+          <StatDivider />
+          <MiniStat icon={Gamepad2} value={String(onlineInstances.length + instances.length)} title="Instancias" />
+        </>
+      )}
+      {!hidden.hideFavorites && (
+        <>
+          <StatDivider />
+          <MiniStat icon={Heart} value={String(favorites.length)} title="Favoritas" />
+        </>
+      )}
+    </>
+  );
+  const statsRow = renderStats({ hideInstances, hideFavorites });
+
   return (
     <>
-      <ProfileFrame frame={frame}>
-        <div className="relative rounded-md border border-transparent overflow-hidden shrink-0">
-          <div className="absolute inset-0">
-            {devBannerVideo ? (
-              <video src={devBannerVideo} autoPlay loop muted playsInline className="w-full h-full object-cover" />
-            ) : (
-              <BannerMedia src={bannerUrl || DEFAULT_PROFILE_BANNER} className="w-full h-full object-cover" />
-            )}
-            <div className="absolute inset-0 bg-gradient-to-r from-background via-background/80 to-background/20" />
-          </div>
-
+      <ProfileBannerVisual
+        uuid={uuid}
+        username={username}
+        bio={bio}
+        bannerUrl={bannerUrl}
+        frame={frame}
+        frameColor={frameColor}
+        devBannerVideo={devBannerVideo}
+        menu={
           <DropdownMenu modal={false}>
+          <Hint label="Opciones del perfil">
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
@@ -159,48 +197,32 @@ export function ProfileBannerCard({ uuid, username, onNavigate }: ProfileMenuPan
                 <MoreVertical className="h-3.5 w-3.5" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="z-[60]">
-              <DropdownMenuItem onClick={() => setEditOpen(true)}>
-                <Pencil className="mr-2 h-4 w-4" />
-                Editar perfil
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setCustomizeOpen(true)}>
-                <Palette className="mr-2 h-4 w-4" />
-                Decoraciones
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onNavigate("/profile")}>
-                <ExternalLink className="mr-2 h-4 w-4" />
-                Ver perfil completo
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
-                onClick={async () => {
-                  await logout();
-                  onNavigate("/login");
-                }}
-              >
-                <LogOut className="mr-2 h-4 w-4" />
-                Cerrar sesión
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <div className="relative px-3.5 pt-3 pb-2.5">
-            <div className="pr-8 min-w-0">
-              <h2 className="text-lg font-bold leading-tight truncate">{username}</h2>
-              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1 min-h-[1rem]">
-                {bio || <span className="italic opacity-70">Sin descripción</span>}
-              </p>
-            </div>
-            <div className="mt-2 flex items-center gap-3.5 text-[11px] text-gray-300">
-              <MiniStat icon={Clock} value={formatPlaytime(totalPlaytimeMs)} title="Tiempo jugado" />
-              <MiniStat icon={Gamepad2} value={String(onlineInstances.length + instances.length)} title="Instancias" />
-              <MiniStat icon={Heart} value={String(favorites.length)} title="Favoritas" />
-            </div>
-          </div>
-        </div>
-      </ProfileFrame>
+          </Hint>
+          <DropdownMenuContent align="end" className="z-[60]">
+            <DropdownMenuItem onClick={() => setEditOpen(true)}>
+              <Pencil className="mr-2 h-4 w-4" />
+              Editar perfil
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onNavigate("/profile")}>
+              <ExternalLink className="mr-2 h-4 w-4" />
+              Ver perfil completo
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onClick={async () => {
+                await logout();
+                onNavigate("/login");
+              }}
+            >
+              <LogOut className="mr-2 h-4 w-4" />
+              Cerrar sesión
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        }
+        stats={statsRow}
+      />
 
       <ProfileEditDialog
         open={editOpen}
@@ -216,19 +238,26 @@ export function ProfileBannerCard({ uuid, username, onNavigate }: ProfileMenuPan
           if (patch.recentBanners !== undefined) setRecentBanners(patch.recentBanners);
           if (patch.visibility !== undefined) setVisibility(patch.visibility);
         }}
-      />
-      <ProfileCustomizeDialog
-        open={customizeOpen}
-        onOpenChange={setCustomizeOpen}
-        uuid={uuid}
-        username={username}
-        skinUrl={skin.fullDataUrl}
-        skinVariant={skin.variant}
-        avatarDecoration={avatarDecoration}
-        frame={frame}
-        onChange={(patch) => {
-          if (patch.avatarDecoration !== undefined) setAvatarDecoration(patch.avatarDecoration);
-          if (patch.frame !== undefined) setFrame(patch.frame);
+        previewStats={renderStats}
+        customize={{
+          uuid,
+          username,
+          skinUrl: skin.fullDataUrl,
+          skinVariant: skin.variant,
+          avatarDecoration,
+          frame,
+          frameColor,
+          frameOnCharacter,
+          hideInstances,
+          hideFavorites,
+          onChange: (patch) => {
+            if (patch.avatarDecoration !== undefined) setAvatarDecoration(patch.avatarDecoration);
+            if (patch.frame !== undefined) setFrame(patch.frame);
+            if (patch.frameColor !== undefined) setFrameColor(patch.frameColor);
+            if (patch.frameOnCharacter !== undefined) setFrameOnCharacter(patch.frameOnCharacter);
+            if (patch.hideInstances !== undefined) setHideInstances(patch.hideInstances);
+            if (patch.hideFavorites !== undefined) setHideFavorites(patch.hideFavorites);
+          },
         }}
       />
     </>
@@ -251,7 +280,7 @@ export function ProfileMenuPanel({ uuid, username, onNavigate }: ProfileMenuPane
     <div className="h-full flex flex-col gap-2.5 min-h-0">
       <ProfileBannerCard uuid={uuid} username={username} onNavigate={onNavigate} />
 
-      <div className="flex items-center gap-1 p-0.5 rounded-lg bg-white/[0.04] border border-white/5 shrink-0">
+      <div className="flex items-center gap-1 p-0.5 rounded-md bg-white/[0.07] border border-transparent shrink-0">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -277,7 +306,7 @@ export function ProfileMenuPanel({ uuid, username, onNavigate }: ProfileMenuPane
                 href={`https://modrinth.com/${FAV_PATH[f.category]}/${f.projectId}`}
                 target="_blank"
                 rel="noreferrer"
-                className="flex items-center gap-2.5 rounded-lg border border-white/5 bg-white/[0.03] px-2 py-1.5 hover:bg-white/[0.07] hover:border-white/10 transition-colors"
+                className="flex items-center gap-2.5 rounded-md border border-transparent bg-white/[0.07] px-2 py-1.5 hover:bg-white/[0.14] transition-colors"
               >
                 <Thumb url={f.iconUrl} fallback={f.title} />
                 <span className="flex-1 min-w-0 truncate text-xs font-semibold text-gray-100">{f.title}</span>
@@ -303,15 +332,6 @@ export function ProfileMenuPanel({ uuid, username, onNavigate }: ProfileMenuPane
   );
 }
 
-function MiniStat({ icon: Icon, value, title }: { icon: typeof Clock; value: string; title: string }) {
-  return (
-    <span className="flex items-center gap-1" title={title}>
-      <Icon className="h-3 w-3 text-accent" />
-      <span className="font-semibold">{value}</span>
-    </span>
-  );
-}
-
 function Thumb({ url, fallback }: { url?: string | null; fallback: string }) {
   return (
     <div className="h-7 w-7 rounded-md border border-white/10 bg-black/40 overflow-hidden flex items-center justify-center text-[10px] font-black text-accent/60 shrink-0">
@@ -327,7 +347,7 @@ function Empty({ text }: { text: string }) {
 function InstanceRow({ pack, onOpen }: { pack: Modpack; onOpen: () => void }) {
   const { busy, running, toggle } = useLaunchModpack(pack);
   return (
-    <div className="flex items-center gap-2.5 rounded-lg border border-white/5 bg-white/[0.03] px-2 py-1.5 hover:bg-white/[0.07] hover:border-white/10 transition-colors">
+    <div className="flex items-center gap-2.5 rounded-md border border-transparent bg-white/[0.07] px-2 py-1.5 hover:bg-white/[0.14] transition-colors">
       <button type="button" onClick={onOpen} className="flex items-center gap-2.5 flex-1 min-w-0 text-left">
         <Thumb url={pack.imageUrl} fallback={pack.name} />
         <div className="flex-1 min-w-0">

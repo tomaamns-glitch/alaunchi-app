@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { forwardRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { motion } from "framer-motion";
 import { Loader2, type LucideIcon } from "lucide-react";
@@ -72,18 +73,19 @@ export function IconButton({
   ...rest
 }: { icon: LucideIcon; label: string } & ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      className={cn(
-        "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-white/[0.08] hover:text-white",
-        className,
-      )}
-      {...rest}
-    >
-      <Icon className="h-4 w-4" />
-    </button>
+    <Hint label={label}>
+      <button
+        type="button"
+        aria-label={label}
+        className={cn(
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-white/[0.08] hover:text-white",
+          className,
+        )}
+        {...rest}
+      >
+        <Icon className="h-4 w-4" />
+      </button>
+    </Hint>
   );
 }
 

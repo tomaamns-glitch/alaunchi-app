@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -15,8 +16,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { toast } from "sonner";
-import { ChevronRight, Library, Package, Plus, Trash, Loader2 } from "lucide-react";
+import { toast, notify } from "@/lib/toast";
+import { ChevronRight, Library, Package, Plus, Server, Trash, Loader2 } from "lucide-react";
 import { isModLibraryOwner } from "@/services/mod-library";
 import { createModpack, deleteModpack, type NewModpackData } from "@/services/github";
 import { getMySource, uniqueModpackId } from "@/lib/sources";
@@ -69,7 +70,7 @@ export default function Admin() {
     setCreating(true);
     try {
       await createModpack(token, repoUrl, { ...newForm, id });
-      toast.success(`Modpack "${newForm.name}" creado en GitHub`);
+      notify.success(`Modpack "${newForm.name}" creado en GitHub`);
       // Best-effort — a Firebase hiccup here shouldn't undo the GitHub creation
       // that just succeeded. Worst case the pack is left without a code for now
       // (nobody else can reach it until one is generated in the Acceso tab).
@@ -97,7 +98,7 @@ export default function Admin() {
     setDeleting(true);
     try {
       await deleteModpack(token, repoUrl, packToDelete.id);
-      toast.success(`Modpack "${packToDelete.name}" eliminado de GitHub.`);
+      notify.success(`Modpack "${packToDelete.name}" eliminado de GitHub.`);
       setPackToDelete(null);
       loadModpacks();
     } catch (e: any) {
@@ -124,6 +125,9 @@ export default function Admin() {
                   {modpacks.length} instancia{modpacks.length === 1 ? "" : "s"} online en tu repositorio
                 </p>
               </div>
+              <Button variant="outline" className="shrink-0" onClick={() => setLocation("/servers")}>
+                <Server className="mr-2 h-4 w-4" /> Servers
+              </Button>
               {isModLibraryOwner(email) && (
                 <Button variant="outline" className="shrink-0" onClick={() => setLocation("/admin/library")}>
                   <Library className="mr-2 h-4 w-4" /> Biblioteca de mods
@@ -195,15 +199,16 @@ export default function Admin() {
                         <br />
                         {pack.totalSizeMb} MB
                       </span>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-gray-500 hover:text-destructive hover:bg-destructive/10"
-                        onClick={(e) => { e.stopPropagation(); setPackToDelete({ id: pack.id, name: pack.name }); }}
-                        title="Eliminar modpack"
-                      >
-                        <Trash className="h-4 w-4" />
-                      </Button>
+                      <Hint label="Eliminar modpack">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-gray-500 hover:text-destructive hover:bg-destructive/10"
+                          onClick={(e) => { e.stopPropagation(); setPackToDelete({ id: pack.id, name: pack.name }); }}
+                        >
+                          <Trash className="h-4 w-4" />
+                        </Button>
+                      </Hint>
                       <ChevronRight className="h-4 w-4 text-muted-foreground opacity-50 group-hover:opacity-100 transition-opacity" />
                     </div>
                   </div>

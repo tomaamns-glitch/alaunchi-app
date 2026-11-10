@@ -1,17 +1,19 @@
+import { Hint } from "@/components/hint";
 import { memo, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useLocation, useParams } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import { createPortal } from "react-dom";
 import { useModpacks } from "@/hooks/use-modpacks";
-import { DRAWER_EXAMPLE_PACK } from "@/lib/online-view-mode";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { InstanceSettingsDialog } from "@/components/instance-settings-dialog";
 import { ModLibraryDialog } from "@/components/mod-library-dialog";
 import { FlipList } from "@/components/flip-list";
 import { ShareImageDialog, type ShareableImage } from "@/components/share-image-dialog";
 import { ShareInstanceDialog } from "@/components/share-instance-dialog";
+import { ManagerTour } from "@/components/manager-tour";
+import { ContentContextMenu, RenameContentDialog, ShareContentDialog, type ContentToShare } from "@/components/content-context-menu";
 import { DuplicateInstanceDialog } from "@/components/duplicate-instance-dialog";
-import { addToGallery, showInstanceFile } from "@/services/personal-library";
+import { addToGallery, saveContent, showInstanceFile, type SavedContentCategory } from "@/services/personal-library";
 import { onContentLockPurged } from "@/services/electron";
 import { getMySource, sameRepo } from "@/lib/sources";
 import {
@@ -55,6 +57,7 @@ import {
   Image as ImageIcon,
   FileQuestion,
   FileText,
+  History,
   List,
   Download,
   Lock,
@@ -69,7 +72,9 @@ import {
   Share2,
   Copy,
   Smile,
+  Store,
   Box,
+  Eye,
   Globe,
   WifiOff,
   UploadCloud,
@@ -126,6 +131,9 @@ import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import { HTML_SANITIZE_SCHEMA } from "@/lib/markdown-schema";
+import { ModrinthSummary } from "@/components/modrinth-summary";
+import { ModrinthVersions } from "@/components/modrinth-versions";
+import { DownloadedPackDetails } from "@/components/downloaded-pack-details";
 import {
   listInstanceFiles,
   deleteInstanceFile,
@@ -137,6 +145,7 @@ import {
   listSchematics,
   listScreenshots,
   readInstanceFile,
+  renameInstanceFile,
   classifyDroppedFile,
   writeInstanceFile,
   deleteInstance as deleteInstanceIpc,
@@ -159,9 +168,8 @@ import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
 import { useAuth } from "@/hooks/use-auth";
 import { usePlayerSkinUrl } from "@/hooks/use-player-head";
 import { useEmotePreview } from "@/hooks/use-emote-preview";
-import { EmoteAnimation } from "@/lib/emote-animation";
 import { bytesToBase64 } from "@/lib/emotecraft";
-import { SkinViewer3D } from "@/components/skin-viewer-3d";
+import { EmotePreviewDialog } from "@/components/emote-preview-dialog";
 import { useSchematicPreview } from "@/hooks/use-schematic-preview";
 import { useSchematicResources } from "@/hooks/use-schematic-resources";
 import { SchematicViewer3D } from "@/components/schematic-viewer-3d";
@@ -175,15 +183,18 @@ import {
   type MinemevFile,
 } from "@/services/minemev";
 import { findPackSource, requirePackSource } from "@/hooks/use-modpacks";
+import { ContentSidePanels } from "@/components/content-side-panels";
+import { contentColumns, useOnlinePanels, useWideLayout, type PanelColumn } from "@/lib/online-panels";
 import { getLastViewPath } from "@/lib/last-view";
 import SwellLight from "@/components/swell-light";
 import { StaticGlow } from "@/components/static-glow";
 import { useAnimatedBackground } from "@/lib/animated-background";
 import { useTheme } from "@/lib/theme";
 import { extractDominantColor, type HSL } from "@/lib/dominant-color";
+import { useAdaptiveColor } from "@/lib/adaptive-color";
 import { loadRecentUpdates, recordRecentUpdate, type RecentUpdates } from "@/lib/recent-updates";
 import { formatBytes, formatPlaytime, formatPlaytimeShort } from "@/lib/format";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { SiModrinth } from "react-icons/si";
 
 type Category = InstallableCategory;
@@ -240,6 +251,8 @@ interface InstalledContentRowProps {
   path: string;
   category: Category;
   mandatory: boolean;
+  /** Not from Modrinth nor ALaunchi's library (looked up by hash): the launcher can't update or download it. */
+  external: boolean;
   title: string;
   match: ModrinthMatch | undefined;
   update: ModrinthUpdate | undefined;
@@ -262,6 +275,9 @@ interface InstalledContentRowProps {
   onOpen: (path: string) => void;
   onUpdate: (category: Category, path: string) => void;
   onDelete: (category: Category, path: string) => void;
+  /** Right-click: save a copy to the personal library / send it to a friend. */
+  onSave: (category: Category, path: string) => void;
+  onShare: (category: Category, path: string) => void;
   /** Ticked in the row's check (shown on hover, always while ticked). */
   marked: boolean;
   /** Something in the list is ticked: every row shows its check. */
@@ -304,21 +320,23 @@ function MissingDepsWarning({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setOpen((v) => !v);
-          }}
-          onPointerEnter={show}
-          onPointerLeave={hideSoon}
-          aria-label="Faltan dependencias"
-          className="h-5 w-5 flex items-center justify-center rounded text-yellow-400 hover:bg-yellow-400/15 shrink-0"
-        >
-          <AlertTriangle className="h-4 w-4" />
-        </button>
-      </PopoverTrigger>
+      <Hint label="Faltan dependencias">
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen((v) => !v);
+            }}
+            onPointerEnter={show}
+            onPointerLeave={hideSoon}
+            aria-label="Faltan dependencias"
+            className="h-5 w-5 flex items-center justify-center rounded text-yellow-400 hover:bg-yellow-400/15 shrink-0"
+          >
+            <AlertTriangle className="h-4 w-4" />
+          </button>
+        </PopoverTrigger>
+      </Hint>
       <PopoverContent
         side="bottom"
         align="start"
@@ -371,10 +389,89 @@ function MissingDepsWarning({
  *  measured hundreds of nodes on each mount/update and switching tabs froze the
  *  UI for seconds. Hover is enough for the open-panel shared transition, since
  *  the row is always hovered when clicked. */
+const SCHEMATIC_EXT = /\.(litematic|schematic|schem|nbt)$/i;
+
+const SCHEMATIC_TYPE: Record<string, string> = {
+  litematic: "Archivo .litematic",
+  schem: "Archivo .schem (Sponge)",
+  schematic: "Archivo .schematic (MCEdit)",
+  nbt: "Archivo .nbt (estructura)",
+};
+
+/** One installed schematic, laid out like a mod/shader row (InstalledContentRow):
+ *  icon, name + format, the file's path in mono, and the same action capsule. */
+function SchematicRow({
+  file,
+  busy,
+  onOpen,
+  onDelete,
+  onSave,
+  onShare,
+  onRename,
+}: {
+  file: SchematicFile;
+  busy: boolean;
+  onOpen: () => void;
+  onDelete: () => void;
+  onSave: () => void;
+  onShare: () => void;
+  onRename: () => void;
+}) {
+  const base = file.path.slice(file.path.lastIndexOf("/") + 1);
+  const ext = base.match(SCHEMATIC_EXT)?.[1]?.toLowerCase();
+  const name = base.replace(SCHEMATIC_EXT, "");
+  return (
+    <ContentContextMenu onSave={onSave} onShare={onShare} onRename={onRename}>
+    <div className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full [content-visibility:auto] [contain-intrinsic-size:auto_66px] relative border border-accent/15 hover:border-accent/35 transition-colors before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:content-[''] before:bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.55),transparent)]">
+      <div onClick={onOpen} className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer">
+        <div className="h-11 w-11 rounded shrink-0 bg-black/30 flex items-center justify-center">
+          <Box className="h-5 w-5 text-muted-foreground" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <p className="text-gray-100 font-medium text-base truncate">{name}</p>
+            <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent shrink-0">
+              {file.source === "worldedit" ? "WorldEdit" : "Litematica"}
+            </span>
+          </div>
+          {/* Where a mod shows its file name: the schematic's file type. */}
+          <p className="text-muted-foreground text-[11px] truncate" title={file.path}>
+            {ext ? SCHEMATIC_TYPE[ext] ?? `.${ext}` : "Esquema"}
+          </p>
+        </div>
+      </div>
+      <div className="flex items-center shrink-0 rounded-lg border border-white/15 bg-white/[0.03] p-0.5">
+        <Hint label="Ver en 3D">
+          <button
+            type="button"
+            onClick={onOpen}
+            className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-white/10 hover:text-foreground transition-colors"
+          >
+            <Eye className="h-4 w-4" />
+          </button>
+        </Hint>
+        <span className="mx-1 h-4 w-px bg-white/15" aria-hidden />
+        <Hint label="Eliminar">
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={busy}
+            className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/15 hover:text-destructive transition-colors disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+          </button>
+        </Hint>
+      </div>
+    </div>
+    </ContentContextMenu>
+  );
+}
+
 const InstalledContentRow = memo(function InstalledContentRow({
   path,
   category,
   mandatory,
+  external,
   title,
   match,
   update,
@@ -390,6 +487,8 @@ const InstalledContentRow = memo(function InstalledContentRow({
   onOpen,
   onUpdate,
   onDelete,
+  onSave,
+  onShare,
   onInstallMissing,
   marked,
   selecting,
@@ -401,11 +500,12 @@ const InstalledContentRow = memo(function InstalledContentRow({
   const CategoryIcon = CATEGORY_META[category].icon;
   const isDependency = !!dependentTitles?.length;
   return (
+    <ContentContextMenu onSave={() => onSave(category, path)} onShare={() => onShare(category, path)}>
     <div
       data-flip-key={path}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
-      className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full [content-visibility:auto] [contain-intrinsic-size:auto_66px]"
+      className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full [content-visibility:auto] [contain-intrinsic-size:auto_66px] relative border border-accent/15 hover:border-accent/35 transition-colors before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:content-[''] before:bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.55),transparent)]"
     >
       {/* The mark check: no width while hidden (the -mr cancels the row's gap),
           so on hover the icon and name slide right to make room for it. */}
@@ -481,6 +581,18 @@ const InstalledContentRow = memo(function InstalledContentRow({
               </motion.p>
             ) : (
               <p className="text-gray-100 font-medium text-base truncate">{title}</p>
+            )}
+            {external && !notInstalled && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex shrink-0 cursor-default text-red-500" aria-label="No es de Modrinth ni de ALaunchi">
+                    <AlertTriangle className="h-4 w-4" strokeWidth={2.5} />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs">
+                  Este archivo no es de Modrinth ni de ALaunchi: el launcher no puede darle actualizaciones ni descargarlo.
+                </TooltipContent>
+              </Tooltip>
             )}
             {(disabled || notInstalled) && (
               <span className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-medium text-muted-foreground shrink-0">
@@ -564,24 +676,28 @@ const InstalledContentRow = memo(function InstalledContentRow({
           )}
           {mandatory || notInstalled ? (
             <span
+              data-tour={mandatory ? "manager-locked" : undefined}
               title={mandatory ? "Obligatorio del modpack" : undefined}
               className="h-7 w-7 flex items-center justify-center text-muted-foreground"
             >
               {mandatory && <Lock className="h-3.5 w-3.5 opacity-40" strokeWidth={2.75} />}
             </span>
           ) : (
-            <button
-              onClick={() => onDelete(category, path)}
-              disabled={busy}
-              title="Eliminar"
-              className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/20 hover:text-destructive transition-colors disabled:opacity-50"
-            >
-              <X className="h-4 w-4" strokeWidth={2.75} />
-            </button>
+            <Hint label="Eliminar">
+              <button
+                onClick={() => onDelete(category, path)}
+                disabled={busy}
+                data-tour="manager-optional"
+                className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/20 hover:text-destructive transition-colors disabled:opacity-50"
+              >
+                <X className="h-4 w-4" strokeWidth={2.75} />
+              </button>
+            </Hint>
           )}
         </div>
       )}
     </div>
+    </ContentContextMenu>
   );
 });
 
@@ -620,6 +736,20 @@ export interface ManagerHeaderSlots {
   extras: HTMLElement | null;
 }
 
+const EMOTE_STORE_URL = "https://emotes.redlance.org/";
+const EMOTE_STORE_NOTICE_KEY = "alaunchi_emote_store_notice_seen";
+/** Per-instance "don't show again" for the drag-and-drop hint (`<prefix><instanceId>`). */
+const DROP_HINT_HIDDEN_PREFIX = "alaunchi_drop_hint_hidden:";
+
+function readDropHintHidden(instanceId: string | undefined): boolean {
+  if (!instanceId) return false;
+  try {
+    return localStorage.getItem(DROP_HINT_HIDDEN_PREFIX + instanceId) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slots?: ManagerHeaderSlots }) {
   const params = useParams<{ id: string }>();
   const id = embeddedId ?? params.id;
@@ -628,14 +758,15 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   const [, setLocation] = useLocation();
   const { modpacks, pastModpacks, loadModpacks } = useModpacks();
   const { instances, loadInstances } = useCustomInstances();
+  const movedPanels = useOnlinePanels((s) => s.moved);
+  const contentLayout = useOnlinePanels((s) => s.contentLayout);
+  const wideWindow = useWideLayout();
+  const myUsername = useAuth((s) => s.username);
 
   const pack =
     modpacks.find((p) => p.id === id) ??
     instances.find((p) => p.id === id) ??
-    pastModpacks.find((p) => p.id === id && p.installed) ??
-    // The drawer view's dev example (online page only): no files on disk, so
-    // the manager just shows its empty lists.
-    (import.meta.env.DEV && embedded && id === DRAWER_EXAMPLE_PACK.id ? DRAWER_EXAMPLE_PACK : undefined);
+    pastModpacks.find((p) => p.id === id && p.installed);
   const { busy: playBusy, running: playRunning, runState: playRunState, toggle: playToggle } = useLaunchModpack(pack);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const playProgress = useInstanceProgress(pack?.id);
@@ -652,6 +783,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   const theme = useTheme((s) => s.theme);
   const animatedBackground = useAnimatedBackground((s) => s.enabled);
   const [iconHsl, setIconHsl] = useState<HSL | null>(null);
+  const adaptiveColor = useAdaptiveColor((s) => s.enabled);
   useEffect(() => {
     let cancelled = false;
     setIconHsl(null);
@@ -661,7 +793,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
     return () => {
       cancelled = true;
     };
-  }, [pack?.id, pack?.imageUrl]);
+  }, [pack?.id, pack?.imageUrl, adaptiveColor]);
   const swellColors = useMemo(() => {
     if (!iconHsl) return null;
     const { h, s, l } = iconHsl;
@@ -734,25 +866,26 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   // Drag-and-drop / file-picker content adding — works from anywhere on the page,
   // auto-detecting mod/shader/resourcepack/emote/schematic and routing accordingly.
   const [dropActive, setDropActive] = useState(false);
+  // The hint can be dismissed per instance — it comes back in every other one.
+  const [dropHintHidden, setDropHintHidden] = useState(() => readDropHintHidden(id));
+  useEffect(() => {
+    setDropHintHidden(readDropHintHidden(id));
+  }, [id]);
+  const hideDropHint = () => {
+    setDropHintHidden(true);
+    if (!id) return;
+    try {
+      localStorage.setItem(DROP_HINT_HIDDEN_PREFIX + id, "1");
+    } catch {
+      /* storage unavailable: hidden for this visit only */
+    }
+  };
   const [versionChoice, setVersionChoice] = useState<{
     staged: StagedContentWrite;
     existingPath: string;
     existingLabel: string;
   } | null>(null);
 
-  // Sticky header stack: banner+header (top), category tabs + install button
-  // (sticks right under the top layer), and the Nombre/Actualizaciones sort row
-  // (sticks right under that). Heights are measured live — the banner is
-  // responsive and the header card's text can wrap to more than one line.
-  const [headerH, setHeaderH] = useState(0);
-  const headerGroupRef = useCallback((node: HTMLDivElement | null) => {
-    if (!node) return;
-    const update = () => setHeaderH(node.getBoundingClientRect().height);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(node);
-    return () => ro.disconnect();
-  }, []);
   // The tabs band's height is NOT kept in state: it changes on every frame while its
   // rows fold, and a state update per frame re-rendered this whole page (choppy
   // animation). Nothing needs it since the sort row moved inside the band.
@@ -762,19 +895,8 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   }, []);
   const sortRowElRef = useRef<HTMLDivElement | null>(null);
 
-  // Whether the tabs row / sort row are currently pinned flush against the layer
-  // above them — used to swap their touching corners from rounded to square so two
-  // independently-rounded boxes meeting edge-to-edge don't form a pinched "V" seam.
-  // The tabs band sticks this far below the header (the content card's 1px border
-  // + its p-4), and while stuck draws the card's top edge in that space: the card
-  // then looks pinned under the header instead of sliding beneath it. Only
-  // embedded: on the normal page the card itself is fixed and scrolls inside
-  // (fixedCard), so the band just sticks to the card's top.
-  const CARD_INSET = 17;
-  const fixedCard = !embedded;
-  const tabsStickyTop = fixedCard ? 0 : headerH + CARD_INSET;
-  const [tabsStuck, setTabsStuck] = useState(false);
-  // fixedCard: scrolled down inside the card → Contenido/Capturas fold away and the
+  // The content card is fixed and scrolls inside, also embedded (the band sticks to
+  // the card's top). Scrolled down in it → Contenido/Capturas fold away and the
   // tabs band gets shorter; back at the very top they come back.
   const [contentScrolled, setContentScrolled] = useState(false);
   // …and 2 s after that, the sort/filter row folds away too (back at the top it returns).
@@ -789,41 +911,13 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
     const t = setTimeout(() => setSortRowHidden(true), 2000);
     return () => clearTimeout(t);
   }, [contentScrolled]);
-  // The card that scrolls (fixedCard) — for the floating "back to top" button.
+  // The card that scrolls — for the floating "back to top" button.
   const cardScrollRef = useRef<HTMLDivElement>(null);
   /** Re-sorting while scrolled down: back to the list's first rows, but to 1px, not 0 —
    *  at the very top Contenido/Capturas would come back (contentScrolled). */
   const scrollListToFirst = () => {
-    if (fixedCard && contentScrolled) cardScrollRef.current?.scrollTo({ top: 1, behavior: "smooth" });
+    if (contentScrolled) cardScrollRef.current?.scrollTo({ top: 1, behavior: "smooth" });
   };
-  useEffect(() => {
-    // fixedCard never looks at tabsStuck (the band is always on there): skip the work.
-    if (fixedCard) return;
-    // Sticky positions are relative to the scroll container's top, which isn't
-    // the window's: the titlebar sits above it (and embedded, the page's own
-    // header). Measuring from 0 never counted as stuck once these rows lost
-    // their always-on background.
-    const scrollParentOf = (el: HTMLElement | null) => {
-      for (let n = el?.parentElement; n; n = n.parentElement) {
-        const oy = getComputedStyle(n).overflowY;
-        if (oy === "auto" || oy === "scroll") return n;
-      }
-      return null;
-    };
-    const check = () => {
-      const rootTop = scrollParentOf(tabsElRef.current)?.getBoundingClientRect().top ?? 0;
-      if (tabsElRef.current) {
-        setTabsStuck(tabsElRef.current.getBoundingClientRect().top - rootTop <= tabsStickyTop + 0.5);
-      }
-    };
-    check();
-    window.addEventListener("scroll", check, { capture: true, passive: true });
-    window.addEventListener("resize", check);
-    return () => {
-      window.removeEventListener("scroll", check, { capture: true });
-      window.removeEventListener("resize", check);
-    };
-  }, [tabsStickyTop, fixedCard]);
 
   // Mod detail view (opened by clicking a row's icon/name).
   const [selectedModPath, setSelectedModPath] = useState<string | null>(null);
@@ -831,7 +925,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   // Row the mod panel was last opened from — keeps its shared-layout ids so
   // closing the panel animates back into it (see InstalledContentRow).
   const [lastOpenedPath, setLastOpenedPath] = useState<string | null>(null);
-  // fixedCard: the list and a mod's page (or Contenido adicional) share the card's
+  // The list and a mod's page (or Contenido adicional) share the card's
   // scroll. Leaving the list keeps where it was; the other view starts at its top
   // and coming back puts the list where it was (applied once the sweep swaps the
   // content — AnimatePresence's onExitComplete below).
@@ -896,6 +990,20 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   const [emotes, setEmotes] = useState<EmoteFile[]>([]);
   const [emotesLoading, setEmotesLoading] = useState(false);
   const [selectedEmote, setSelectedEmote] = useState<EmoteFile | null>(null);
+  const [emoteStoreNoticeOpen, setEmoteStoreNoticeOpen] = useState(false);
+  // The emote "store" is RedlanceEmotes' own site, in the default browser: its
+  // downloads need a Redlance sign-in behind a Cloudflare check that blocks
+  // any embedded browser. The first time, say so — and how to import.
+  const openEmoteStore = () => {
+    let seen = false;
+    try {
+      seen = localStorage.getItem(EMOTE_STORE_NOTICE_KEY) === "1";
+    } catch {
+      /* no storage: just show the notice */
+    }
+    if (seen) window.open(EMOTE_STORE_URL, "_blank");
+    else setEmoteStoreNoticeOpen(true);
+  };
   const emotecraftInstalled = hasMod(/emotecraft/i);
 
   // Schematics (.litematic/.schem/.schematic/.nbt) — same read-only-tab pattern as
@@ -911,6 +1019,11 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   // always shown (once the pack is installed) since screenshots are a vanilla
   // feature, not gated behind any mod or prior content.
   const [screenshotsOpen, setScreenshotsOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryActionsEl, setSummaryActionsEl] = useState<HTMLDivElement | null>(null);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  // A top-level section other than Contenido: its tabs and actions don't apply.
+  const otherSectionOpen = screenshotsOpen || summaryOpen || versionsOpen;
   const [screenshots, setScreenshots] = useState<ScreenshotFile[]>([]);
   const [screenshotsLoading, setScreenshotsLoading] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<{ src: string; title?: string } | null>(null);
@@ -937,12 +1050,8 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   const myUuid = useAuth((s) => s.uuid);
   const myPreviewSkinUrl = usePlayerSkinUrl(myUuid);
   const selectedEmoteData = useEmotePreview(id, selectedEmote?.fileName);
-  const emoteAnimation = useMemo(
-    () => (selectedEmoteData ? new EmoteAnimation(selectedEmoteData) : null),
-    [selectedEmoteData]
-  );
 
-  const selectedSchematicStructure = useSchematicPreview(id, selectedSchematic?.path);
+  const { structure: selectedSchematicStructure, error: selectedSchematicError } = useSchematicPreview(id, selectedSchematic?.path);
   // Kick off resource loading as soon as the panel opens (not just once a file is
   // picked) so the slow first-time-per-version jar extraction has a head start.
   const schematicMcVersion = schematicsOpen || selectedSchematic ? pack?.minecraftVersion : undefined;
@@ -1085,6 +1194,9 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   const [modHistory, setModHistory] = useState<string[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [shareImage, setShareImage] = useState<ShareableImage | null>(null);
+  const [shareContent, setShareContent] = useState<ContentToShare | null>(null);
+  // "Cambiar nombre" on an emote / schematic: its name is its file's name.
+  const [renaming, setRenaming] = useState<{ kind: "emote" | "schematic"; path: string; currentName: string } | null>(null);
   // Bloqueo de contenido: main removed files from this instance — keep the list in sync.
   useEffect(
     () =>
@@ -1159,6 +1271,8 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
     setSchematicResults([]);
     setSelectedOnlinePost(null);
     setScreenshotsOpen(false);
+    setSummaryOpen(false);
+    setVersionsOpen(false);
     setScreenshots([]);
 
     (async () => {
@@ -1457,7 +1571,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
       }
     }
     if (installedCount > 0) {
-      toast.info(`${installedCount} dependencia${installedCount > 1 ? "s" : ""} instalada${installedCount > 1 ? "s" : ""} automáticamente.`);
+      notify.info(`${installedCount} dependencia${installedCount > 1 ? "s" : ""} instalada${installedCount > 1 ? "s" : ""} automáticamente.`);
     }
   };
 
@@ -1781,8 +1895,12 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
     open: (path: string) => void;
     update: (c: Category, path: string) => void;
     remove: (c: Category, path: string) => void;
+    save: (c: Category, path: string) => void;
+    share: (c: Category, path: string) => void;
     installMissing: (deps: MissingDep[]) => Promise<void>;
-  }>({ toggle: () => {}, open: () => {}, update: () => {}, remove: () => {}, installMissing: async () => {} });
+  }>({ toggle: () => {}, open: () => {}, update: () => {}, remove: () => {}, save: () => {}, share: () => {}, installMissing: async () => {} });
+  const onRowSave = useCallback((c: Category, path: string) => rowActionsRef.current.save(c, path), []);
+  const onRowShare = useCallback((c: Category, path: string) => rowActionsRef.current.share(c, path), []);
   const onRowToggle = useCallback((path: string, enabled: boolean) => rowActionsRef.current.toggle(path, enabled), []);
   const onRowOpen = useCallback((path: string) => rowActionsRef.current.open(path), []);
   const onRowUpdate = useCallback((c: Category, path: string) => rowActionsRef.current.update(c, path), []);
@@ -2007,7 +2125,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
     if (extra.length === 0) return;
     const names = extra.map(titleFor).join(", ");
     if (enabled) {
-      toast.info(`${titleFor(path)} activado, junto con lo que necesita: ${names}.`, { duration: 6000 });
+      notify.info(`${titleFor(path)} activado, junto con lo que necesita: ${names}.`, { duration: 6000 });
     } else {
       toast.info(
         `${titleFor(path)} desactivado. También se desactivó lo que depende de él: ${names}.`,
@@ -2031,7 +2149,118 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
       if (update && match) void handleInstallVersion(c, path, update, match);
     },
     remove: (c, path) => void handleDelete(c, path),
+    save: (c, path) => void saveRowToLibrary(c, path),
+    share: (c, path) => void shareRow(c, path),
     installMissing: installDependencies,
+  };
+
+  /** Right-click → "Guardar en la biblioteca" (mods, shaders, resource packs and schematics). */
+  const saveFileToLibrary = async (
+    category: SavedContentCategory,
+    diskFilePath: string,
+    name: string,
+    meta: { displayName: string; iconUrl: string | null; modrinthProjectId?: string; schematicSource?: "litematica" | "worldedit" }
+  ) => {
+    try {
+      const { alreadySaved } = await saveContent({ category, sourceName: pack.name, ...meta }, name, {
+        kind: "instance",
+        modpackId: pack.id,
+        path: diskFilePath,
+      });
+      toast.success(alreadySaved ? "Ya estaba en tu biblioteca." : `${meta.displayName} guardado en la biblioteca.`);
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudo guardar en la biblioteca.");
+    }
+  };
+  const saveRowToLibrary = async (c: Category, path: string) => {
+    if (notInstalled.has(path)) return void toast.error("Ese archivo no está instalado.");
+    const match = modrinthMatches.get(path);
+    await saveFileToLibrary(c, diskPath(path), fileName(path), {
+      displayName: titleFor(path),
+      iconUrl: match?.iconUrl ?? null,
+      modrinthProjectId: match?.projectId,
+    });
+  };
+  const shareRow = async (c: Category, path: string) => {
+    if (notInstalled.has(path)) return void toast.error("Ese archivo no está instalado.");
+    const dp = diskPath(path);
+    const file = (await listInstanceFiles(pack.id).catch(() => [])).find((f) => f.path === dp);
+    if (!file?.sha1) return void toast.error("No se pudo leer el archivo.");
+    const match = modrinthMatches.get(path);
+    setShareContent({
+      modpackId: pack.id,
+      path: dp,
+      sha1: file.sha1,
+      size: file.size,
+      category: c,
+      displayName: titleFor(path),
+      fileName: fileName(path),
+      iconUrl: match?.iconUrl ?? null,
+      modrinthProjectId: match?.projectId,
+    });
+  };
+  const schematicName = (sch: SchematicFile) => fileName(sch.path).replace(SCHEMATIC_EXT, "");
+  /** The listing may not have a hash for the file: take it from the bytes. */
+  const sha1OrCompute = async (known: string | null, path: string): Promise<string> => {
+    if (known) return known;
+    const base64 = await readInstanceFile(pack.id, path);
+    const digest = await crypto.subtle.digest("SHA-1", Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0)));
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  };
+  const applyRename = async (newName: string) => {
+    if (!renaming) return;
+    const newPath = await renameInstanceFile(pack.id, renaming.path, newName);
+    if (renaming.kind === "emote") {
+      const newFile = fileName(newPath);
+      setEmotes((prev) =>
+        prev.map((e) =>
+          `emotes/${e.fileName}` === renaming.path
+            ? { ...e, fileName: newFile, displayName: newFile.replace(/\.emotecraft$/i, "").trim() }
+            : e
+        )
+      );
+    } else {
+      setSchematics((prev) => prev.map((s) => (s.path === renaming.path ? { ...s, path: newPath } : s)));
+    }
+    toast.success("Nombre cambiado.");
+  };
+  const shareEmote = async (emote: EmoteFile) => {
+    try {
+      const path = `emotes/${emote.fileName}`;
+      setShareContent({
+        modpackId: pack.id,
+        path,
+        sha1: await sha1OrCompute(emote.sha1, path),
+        // The listing has no size: ~3/4 of the base64 length is the file's.
+        size: Math.floor(((await readInstanceFile(pack.id, path)).length * 3) / 4),
+        category: "emotes",
+        displayName: emote.displayName,
+        fileName: emote.fileName,
+        iconUrl: emote.thumbnailBase64 ? `data:image/png;base64,${emote.thumbnailBase64}` : null,
+      });
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudo leer el archivo.");
+    }
+  };
+  const shareSchematic = async (sch: SchematicFile) => {
+    try {
+      const sha1 = await sha1OrCompute(sch.sha1, sch.path);
+      setShareContent({
+        modpackId: pack.id,
+        path: sch.path,
+        sha1,
+        size: sch.size,
+        category: "schematics",
+        displayName: schematicName(sch),
+        fileName: fileName(sch.path),
+        iconUrl: null,
+        schematicSource: sch.source,
+      });
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudo leer el archivo.");
+    }
   };
 
   /** Every pending update of the category, three at a time, one toast at the end. */
@@ -2195,14 +2424,15 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
               </Button>
             )}
             <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden />
-            <button
-              type="button"
-              onClick={() => setMarkedPaths(new Set())}
-              title="Quitar marcas"
-              className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-white/10 hover:text-foreground transition-colors"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <Hint label="Quitar marcas">
+              <button
+                type="button"
+                onClick={() => setMarkedPaths(new Set())}
+                className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-white/10 hover:text-foreground transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </Hint>
           </motion.div>
         )}
       </AnimatePresence>
@@ -2310,7 +2540,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
       const existingHashes = new Map(emotes.filter((e) => e.sha1).map((e) => [`emotes/${e.fileName}`, e.sha1 as string]));
       const resolution = resolveNoIdentityConflict(targetPath, sha1, existingPaths, existingHashes);
       if (resolution.kind === "skip") {
-        toast(resolution.reason);
+        notify(resolution.reason);
         return;
       }
       if (resolution.kind !== "write") return; // never "block"/"prompt" for emotes
@@ -2334,7 +2564,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
       const existingPaths = new Set(schematics.map((s) => s.path));
       const resolution = resolveNoIdentityConflict(targetPath, sha1, existingPaths, new Map());
       if (resolution.kind === "skip") {
-        toast(resolution.reason);
+        notify(resolution.reason);
         return;
       }
       if (resolution.kind !== "write") return;
@@ -2377,7 +2607,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
     if (resolution.kind === "block") {
       toast.error(resolution.reason);
     } else if (resolution.kind === "skip") {
-      toast(resolution.reason);
+      notify(resolution.reason);
     } else if (resolution.kind === "prompt") {
       setVersionChoice({ staged, existingPath: resolution.existingPath, existingLabel: resolution.existingLabel });
     } else {
@@ -2459,12 +2689,48 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   // ⋮ + Play (+ playtime) and the "Contenido adicional" card. Inline in the
   // header; embedded (the online instance page) they're portaled into that
   // page's own header card instead, so they're shown on every view.
-  // Downloaded instances: the logo gets a column of its own on the left, so the
-  // name starts at the same edge as the content card below it.
-  const logoColumn = !!pack.isDownloaded && !embedded;
-  const plainHeader = logoColumn && !selectedModPath && !searchMode;
+  // Downloaded instances: the logo goes on its own, as tall as the header card, in
+  // a column left of the header and content cards (130px + 12px of gap). It hangs out of the
+  // max-w-5xl column as far as the window allows; the rest comes out of those
+  // cards' left padding, so they always start right after it.
+  const logoCard = !!pack.isDownloaded && !embedded;
+  // The instance's banner across the top of the page, fading into the background;
+  // the header card overlaps its lower part.
+  const showBanner = !!pack.bannerUrl && !embedded;
+  // Online instance: Novedades in a column of its own, left of both the header and
+  // the content card (embedded, the host page already has it). The other two keep
+  // their full width and stay centered in the window while there's room for it.
+  // 19.25rem = 1rem window margin + 18rem panel + 1.25rem gap − the columns' own 1rem
+  // padding (the gap is the same 20px as between header and card); 64rem = max-w-5xl.
+  // The panel's left follows them, so it sits next to the card rather than the window edge.
+  // Panels moved here from Inicio's footer (right click → "Mover a Contenido") join the
+  // same layout, in the order and column the player left them (ContentSidePanels). The
+  // reserves: 19.25rem as above, 25.25rem = the right column's 24rem + the same gaps.
+  const novedadesColumn = !embedded && !!pack.repoUrl && !pack.outOfNetwork;
+  const sideColumns = contentColumns(
+    contentLayout,
+    [
+      ...(movedPanels.includes("changelog") ? (["changelog"] as const) : []),
+      ...(movedPanels.includes("members") ? (["members"] as const) : []),
+      ...(myUuid && movedPanels.includes("groupChat") ? (["groupChat"] as const) : []),
+    ],
+    wideWindow
+  );
+  const leftReserve = sideColumns.left.length > 0 ? "19.25rem" : "0rem";
+  const rightReserve = sideColumns.right.length > 0 ? "25.25rem" : "0rem";
+  const centerWidth = `min(64rem, calc(100% - ${leftReserve} - ${rightReserve}))`;
+  const centerLeft = `max(${leftReserve}, min(calc((100% - var(--center-w)) / 2), calc(100% - var(--center-w) - ${rightReserve})))`;
+  const centerVar = { "--center-w": centerWidth } as React.CSSProperties;
+  const besideNovedades: React.CSSProperties | undefined = novedadesColumn
+    ? { ...centerVar, width: "var(--center-w)", marginLeft: centerLeft }
+    : undefined;
+  // Next to the content card; an empty column (only there while dragging) at the window's edge.
+  const sideColumnStyles: Record<PanelColumn, React.CSSProperties> = {
+    left: sideColumns.left.length > 0 ? { ...centerVar, left: `calc(${centerLeft} - 18.25rem)` } : { left: "1rem" },
+    right: sideColumns.right.length > 0 ? { ...centerVar, left: `calc(${centerLeft} + var(--center-w) + 0.25rem)` } : { right: "1rem" },
+  };
   const packLogo = (
-    <div className={`${logoColumn ? "h-28 w-28 min-[1056px]:-ml-4" : "h-24 w-24"} rounded-md border-2 border-background bg-black/70 overflow-hidden shrink-0 shadow-2xl`}>
+    <div className={`${logoCard ? "h-[130px] w-[130px] min-[1056px]:-ml-7 min-[1120px]:-ml-12 min-[1280px]:-ml-[142px]" : "h-24 w-24"} rounded-md border-2 border-background bg-black/70 overflow-hidden shrink-0 shadow-2xl`}>
       {pack.imageUrl ? (
         <img src={pack.imageUrl} alt="" className="w-full h-full object-cover" />
       ) : (
@@ -2621,7 +2887,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
         )}
       </div>
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent className="border-transparent bg-gray-500/15 backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.35)] sm:rounded-md">
           <AlertDialogHeader>
             <AlertDialogTitle>¿Eliminar "{pack.name}"?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -2639,7 +2905,9 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
             Conservar los archivos de la instancia
           </label>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={deletingInstance}>Cancelar</AlertDialogCancel>
+            <AlertDialogCancel disabled={deletingInstance} className="border-transparent bg-white/[0.07] hover:bg-white/[0.14]">
+              Cancelar
+            </AlertDialogCancel>
             <AlertDialogAction
               disabled={deletingInstance}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -2679,8 +2947,13 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   ) : null;
   const extrasCard =
     hasExtras && extraGroups ? (
-    <div className={`${embedded ? "flex h-full w-80" : "hidden md:flex flex-1"} min-w-0 items-center gap-3 bg-gray-500/10 backdrop-blur-md border border-transparent rounded-md p-4`}>
-      <div className="h-11 w-11 shrink-0 rounded-md bg-accent/15 text-accent flex items-center justify-center">
+    <div className={`${embedded ? "flex h-full w-80" : "hidden md:flex flex-1"} relative overflow-hidden min-w-0 items-center gap-3 bg-gray-500/10 backdrop-blur-md border border-transparent rounded-md p-4`}>
+      {/* Accent line along the top, like the account menu's cards. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute top-0 inset-x-0 h-px bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.7),transparent)]"
+      />
+      <div className="h-11 w-11 shrink-0 rounded-md bg-accent/15 text-accent flex items-center justify-center shadow-[0_0_14px_hsl(var(--accent)/0.25)]">
         <Layers className="h-5 w-5" />
       </div>
       <div className="min-w-0 flex-1">
@@ -2699,12 +2972,14 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
           setEmotesOpen(false);
           setSchematicsOpen(false);
           setScreenshotsOpen(false);
+          setSummaryOpen(false);
+          setVersionsOpen(false);
           setExtrasOpen((v) => !v);
         }}
-        className={`h-9 px-4 shrink-0 text-xs font-bold border ${
+        className={`h-9 px-4 shrink-0 text-xs font-semibold border border-transparent ${
           extrasOpen
-            ? "border-white/15 bg-white/10 text-white hover:bg-white/15"
-            : "border-accent/30 bg-accent/15 text-accent hover:bg-accent/25"
+            ? "bg-white/[0.14] text-white hover:bg-white/[0.2]"
+            : "bg-accent/70 text-white shadow-[0_4px_16px_hsl(var(--accent)/0.25)] hover:bg-accent/85"
         }`}
       >
         {extrasOpen ? "Cerrar" : "Ver"}
@@ -2715,20 +2990,37 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   return (
     <div
       ref={outerRef}
-      // Normal page: it doesn't scroll as a whole — the header and the content card stay
-      // put and only the card's inside scrolls. Embedded it flows in the host page's scroll.
-      className={embedded ? "text-foreground relative" : "h-full flex flex-col overflow-hidden bg-background text-foreground relative"}
+      // It doesn't scroll as a whole — the header and the content card stay put and only
+      // the card's inside scrolls. Embedded it fills the host page's column.
+      className={`flex flex-col overflow-hidden text-foreground relative ${embedded ? "flex-1 min-h-0" : "h-full bg-background"}`}
       onDragEnter={handlePageDragEnter}
       onDragOver={handlePageDragOver}
       onDragLeave={handlePageDragLeave}
       onDrop={handlePageDrop}
     >
+      {!embedded && <ManagerTour kind={pack.source === "custom" ? "private" : "online"} ready={!!pack.installed} />}
       {/* Sticky + negative margin: stays pinned to the viewport while the page
           scrolls, without taking any space in the flow. Under everything below
-          (the content wrapper is z-10, the header group z-30; a banner fades into it). */}
+          (the content wrapper is z-10, the header group z-30). */}
       {!embedded && (
         <div className="pointer-events-none sticky top-0 z-0 h-screen -mb-[100vh] shrink-0 overflow-hidden" aria-hidden>
           {swellLayer}
+        </div>
+      )}
+      {/* The instance's banner, same trick: pinned, taking no space, over the
+          background and under everything else — it reaches down behind the header
+          and the top of the content card (both glass) and fades into the page. */}
+      {showBanner && (
+        <div className="pointer-events-none sticky top-0 z-0 h-64 -mb-64 shrink-0 overflow-hidden" aria-hidden>
+          <img
+            src={pack.bannerUrl}
+            alt=""
+            className="w-full h-full object-cover"
+            style={{
+              maskImage: "linear-gradient(to bottom, black 35%, transparent 100%)",
+              WebkitMaskImage: "linear-gradient(to bottom, black 35%, transparent 100%)",
+            }}
+          />
         </div>
       )}
       {dropActive && (
@@ -2739,37 +3031,71 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
           </div>
         </div>
       )}
-      {/* With a banner the header group has no fill or blur and the image fades out
-          through a mask, so banner and page share the one animated background with
-          no seam (nothing scrolls under it here: the list scrolls inside its card).
-          Without one there's no banner box at all and the group is just frosted
-          glass (no fill); the blur only matters once the list scrolls under the
-          sticky header. */}
-      <div
-        ref={headerGroupRef}
-        className={`sticky top-0 z-30 shrink-0 ${pack.bannerUrl && !embedded ? "" : "backdrop-blur-xl"}`}
-      >
-        {pack.bannerUrl && !embedded && (
-          <div className="relative h-32 md:h-40 overflow-hidden">
-            <img
-              src={pack.bannerUrl}
-              alt={pack.name}
-              className="w-full h-full object-cover"
-              style={{
-                maskImage: "linear-gradient(to bottom, black 35%, transparent 100%)",
-                WebkitMaskImage: "linear-gradient(to bottom, black 35%, transparent 100%)",
-              }}
+      {/* Reminder that content can simply be dragged onto this page — here and in
+          the online-instance page (which embeds this manager). Shown except while
+          dragging (the drop overlay says it then) or once dismissed for THIS
+          instance — hovering it unfolds a "No mostrar más" button. */}
+      <AnimatePresence>
+        {pack.installed && !dropActive && !dropHintHidden && (
+          <motion.div
+            key="drop-hint"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 12 }}
+            transition={{ duration: 0.25, ease: "easeOut", delay: 0.6 }}
+            className="group absolute bottom-5 left-5 z-40 w-[264px] overflow-hidden rounded-md border border-accent/20 bg-gray-500/15 backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
+          >
+            <div
+              aria-hidden
+              className="pointer-events-none absolute top-0 inset-x-0 h-px bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.8),transparent)]"
             />
-          </div>
+            <div className="flex items-start gap-3 p-3">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent/15 text-accent shadow-[0_0_14px_hsl(var(--accent)/0.25)]">
+                <UploadCloud className="h-4 w-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-white">Arrastra y suelta</p>
+                <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                  {contentLocked
+                    ? "Puedes añadir emotes o esquemas arrastrando el archivo a esta página."
+                    : "Puedes añadir mods, shaders, resource packs, emotes o esquemas arrastrando el archivo a esta página."}
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-rows-[0fr] transition-[grid-template-rows] duration-200 ease-out group-hover:grid-rows-[1fr] group-focus-within:grid-rows-[1fr]">
+              <div className="overflow-hidden">
+                <div className="flex justify-start px-3 pb-3">
+                  <button
+                    type="button"
+                    onClick={hideDropHint}
+                    className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:bg-accent/15 hover:text-white focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                  >
+                    No mostrar más
+                  </button>
+                </div>
+              </div>
+            </div>
+          </motion.div>
         )}
-
-        <div className={embedded ? (!selectedModPath && !searchMode ? "hidden" : "w-full") : "max-w-5xl mx-auto w-full"}>
-        <div className={`px-4 pb-2 relative z-10 flex items-stretch gap-3 ${pack.bannerUrl && !embedded ? "-mt-16" : "pt-4"}`}>
-          {logoColumn && packLogo}
+      </AnimatePresence>
+      {/* With a banner (the background layer above) the header card sits 4rem
+          down over it, and there's no blur: it would blur the banner, and nothing
+          scrolls under the header anyway (the list scrolls inside its card).
+          Without one the group is just frosted glass, no fill. The blur is a layer
+          of its own that fades out over its last 40px — ending sharp, it drew a
+          visible seam across the page's background glow at the header's bottom edge. */}
+      <div className="sticky top-0 z-30 shrink-0">
+        {!showBanner && (
           <div
-            className={`w-full min-w-0 flex items-center justify-between gap-4 mr-auto transition-[max-width] duration-300 ease-out ${
-              plainHeader ? "" : "bg-gray-500/10 backdrop-blur-md border border-transparent rounded-md p-4"
-            } ${!selectedModPath && !searchMode ? "" : "max-w-full"}`}
+            aria-hidden
+            className="pointer-events-none absolute inset-0 -z-10 backdrop-blur-xl [mask-image:linear-gradient(to_bottom,black_calc(100%-40px),transparent)]"
+          />
+        )}
+        <div className={embedded ? (!selectedModPath && !searchMode ? "hidden" : "w-full") : "max-w-5xl mx-auto w-full"} style={besideNovedades}>
+        <div className={`px-4 pb-2 relative z-10 flex items-stretch gap-3 ${showBanner ? "pt-16" : "pt-8"}`}>
+          {logoCard && packLogo}
+          <div
+            className={`w-full min-w-0 flex items-center justify-between gap-4 mr-auto transition-[max-width] duration-300 ease-out bg-gray-500/10 backdrop-blur-md border border-transparent rounded-md p-4 ${!selectedModPath && !searchMode ? "" : "max-w-full"}`}
             style={
               !selectedModPath && !searchMode
                 ? {
@@ -2787,13 +3113,15 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                 >
-                  <button
-                    onClick={closeMod}
-                    className="h-8 w-8 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors shrink-0"
-                    aria-label="Volver al pack"
-                  >
-                    <ArrowLeft className="h-4 w-4" />
-                  </button>
+                  <Hint label="Volver al pack">
+                    <button
+                      onClick={closeMod}
+                      className="h-8 w-8 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors shrink-0"
+                      aria-label="Volver al pack"
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                    </button>
+                  </Hint>
                   <motion.div
                     layoutId={`icon-${selectedModPath}`}
                     className="h-20 w-20 rounded-md border-2 border-background bg-black/70 overflow-hidden shrink-0 shadow-2xl"
@@ -2866,16 +3194,18 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                 >
-                  <button
-                    onClick={() => {
-                      setSearchMode(false);
-                      setSearchQuery("");
-                    }}
-                    className="h-8 w-8 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors shrink-0"
-                    aria-label="Volver al pack"
-                  >
-                    <ArrowLeft className="h-4 w-4" />
-                  </button>
+                  <Hint label="Volver al pack">
+                    <button
+                      onClick={() => {
+                        setSearchMode(false);
+                        setSearchQuery("");
+                      }}
+                      className="h-8 w-8 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors shrink-0"
+                      aria-label="Volver al pack"
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                    </button>
+                  </Hint>
                   <Input
                     autoFocus
                     value={searchQuery}
@@ -2891,12 +3221,13 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                 >
-                  {!logoColumn && packLogo}
+                  {!logoCard && packLogo}
                   {/* As tall as the icon: the name at its top with a divider line right under it,
                       the badges at its bottom. */}
-                  <div className={`min-w-0 ${plainHeader ? "min-h-28" : "min-h-24"} self-stretch flex flex-col gap-2`}>
+                  <div className="min-w-0 min-h-24 self-stretch flex flex-col gap-2">
                     <div className="flex items-baseline gap-2 min-w-0 leading-none">
-                      <h2 className={`text-4xl font-bold text-white truncate leading-none ${plainHeader ? "drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]" : ""}`}>{pack.name}</h2>
+                      {/* pb: truncate clips at the line box, and leading-none leaves no room for descenders. */}
+                      <h2 className="text-4xl font-bold text-white truncate leading-none pb-1.5">{pack.name}</h2>
                       {pack.source !== "custom" && (
                         <span className="text-sm font-normal text-muted-foreground shrink-0">{pack.version}v</span>
                       )}
@@ -2965,63 +3296,79 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
         </div>
       </div>
 
-      <div className={`relative z-10 w-full ${embedded ? "" : "max-w-5xl mx-auto flex-1 min-h-0 flex flex-col"}`}>
-        <div className={embedded ? "pb-4" : `relative px-4 pt-3 pb-4 flex-1 min-h-0 flex flex-col ${logoColumn ? "pl-[8.75rem] min-[1056px]:pl-[7.75rem]" : ""}`}>
+      {/* Shares its box with the side columns, so they start where the content card does
+          (top-3 = its pt-3) and end where it ends, whatever the header's height. */}
+      <div className="relative flex-1 min-h-0 flex flex-col">
+      {novedadesColumn && (
+        <ContentSidePanels
+          pack={pack}
+          myUuid={myUuid}
+          myUsername={myUsername ?? ""}
+          columns={sideColumns}
+          wide={wideWindow}
+          styles={sideColumnStyles}
+          // Level with the header card: 4rem down over the banner, or 2rem without one.
+          topClassName={showBanner ? "top-[3.75rem]" : "top-7"}
+          // No chat window on this page (no footer): Inicio shows the private chat.
+          onChatOpened={() => setLocation("/")}
+        />
+      )}
+      <div className={`relative z-10 w-full flex-1 min-h-0 flex flex-col ${embedded ? "" : "max-w-5xl mx-auto"}`} style={besideNovedades}>
+        <div className={`relative flex-1 min-h-0 flex flex-col ${embedded ? "" : "px-4 pt-3 pb-4"} ${logoCard ? "pl-[158px] min-[1056px]:pl-[130px] min-[1120px]:pl-[110px] min-[1280px]:pl-4" : ""}`}>
+          {/* Under the logo, in the same column (same x as its negative margins). */}
+          {logoCard && (
+            <div className="absolute top-3 left-4 min-[1056px]:-left-3 min-[1120px]:-left-8 min-[1280px]:-left-[126px] w-[130px] max-h-[calc(100%-1.75rem)] overflow-y-auto">
+              <DownloadedPackDetails pack={pack} />
+            </div>
+          )}
           {/* No backdrop-blur here (unlike the header card): a blurred ancestor stops the
               sticky tabs/sort band inside from blurring the rows that scroll under it. */}
           {/* Our own scrollbar, next to the list only (from under the tabs/filters band). */}
-          {fixedCard && <ListScrollbar scrollRef={cardScrollRef} bandRefs={[tabsElRef, sortRowElRef]} />}
+          <ListScrollbar scrollRef={cardScrollRef} bandRefs={[tabsElRef, sortRowElRef]} />
           {/* Floating "back to top", centered at the bottom of the card while scrolled down. */}
           <AnimatePresence>
-            {fixedCard && contentScrolled && (
-              <motion.button
-                key="back-to-top"
-                type="button"
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 12 }}
-                transition={{ duration: 0.18, ease: "easeOut" }}
-                onClick={() => cardScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
-                title="Volver arriba"
-                aria-label="Volver arriba"
-                className={`absolute bottom-8 ${logoColumn ? "left-[calc(50%+3.375rem)]" : "left-1/2"} z-30 -ml-5 h-10 w-10 flex items-center justify-center rounded-full bg-accent text-accent-foreground shadow-lg shadow-black/40 hover:brightness-110 transition-[filter]`}
-              >
-                <ArrowUp className="h-5 w-5" strokeWidth={2.75} />
-              </motion.button>
+            {contentScrolled && (
+              <Hint label="Volver arriba" key="back-to-top">
+                <motion.button
+                  type="button"
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 12 }}
+                  transition={{ duration: 0.18, ease: "easeOut" }}
+                  onClick={() => cardScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
+                  aria-label="Volver arriba"
+                  className={`absolute bottom-8 ${logoCard ? "left-[calc(50%+71px)] min-[1056px]:left-[calc(50%+57px)] min-[1120px]:left-[calc(50%+47px)] min-[1280px]:left-1/2" : "left-1/2"} z-30 -ml-5 h-10 w-10 flex items-center justify-center rounded-full bg-accent text-accent-foreground shadow-lg shadow-black/40 hover:brightness-110 transition-[filter]`}
+                >
+                  <ArrowUp className="h-5 w-5" strokeWidth={2.75} />
+                </motion.button>
+              </Hint>
             )}
           </AnimatePresence>
           <div
             ref={cardScrollRef}
-            className={`bg-gray-500/10 border border-transparent rounded-md ${
-              fixedCard ? "flex-1 min-h-0 overflow-y-auto overflow-x-hidden" : "p-4"
-            }`}
+            className="bg-gray-500/10 border border-accent/15 rounded-md flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
+            onPointerMove={(e) => {
+              const band = tabsElRef.current?.getBoundingClientRect();
+              setPointerNearBand(!!band && e.clientY >= band.top && e.clientY <= band.bottom + 24);
+            }}
+            onPointerLeave={() => setPointerNearBand(false)}
             // Hides past 16px, shows again only at the very top (no flicker around one threshold).
-            onPointerMove={
-              fixedCard
-                ? (e) => {
-                    const band = tabsElRef.current?.getBoundingClientRect();
-                    setPointerNearBand(!!band && e.clientY >= band.top && e.clientY <= band.bottom + 24);
-                  }
-                : undefined
-            }
-            onPointerLeave={fixedCard ? () => setPointerNearBand(false) : undefined}
-            onScroll={
-              fixedCard
-                ? (e) => {
-                    const top = e.currentTarget.scrollTop;
-                    setContentScrolled((was) => (was ? top > 0 : top > 16));
-                  }
-                : undefined
-            }
+            onScroll={(e) => {
+              const top = e.currentTarget.scrollTop;
+              setContentScrolled((was) => (was ? top > 0 : top > 16));
+            }}
           >
-            {/* fixedCard: the padding lives one layer in. On the scroll container itself the
+            {/* Thin accent line along the top, like the emote viewer dialog. Sticky
+                (and above the sticky tabs band) so it stays put while the list scrolls. */}
+            <div
+              aria-hidden
+              className="pointer-events-none sticky top-0 z-30 -mb-px h-px bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.7),transparent)]"
+            />
+            {/* The padding lives one layer in. On the scroll container itself the
                 browser sticks the tabs band below the padding (16px under the card's top
                 edge); here the band can reach the edge. */}
-            <div className={fixedCard ? "p-4" : undefined}>
-            {/* fixedCard: this card is the scroll container — the sticky tabs/sort band
-                sticks to its top. Embedded it must NOT clip/scroll (the band sticks to the
-                host page's viewport instead); the sweep-transition's tiny horizontal
-                offset doesn't need clipping there — the page already has overflow-x-hidden. */}
+            <div className="p-4">
+            {/* This card is the scroll container — the sticky tabs/sort band sticks to its top. */}
             <AnimatePresence mode="wait" initial={false} custom={panelDirection} onExitComplete={restoreCardScroll}>
               <motion.div
                 key={selectedModPath ? "mod" : extrasOpen && hasExtras ? "extras" : "pack"}
@@ -3145,7 +3492,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                           return (
                             <div
                               key={v.versionId}
-                              className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full"
+                              className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full relative border border-accent/15 hover:border-accent/35 transition-colors before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:content-[''] before:bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.55),transparent)]"
                             >
                               <span
                                 className={`h-6 w-6 flex items-center justify-center rounded-md border text-[11px] font-bold shrink-0 ${typeMeta.className}`}
@@ -3213,7 +3560,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                                 openDependency(dep);
                               }
                             }}
-                            className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full cursor-pointer hover:bg-white/5 transition-colors"
+                            className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full cursor-pointer hover:bg-white/5 transition-colors relative border border-accent/15 hover:border-accent/35 before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:content-[''] before:bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.55),transparent)]"
                           >
                             {dep.iconUrl ? (
                               <img src={dep.iconUrl} alt="" className="h-8 w-8 rounded shrink-0 object-cover bg-black/30" />
@@ -3277,7 +3624,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                 // An empty value matches no real category, so Radix stops marking
                 // whichever tab was last active while the Emotes/Esquemas sibling
                 // panels (which aren't part of this Tabs' value space) are open.
-                value={emotesOpen || schematicsOpen || screenshotsOpen ? "" : effectiveCategory}
+                value={emotesOpen || schematicsOpen || otherSectionOpen ? "" : effectiveCategory}
                 onValueChange={(v) => {
                   setEmotesOpen(false);
                   setSchematicsOpen(false);
@@ -3288,38 +3635,18 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                 {!searchMode && (
                   <div
                     ref={tabsRowRef}
-                    style={{ top: tabsStickyTop }}
-                    // No box of its own. While it sticks over the list it gets the header's look —
-                    // translucent gray + a strong blur — and widens to the content card's edges
-                    // (-mx = the card's border + p-4, the same back as padding so nothing inside
-                    // moves), so with the card top drawn above it and the sort row below it's one
-                    // piece as wide as the card.
-                    className={`sticky z-20 flex flex-col gap-3 border pt-3 ${
-                      fixedCard
-                        ? // A permanent gray panel across the top of the card (with the sort row
-                          // below): out to the card's padding edge (-16px, back as padding) — no
-                          // further, or the card (a scroll container) would scroll sideways; the
-                          // card's rounded clip rounds its top corners. px 15 (+1px border) = 16px in, like the
-                          // header card's p-4: its content and this band's start and end at the same x. The sort row lives inside
-                          // it too, so tabs + filters are one block with one line under it.
-                          "-mx-4 -mt-4 px-[15px] pb-2 mb-0 rounded-none bg-gray-500/10 backdrop-blur-xl border-transparent border-b-white/10"
-                        : !tabsStuck
-                          ? "mb-3 pb-2 px-3 rounded-md border-transparent"
-                          : "mb-3 pb-2 -mx-[17px] px-[29px] rounded-none bg-gray-500/10 backdrop-blur-xl border-transparent border-b-white/10"
-                    }`}
+                    // A permanent gray panel across the top of the card (with the sort row
+                    // below): out to the card's padding edge (-16px, back as padding) — no
+                    // further, or the card (a scroll container) would scroll sideways; the
+                    // card's rounded clip rounds its top corners. px 15 (+1px border) = 16px in, like the
+                    // header card's p-4: its content and this band's start and end at the same x. The sort row lives inside
+                    // it too, so tabs + filters are one block with one line under it.
+                    className="sticky top-0 z-20 flex flex-col gap-3 border pt-3 -mx-4 -mt-4 px-[15px] pb-2 mb-0 rounded-none bg-gray-500/10 backdrop-blur-xl border-transparent border-b-white/10"
                   >
-                    {/* The content card's top edge (border + p-4), drawn above the band while
-                        it's stuck — 18px up = that 17px inset + this box's own 1px border. */}
-                    {!fixedCard && tabsStuck && (
-                      <span
-                        aria-hidden
-                        className="pointer-events-none absolute -top-[18px] -left-px -right-px h-[17px] rounded-t-md bg-gray-500/10 backdrop-blur-xl"
-                      />
-                    )}
                     {/* Top level: the instance's content vs. its screenshots —
                         screenshots used to sit among the content tabs. */}
                     <AnimatePresence initial={false}>
-                    {pack.installed && !(fixedCard && contentScrolled) && (
+                    {pack.installed && !(contentScrolled && !otherSectionOpen) && (
                       <motion.div
                         key="section-row"
                         // marginBottom: -12 cancels the band's gap-3 while it folds.
@@ -3327,26 +3654,37 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                         animate={{ opacity: 1, height: "auto", marginBottom: 0 }}
                         exit={{ opacity: 0, height: 0, marginBottom: -12 }}
                         transition={{ duration: 0.2, ease: "easeOut" }}
-                        className="self-start overflow-hidden"
+                        className="overflow-hidden flex items-center justify-between gap-3"
                       >
-                        <div className="flex items-center gap-1 p-1 rounded-md bg-gray-500/10 backdrop-blur-md border border-transparent self-start">
+                        <div className="flex items-center gap-1 p-1 rounded-md bg-gray-500/10 backdrop-blur-md border border-transparent">
                           {([
                             { id: "content", label: "Contenido", icon: Package },
+                            ...(pack.modrinthProjectId ? ([{ id: "summary", label: "Resumen", icon: FileText }] as const) : []),
                             { id: "screenshots", label: "Capturas", icon: Camera },
+                            ...(pack.modrinthProjectId ? ([{ id: "versions", label: "Versiones", icon: History }] as const) : []),
                           ] as const).map(({ id: sectionId, label, icon: SectionIcon }) => {
-                            const active = sectionId === "screenshots" ? screenshotsOpen : !screenshotsOpen;
+                            const active =
+                              sectionId === "screenshots"
+                                ? screenshotsOpen
+                                : sectionId === "summary"
+                                  ? summaryOpen
+                                  : sectionId === "versions"
+                                    ? versionsOpen
+                                    : !otherSectionOpen;
                             return (
                               <button
                                 key={sectionId}
                                 type="button"
                                 onClick={() => {
-                                  if (sectionId === "screenshots") {
+                                  if (sectionId !== "content") {
                                     setEmotesOpen(false);
                                     setSchematicsOpen(false);
-                                    setScreenshotsOpen(true);
-                                  } else {
-                                    setScreenshotsOpen(false);
                                   }
+                                  setScreenshotsOpen(sectionId === "screenshots");
+                                  setSummaryOpen(sectionId === "summary");
+                                  setVersionsOpen(sectionId === "versions");
+                                  // Only Contenido folds this row while scrolled.
+                                  cardScrollRef.current?.scrollTo({ top: 0 });
                                 }}
                                 className={`relative inline-flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-semibold transition-colors ${
                                   active ? "text-accent-foreground" : "text-muted-foreground hover:text-foreground"
@@ -3365,11 +3703,13 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                             );
                           })}
                         </div>
+                        {/* ModrinthSummary portals its translation toggle here. */}
+                        {summaryOpen && <div ref={setSummaryActionsEl} className="shrink-0" />}
                       </motion.div>
                     )}
                     </AnimatePresence>
                     <AnimatePresence initial={false}>
-                    {!screenshotsOpen && (
+                    {!otherSectionOpen && (
                     <motion.div
                       key="category-row"
                       initial={{ opacity: 0, height: 0 }}
@@ -3379,7 +3719,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                       className="flex items-center justify-between gap-2 flex-wrap"
                     >
                     {/* Second level: underlined, so it doesn't compete with Contenido/Capturas. */}
-                    <TabsList className="h-auto justify-start gap-2 rounded-none border-b border-white/10 bg-transparent p-0">
+                    <TabsList data-tour="manager-categories" className="h-auto justify-start gap-2 rounded-none border-b border-white/10 bg-transparent p-0">
                       {categories.map((c) => {
                         const Icon = CATEGORY_META[c].icon;
                         return (
@@ -3455,8 +3795,9 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                     </TabsList>
                     {pack.installed && (
                       <div className="flex items-center gap-2">
-                        {!emotesOpen && !schematicsOpen && !screenshotsOpen && contentLocked && (
+                        {!emotesOpen && !schematicsOpen && !otherSectionOpen && contentLocked && (
                           <span
+                            data-tour="manager-locked-badge"
                             className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-white/10 bg-white/5 text-xs font-semibold text-muted-foreground"
                             title="El creador de esta instancia no permite añadir mods, shaders ni resource packs."
                           >
@@ -3464,18 +3805,44 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                             Contenido bloqueado
                           </span>
                         )}
-                        {!emotesOpen && !schematicsOpen && !screenshotsOpen && !contentLocked && (
+                        {!emotesOpen && !schematicsOpen && !otherSectionOpen && !contentLocked && (
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => setSearchMode(true)}
+                            data-tour="manager-install"
                             className="border-accent/50 bg-transparent text-accent hover:bg-accent/10 hover:text-accent font-semibold gap-1.5"
                           >
                             <SiModrinth className="h-3.5 w-3.5" />
                             {`Instalar ${CATEGORY_META[effectiveCategory].label}`}
                           </Button>
                         )}
-                        {!emotesOpen && !schematicsOpen && !screenshotsOpen && !contentLocked && effectiveCategory === "mods" && (
+                        {/* Emotes: the Redlance store lives where "Instalar …" is for the other tabs. */}
+                        {emotesOpen && !otherSectionOpen && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={openEmoteStore}
+                            title="Abre RedlanceEmotes en tu navegador"
+                            className="border-accent/50 bg-transparent text-accent hover:bg-accent/10 hover:text-accent font-semibold gap-1.5"
+                          >
+                            <Store className="h-3.5 w-3.5" />
+                            Tienda de emotes
+                          </Button>
+                        )}
+                        {/* Esquemas: its online search lives where "Instalar …" is for the other tabs. */}
+                        {schematicsOpen && !otherSectionOpen && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setSchematicOnlineMode((v) => !v)}
+                            className="border-accent/50 bg-transparent text-accent hover:bg-accent/10 hover:text-accent font-semibold gap-1.5"
+                          >
+                            {schematicOnlineMode ? <ArrowLeft className="h-3.5 w-3.5" /> : <Globe className="h-3.5 w-3.5" />}
+                            {schematicOnlineMode ? "Ver instalados" : "Buscar online"}
+                          </Button>
+                        )}
+                        {!emotesOpen && !schematicsOpen && !otherSectionOpen && !contentLocked && effectiveCategory === "mods" && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -3494,7 +3861,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                     </AnimatePresence>
                     {/* Sort / filter row of the list, inside the band (one block with the tabs). */}
                     <AnimatePresence initial={false}>
-                    {!emotesOpen && !schematicsOpen && !screenshotsOpen && !(fixedCard && sortRowHidden && !pointerNearBand) && (
+                    {!emotesOpen && !schematicsOpen && !otherSectionOpen && !(sortRowHidden && !pointerNearBand) && (
                       <motion.div
                         key="sort-row"
                         // marginTop: -12 cancels the band's gap-3 while it folds.
@@ -3665,7 +4032,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                             const busy = busyPaths.has(busyKey);
                             const actionable = !locked && !upToDate;
                             return (
-                              <div key={hit.projectId} className="flex items-center gap-4 p-4 bg-card/50 rounded-md w-full">
+                              <div key={hit.projectId} className="flex items-center gap-4 p-4 bg-card/50 rounded-md w-full relative border border-accent/15 hover:border-accent/35 transition-colors before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:content-[''] before:bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.55),transparent)]">
                                 <div
                                   onClick={() => openModFromSearch(hit, installed)}
                                   className="flex items-center gap-4 min-w-0 flex-1 cursor-pointer"
@@ -3736,7 +4103,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                   })()
                 ) : (
                 <motion.div
-                  key={screenshotsOpen ? "screenshots" : emotesOpen ? "emotes" : schematicsOpen ? "schematics" : effectiveCategory}
+                  key={versionsOpen ? "versions" : summaryOpen ? "summary" : screenshotsOpen ? "screenshots" : emotesOpen ? "emotes" : schematicsOpen ? "schematics" : effectiveCategory}
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2, ease: "easeOut" }}
@@ -3752,14 +4119,31 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                       <p className="text-sm">No hay emotes en la carpeta "emotes" de esta instancia.</p>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-4 gap-3">
+                    <div className="grid grid-cols-4 gap-3 pt-4">
                       {emotes.map((emote) => (
+                        <ContentContextMenu
+                          key={emote.fileName}
+                          onSave={() =>
+                            void saveFileToLibrary("emotes", `emotes/${emote.fileName}`, emote.fileName, {
+                              displayName: emote.displayName,
+                              iconUrl: emote.thumbnailBase64 ? `data:image/png;base64,${emote.thumbnailBase64}` : null,
+                            })
+                          }
+                          onShare={() => void shareEmote(emote)}
+                          onRename={() =>
+                            setRenaming({ kind: "emote", path: `emotes/${emote.fileName}`, currentName: emote.displayName })
+                          }
+                        >
                         <button
                           type="button"
-                          key={emote.fileName}
                           onClick={() => setSelectedEmote(emote)}
-                          className="flex flex-col items-center gap-2 p-3 rounded-md bg-gray-500/10 border border-transparent hover:bg-white/10 hover:border-white/20 transition-colors text-left"
+                          className="group relative overflow-hidden flex flex-col items-center gap-2 p-3 rounded-md bg-gray-500/10 border border-accent/15 hover:bg-accent/10 hover:border-accent/40 transition-colors text-left"
                         >
+                          {/* Thin accent line along the top, like the emote viewer dialog. */}
+                          <span
+                            aria-hidden
+                            className="pointer-events-none absolute top-0 inset-x-0 h-px bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.7),transparent)] opacity-70 transition-opacity group-hover:opacity-100"
+                          />
                           <div className="h-16 w-16 rounded bg-black/30 overflow-hidden flex items-center justify-center shrink-0">
                             {emote.thumbnailBase64 ? (
                               <img
@@ -3775,37 +4159,12 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                             {emote.displayName}
                           </span>
                         </button>
+                        </ContentContextMenu>
                       ))}
                     </div>
                   )
                 ) : schematicsOpen ? (
                   <>
-                    <div className="flex items-center gap-1.5 mb-3">
-                      <button
-                        type="button"
-                        onClick={() => setSchematicOnlineMode(false)}
-                        className={`px-2.5 py-1 rounded-full text-[11px] border transition-colors ${
-                          !schematicOnlineMode
-                            ? "bg-accent text-accent-foreground border-transparent"
-                            : "bg-white/5 text-muted-foreground border-white/10 hover:bg-white/10"
-                        }`}
-                      >
-                        Instalados
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSchematicOnlineMode(true)}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] border transition-colors ${
-                          schematicOnlineMode
-                            ? "bg-accent text-accent-foreground border-transparent"
-                            : "bg-white/5 text-muted-foreground border-white/10 hover:bg-white/10"
-                        }`}
-                      >
-                        <Globe className="h-3 w-3" />
-                        Buscar online
-                      </button>
-                    </div>
-
                     {!schematicOnlineMode ? (
                       schematics.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
@@ -3813,31 +4172,41 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                           <p className="text-sm">No hay esquemas en esta instancia.</p>
                         </div>
                       ) : (
-                        <div className="grid grid-cols-4 gap-3">
-                          {schematics.map((s) => {
-                            const displayName = s.path.slice(s.path.lastIndexOf("/") + 1);
-                            const folder = s.path.slice(0, s.path.length - displayName.length - 1);
-                            return (
-                              <button
-                                type="button"
-                                key={s.path}
-                                onClick={() => setSelectedSchematic(s)}
-                                className="flex flex-col items-center gap-2 p-3 rounded-md bg-gray-500/10 border border-transparent hover:bg-white/10 hover:border-white/20 transition-colors text-left"
-                              >
-                                <div className="h-16 w-16 rounded bg-black/30 overflow-hidden flex items-center justify-center shrink-0">
-                                  <Box className="h-6 w-6 text-muted-foreground" />
-                                </div>
-                                <span className="text-xs text-gray-200 text-center truncate w-full" title={s.path}>
-                                  {displayName}
-                                </span>
-                                {folder && (
-                                  <span className="text-[10px] text-muted-foreground text-center truncate w-full" title={folder}>
-                                    {folder}
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
+                        <div className="flex flex-col gap-2 pt-4">
+                          {schematics.map((sch) => (
+                            <SchematicRow
+                              key={sch.path}
+                              file={sch}
+                              busy={busyPaths.has(sch.path)}
+                              onOpen={() => setSelectedSchematic(sch)}
+                              onSave={() =>
+                                void saveFileToLibrary("schematics", sch.path, fileName(sch.path), {
+                                  displayName: schematicName(sch),
+                                  iconUrl: null,
+                                  schematicSource: sch.source,
+                                })
+                              }
+                              onShare={() => void shareSchematic(sch)}
+                              onRename={() => setRenaming({ kind: "schematic", path: sch.path, currentName: schematicName(sch) })}
+                              onDelete={async () => {
+                                if (!pack) return;
+                                setBusyPaths((prev) => new Set(prev).add(sch.path));
+                                try {
+                                  await deleteInstanceFile(pack.id, sch.path);
+                                  setSchematics((prev) => prev.filter((x) => x.path !== sch.path));
+                                  toast.success(`${fileName(sch.path)} eliminado.`);
+                                } catch (e: any) {
+                                  toast.error(e?.message || "No se pudo eliminar el esquema.");
+                                } finally {
+                                  setBusyPaths((prev) => {
+                                    const next = new Set(prev);
+                                    next.delete(sch.path);
+                                    return next;
+                                  });
+                                }
+                              }}
+                            />
+                          ))}
                         </div>
                       )
                     ) : (
@@ -3846,7 +4215,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                           value={schematicQuery}
                           onChange={(e) => setSchematicQuery(e.target.value)}
                           placeholder="Buscar esquemas online..."
-                          className="h-8 bg-card/50 border-white/10 text-xs"
+                          className="h-8 bg-white/[0.07] border-transparent text-xs"
                         />
                         {schematicSearchLoading ? (
                           <div className="flex items-center justify-center py-16 text-muted-foreground">
@@ -3869,7 +4238,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                                 type="button"
                                 key={`${hit.vendor}/${hit.uuid}`}
                                 onClick={() => setSelectedOnlinePost(hit)}
-                                className="flex items-center gap-3 p-3 bg-card/50 rounded-md w-full text-left hover:bg-white/5 transition-colors"
+                                className="flex items-center gap-3 px-3 py-2.5 bg-card/50 rounded-md w-full text-left hover:bg-white/[0.07] transition-colors relative border border-accent/15 hover:border-accent/35 before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:content-[''] before:bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.55),transparent)]"
                               >
                                 {hit.thumbnailUrl ? (
                                   <img
@@ -3907,6 +4276,16 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                       </div>
                     )}
                   </>
+                ) : summaryOpen && pack.modrinthProjectId ? (
+                  <ModrinthSummary projectId={pack.modrinthProjectId} onOpenImage={setLightboxImage} actionsEl={summaryActionsEl} />
+                ) : versionsOpen && pack.modrinthProjectId ? (
+                  <ModrinthVersions
+                    pack={pack}
+                    onChanged={async () => {
+                      await loadInstances();
+                      setContentReloadKey((k) => k + 1);
+                    }}
+                  />
                 ) : screenshotsOpen ? (
                   screenshotsLoading ? (
                     <div className="flex items-center justify-center py-16 text-muted-foreground">
@@ -3922,16 +4301,18 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                       {screenshots.map((shot) => (
                         <div key={shot.fileName} className="group relative">
                         <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              type="button"
-                              onClick={(e) => e.stopPropagation()}
-                              className="absolute top-3 right-3 z-10 h-7 w-7 flex items-center justify-center rounded-md bg-black/60 text-white opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100 hover:bg-black/80 transition-opacity"
-                              aria-label="Opciones de la captura"
-                            >
-                              <MoreVertical className="h-4 w-4" />
-                            </button>
-                          </DropdownMenuTrigger>
+                          <Hint label="Opciones de la captura">
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                type="button"
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute top-3 right-3 z-10 h-7 w-7 flex items-center justify-center rounded-md bg-black/60 text-white opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100 hover:bg-black/80 transition-opacity"
+                                aria-label="Opciones de la captura"
+                              >
+                                <MoreVertical className="h-4 w-4" />
+                              </button>
+                            </DropdownMenuTrigger>
+                          </Hint>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => void showInstanceFile(id!, `screenshots/${shot.fileName}`)}>
                               <FolderOpen className="mr-2 h-4 w-4" /> Abrir carpeta
@@ -4002,7 +4383,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                 ) : (
                 categories.map((c) => (
                   <TabsContent key={c} value={c} className="mt-0">
-                    <div>
+                    <div data-tour="manager-list">
                       {(() => {
                         const sorted = rowsFor(c)
                           .map((row) => ({ row, title: titleFor(row.path) }))
@@ -4021,13 +4402,14 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                           });
                         return (
                       <>
-                      <FlipList orderKey={sorted.map((r) => r.row.path).join("|")} className={`flex flex-col gap-1.5 ${fixedCard ? "px-0 pb-3 pt-3" : "p-3 pt-1.5"}`}>
+                      <FlipList orderKey={sorted.map((r) => r.row.path).join("|")} className="flex flex-col gap-1.5 px-0 pb-3 pt-3">
                         {sorted.map(({ row, title }) => (
                             <InstalledContentRow
                               key={row.path}
                               path={row.path}
                               category={c}
                               mandatory={row.mandatory}
+                              external={!loading && !modrinthMatches.has(row.path)}
                               title={title}
                               match={modrinthMatches.get(row.path)}
                               update={contentLocked ? undefined : updates.get(row.path)}
@@ -4044,6 +4426,8 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                               onOpen={onRowOpen}
                               onUpdate={onRowUpdate}
                               onDelete={onRowDelete}
+                              onSave={onRowSave}
+                              onShare={onRowShare}
                               marked={markedPaths.has(row.path)}
                               selecting={markedPaths.size > 0}
                               onMarkToggle={onRowMarkToggle}
@@ -4068,8 +4452,11 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
           </div>
         </div>
       </div>
+      </div>
 
       <ShareImageDialog image={shareImage} onOpenChange={(o) => !o && setShareImage(null)} />
+      <ShareContentDialog item={shareContent} onOpenChange={(o) => !o && setShareContent(null)} />
+      <RenameContentDialog target={renaming} onOpenChange={(o) => !o && setRenaming(null)} onRename={applyRename} />
       <ShareInstanceDialog instance={sharingInstance ? pack : null} onOpenChange={(o) => !o && setSharingInstance(false)} />
       <DuplicateInstanceDialog instance={duplicatingInstance ? pack : null} onOpenChange={(o) => !o && setDuplicatingInstance(false)} />
 
@@ -4191,45 +4578,104 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={!!selectedEmote} onOpenChange={(open) => !open && setSelectedEmote(null)}>
-        <DialogContent className="bg-card border-white/10 text-foreground sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-white">{selectedEmote?.displayName}</DialogTitle>
-          </DialogHeader>
-          <div className="flex items-center justify-center bg-black/30 rounded-md p-6">
-            {myPreviewSkinUrl && emoteAnimation ? (
-              <SkinViewer3D
-                skinUrl={myPreviewSkinUrl}
-                animation={emoteAnimation}
-                width={200}
-                height={280}
-                className="cursor-grab active:cursor-grabbing"
-              />
-            ) : selectedEmote?.thumbnailBase64 ? (
-              <img
-                src={`data:image/png;base64,${selectedEmote.thumbnailBase64}`}
-                alt={selectedEmote.displayName}
-                className="max-h-[50vh] object-contain"
-              />
-            ) : (
-              <Smile className="h-16 w-16 text-muted-foreground" />
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground text-center">
-            {myPreviewSkinUrl && emoteAnimation ? "Arrastra para girar la cámara." : "Cargando vista previa animada..."}
-          </p>
-        </DialogContent>
-      </Dialog>
+      <AlertDialog open={emoteStoreNoticeOpen} onOpenChange={setEmoteStoreNoticeOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Tienda de emotes</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  Los emotes se descargan desde <span className="font-semibold text-foreground">RedlanceEmotes</span>{" "}
+                  (emotes.redlance.org), una página externa a ALaunchi. Se abrirá en tu navegador, y para descargar
+                  puede pedirte iniciar sesión allí.
+                </p>
+                <p>
+                  Después tienes que <span className="font-semibold text-foreground">importarlos</span> a la instancia:
+                  arrastra el archivo <span className="font-mono text-foreground">.emotecraft</span> descargado a esta
+                  ventana, en la pestaña Emotes.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                try {
+                  localStorage.setItem(EMOTE_STORE_NOTICE_KEY, "1");
+                } catch {
+                  /* it'll just show again next time */
+                }
+                window.open(EMOTE_STORE_URL, "_blank");
+              }}
+            >
+              Abrir la página
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <EmotePreviewDialog
+        emote={selectedEmote}
+        data={selectedEmoteData}
+        skinUrl={myPreviewSkinUrl}
+        onClose={() => setSelectedEmote(null)}
+      />
 
       <Dialog open={!!selectedSchematic} onOpenChange={(open) => !open && setSelectedSchematic(null)}>
-        <DialogContent className="bg-card border-white/10 text-foreground sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-white">
-              {selectedSchematic ? selectedSchematic.path.slice(selectedSchematic.path.lastIndexOf("/") + 1) : ""}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="flex items-center justify-center bg-black/30 rounded-md p-6">
-            {schematicResources && selectedSchematicStructure ? (
+        <DialogContent className="border-transparent bg-gray-500/15 backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.35)] text-foreground sm:max-w-2xl sm:rounded-md p-0 gap-0 overflow-hidden">
+          {/* Thin accent line along the top, like the account menu's cards. */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute top-0 inset-x-0 h-px bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.8),transparent)]"
+          />
+          {(() => {
+            const path = selectedSchematic?.path ?? "";
+            const base = path.slice(path.lastIndexOf("/") + 1);
+            const ext = base.match(SCHEMATIC_EXT)?.[1]?.toLowerCase();
+            return (
+              <DialogHeader className="px-5 pt-5 pb-4 pr-12 border-b border-white/5 space-y-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="h-10 w-10 shrink-0 rounded-md bg-accent/15 text-accent flex items-center justify-center shadow-[0_0_14px_hsl(var(--accent)/0.25)]">
+                    <Box className="h-5 w-5" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <DialogTitle className="text-white text-base truncate">{base.replace(SCHEMATIC_EXT, "")}</DialogTitle>
+                    <div className="mt-1 flex items-center gap-1.5 min-w-0">
+                      {selectedSchematic && (
+                        <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent shrink-0">
+                          {selectedSchematic.source === "worldedit" ? "WorldEdit" : "Litematica"}
+                        </span>
+                      )}
+                      <span className="text-[11px] text-muted-foreground truncate">
+                        {ext ? SCHEMATIC_TYPE[ext] ?? `.${ext}` : "Esquema"}
+                        {selectedSchematicStructure &&
+                          ` · ${selectedSchematicStructure.getSize().join(" × ")} · ${selectedSchematicStructure
+                            .getBlocks()
+                            .length.toLocaleString("es-ES")} bloques`}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </DialogHeader>
+            );
+          })()}
+
+          {/* Always the viewer's size, so loading → model → error never jumps. */}
+          <div className="relative mx-5 mt-4 rounded-md bg-black/30 overflow-hidden flex items-center justify-center h-[420px]">
+            {selectedSchematicError ? (
+              // Too big or unreadable: said plainly, never an endless spinner.
+              <div className="flex flex-col items-center justify-center gap-2 text-center px-6">
+                <AlertTriangle className="h-7 w-7 text-amber-400" />
+                <p className="max-w-sm text-sm text-gray-200">{selectedSchematicError}</p>
+                <p className="text-xs text-muted-foreground">Puedes abrirlo igualmente en Minecraft con Litematica o WorldEdit.</p>
+              </div>
+            ) : schematicResourcesError ? (
+              <div className="flex flex-col items-center justify-center gap-2 text-center px-6">
+                <AlertTriangle className="h-7 w-7 text-amber-400" />
+                <p className="max-w-sm text-sm text-gray-200">{schematicResourcesError}</p>
+              </div>
+            ) : schematicResources && selectedSchematicStructure ? (
               <SchematicViewer3D
                 structure={selectedSchematicStructure}
                 resources={schematicResources}
@@ -4238,22 +4684,35 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                 className="cursor-grab active:cursor-grabbing"
               />
             ) : (
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-7 w-7 animate-spin text-accent" />
+                <span className="text-xs">
+                  {!schematicResources
+                    ? schematicProgress?.stage === "downloading_client"
+                      ? `Descargando recursos de Minecraft ${pack?.minecraftVersion}… ${schematicProgress.progress}%`
+                      : schematicProgress?.stage === "extracting"
+                      ? `Extrayendo modelos y texturas… ${schematicProgress.progress}%`
+                      : "Preparando modelos y texturas…"
+                    : "Cargando esquema…"}
+                </span>
+              </div>
             )}
           </div>
-          <p className="text-xs text-muted-foreground text-center">
-            {schematicResourcesError
-              ? schematicResourcesError
-              : !schematicResources
-              ? schematicProgress?.stage === "downloading_client"
-                ? `Descargando recursos de Minecraft ${pack?.minecraftVersion}... ${schematicProgress.progress}%`
-                : schematicProgress?.stage === "extracting"
-                ? `Extrayendo modelos y texturas... ${schematicProgress.progress}%`
-                : "Preparando modelos y texturas..."
-              : !selectedSchematicStructure
-              ? "Cargando esquema..."
-              : "Arrastra para girar la cámara, clic derecho para desplazarte, rueda para hacer zoom. Los bloques de mods pueden no mostrarse."}
-          </p>
+
+          {/* Controls, as small key hints. */}
+          <div className="px-5 pt-3 pb-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
+            {[
+              ["Arrastrar", "girar"],
+              ["Clic derecho", "desplazar"],
+              ["Rueda", "zoom"],
+            ].map(([key, action]) => (
+              <span key={key} className="inline-flex items-center gap-1.5">
+                <kbd className="rounded bg-white/[0.07] px-1.5 py-0.5 font-sans text-[10px] font-semibold text-gray-300">{key}</kbd>
+                {action}
+              </span>
+            ))}
+            <span className="text-muted-foreground/70">Los bloques de mods pueden no mostrarse.</span>
+          </div>
         </DialogContent>
       </Dialog>
 

@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useState } from "react";
 import { useLocation, useParams } from "wouter";
 import { Boxes, Clock, Download, Gamepad2, Heart, Home as HomeIcon, Loader2, Lock, MessageSquare, Play, Square, UserMinus, UserPlus } from "lucide-react";
@@ -19,7 +20,7 @@ import { InstallFavoriteDialog } from "@/components/install-favorite-dialog";
 import { installOnlineInstance } from "@/lib/install-online-instance";
 import { installFromRecipe, type RecipeInstallResult } from "@/lib/instance-recipe";
 import { formatPlaytime } from "@/lib/format";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import type { Modpack } from "@/services/github";
 import type { FavoriteEntry } from "@/services/favorites";
 import { Button } from "@/components/ui/button";
@@ -116,7 +117,7 @@ function UninstalledOnlineCard({ pack }: { pack: Modpack }) {
     try {
       if (!(await installOnlineInstance(pack))) return; // cancelled in the groups picker
       setDone(true);
-      toast.success(`${pack.name} instalado correctamente.`);
+      notify.success(`${pack.name} instalado correctamente.`);
     } catch (e: any) {
       toast.error(e?.message || "Error al instalar.");
     } finally {
@@ -171,7 +172,7 @@ function PrivateInstanceCard({ instance }: { instance: PublicInstanceSummary }) 
       const r = await installFromRecipe(instance.name, instance);
       setResult(r);
       setState("done");
-      toast.success(`${instance.name} creada — ${r.installedCount} de ${contentCount} elementos instalados.`);
+      notify.success(`${instance.name} creada — ${r.installedCount} de ${contentCount} elementos instalados.`);
     } catch (e: any) {
       setState("error");
       toast.error(e?.message || "No se pudo crear la instancia.");
@@ -352,7 +353,7 @@ function ProfileContent({
     <div className="min-h-full bg-background text-foreground flex flex-col">
       <main className="flex-1 overflow-y-auto px-6 py-6">
         <div className="max-w-5xl w-full mx-auto space-y-6">
-          <ProfileFrame frame={profile.frame}>
+          <ProfileFrame frame={profile.frame} color={profile.frameColor}>
           <div className="relative rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden">
             <div className="absolute inset-0">
               <BannerMedia src={profile.bannerUrl || DEFAULT_PROFILE_BANNER} className="w-full h-full object-cover" />
@@ -412,8 +413,10 @@ function ProfileContent({
                 </div>
                 <div className="mt-auto flex flex-wrap items-center gap-x-8 gap-y-3 pt-3 border-t border-white/5">
                   <Stat icon={<Clock className="h-4 w-4" />} value={formatPlaytime(profile.totalPlaytimeMs)} label="Tiempo jugado" />
-                  <Stat icon={<Gamepad2 className="h-4 w-4" />} value={String(totalInstances)} label="Instancias" />
-                  <Stat icon={<Heart className="h-4 w-4" />} value={String(profile.favorites?.length ?? 0)} label="Favoritas" />
+                  {!profile.hideInstances && <Stat icon={<Gamepad2 className="h-4 w-4" />} value={String(totalInstances)} label="Instancias" />}
+                  {!profile.hideFavorites && (
+                    <Stat icon={<Heart className="h-4 w-4" />} value={String(profile.favorites?.length ?? 0)} label="Favoritas" />
+                  )}
                 </div>
               </div>
             </div>
@@ -445,7 +448,9 @@ function ProfileContent({
             </TabsList>
 
             <TabsContent value="online">
-              {onlinePacks.length === 0 ? (
+              {profile.hideInstances ? (
+                <p className="text-sm text-muted-foreground py-14 text-center">{profile.username} ha ocultado sus instancias.</p>
+              ) : onlinePacks.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-14 text-center">No tiene ninguna instancia online que puedas ver.</p>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 pt-5">
@@ -461,7 +466,9 @@ function ProfileContent({
             </TabsContent>
 
             <TabsContent value="private">
-              {profile.privateInstances.length === 0 ? (
+              {profile.hideInstances ? (
+                <p className="text-sm text-muted-foreground py-14 text-center">{profile.username} ha ocultado sus instancias.</p>
+              ) : profile.privateInstances.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-14 text-center">No tiene ninguna instancia privada destacada.</p>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 pt-5">
@@ -473,7 +480,9 @@ function ProfileContent({
             </TabsContent>
 
             <TabsContent value="favorites">
-              {!profile.favorites || profile.favorites.length === 0 ? (
+              {profile.hideFavorites ? (
+                <p className="text-sm text-muted-foreground py-14 text-center">{profile.username} ha ocultado sus favoritos.</p>
+              ) : !profile.favorites || profile.favorites.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-14 text-center">Aún no ha marcado ningún favorito.</p>
               ) : (
                 <div className="flex flex-wrap gap-2.5 pt-4">
@@ -493,15 +502,17 @@ function ProfileContent({
                         </div>
                         <span className="text-xs font-semibold text-gray-100 truncate max-w-[140px]">{f.title}</span>
                       </a>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 shrink-0 text-gray-400 hover:text-accent"
-                        aria-label={`Instalar ${f.title}`}
-                        onClick={() => setInstallFavorite(f)}
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                      </Button>
+                      <Hint label={`Instalar ${f.title}`}>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 shrink-0 text-gray-400 hover:text-accent"
+                          aria-label={`Instalar ${f.title}`}
+                          onClick={() => setInstallFavorite(f)}
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                        </Button>
+                      </Hint>
                     </div>
                   ))}
                 </div>

@@ -6,6 +6,12 @@ export interface ProfileLook {
   bannerUrl: string | null;
   /** FRAME_DECORATIONS id, "none" when unset. */
   frame: string;
+  /** Colour of the electric frame, null = default. */
+  frameColor: string | null;
+  /** Colours of the icon decoration (lib/icon-colors.ts), null = defaults. */
+  iconColors: string | null;
+  /** The frame is also drawn round the character's card. */
+  frameOnCharacter: boolean;
   /** ICON_DECORATIONS id, "none" when unset. */
   iconDecoration: string;
 }
@@ -17,7 +23,7 @@ const cache = new Map<string, Promise<ProfileLook>>();
 const listeners = new Map<string, Set<(look: ProfileLook) => void>>();
 
 const fetchLook = (uuid: string) =>
-  getProfileLook(uuid).catch(() => ({ bannerUrl: null, frame: "none", iconDecoration: "none" }));
+  getProfileLook(uuid).catch(() => ({ bannerUrl: null, frame: "none", frameColor: null, iconDecoration: "none", iconColors: null, frameOnCharacter: false }));
 
 /** Re-reads one profile's look and updates every row showing it (used after
  *  you change your own banner/frame/icon decoration). */

@@ -93,6 +93,18 @@ export async function uploadServerFile(id: string, remoteDir: string): Promise<s
   return result.canceled ? null : result.name;
 }
 
+/** Downloads a mod jar (checked against its sha1) and puts it in `remoteDir` on
+ *  the server; `replacePath` (an older build in the same folder) is removed after. */
+export async function installServerModFromUrl(
+  id: string,
+  remoteDir: string,
+  file: { fileName: string; url: string; sha1?: string },
+  replacePath?: string
+): Promise<void> {
+  requireElectron();
+  await eAPI.installServerModFromUrl({ id, remoteDir, ...file, replacePath });
+}
+
 export async function readServerTextFile(id: string, remotePath: string): Promise<string> {
   requireElectron();
   return eAPI.readServerTextFile({ id, remotePath });

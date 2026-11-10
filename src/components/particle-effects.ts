@@ -30,6 +30,9 @@ export interface ParticleLayer {
   /** "life" plays the frames over the particle's lifetime (the game's order);
    *  "random" (default) gives each particle one random frame. */
   frames?: "random" | "life";
+  /** With frames "life": start this far (0..1) into the animation — skips
+   *  frames that don't read well out of their in-game context. */
+  frameStart?: number;
   life: Range;
   size: Range;
   sizeOverLife?: [number, number];
@@ -42,6 +45,12 @@ export interface ParticleLayer {
     /** Centre offset on Z — negative puts the cloud behind the character. */
     z?: number;
   };
+  /** Share of particles (0..1) allowed in front of the character; the rest go
+   *  behind it, where the body hides them as they pass. Default: all. */
+  front?: number;
+  /** The ones in front keep at least this far from the vertical axis, so they
+   *  frame the character instead of crossing its face and chest. */
+  clear?: number;
   velocity?: [number, number, number];
   jitter?: [number, number, number];
   gravity?: number;
@@ -62,235 +71,328 @@ export interface ParticleLayer {
 
 export interface ParticleEffectDef {
   layers: ParticleLayer[];
-  /** Coloured, flickering point light near the feet (fire). */
-  light?: { color: number; intensity: number };
+  /** Coloured point light near the feet: flickering like fire, or (`steady`)
+   *  a constant glow that tints the character with the effect's mood. */
+  light?: { color: number; intensity: number; steady?: boolean };
   /** Dimmer, bluish scene lighting so glowing particles read better. */
   night?: boolean;
+  /** Colour of the scene's ambient light (instead of white): the effect's
+   *  mood washing gently over the whole character. */
+  ambient?: number;
 }
 
-const FOLIAGE = [0x59ae30, 0x48b518, 0x6a9c2c, 0x77ab2f, 0x4f9a28];
+const FOLIAGE = [0x6cc23a, 0x5bb52a, 0x7fbf3a, 0x8ccf48, 0x4ea82a];
 
+// Tuned against the real particle textures, one by one: each effect frames the
+// character (few or none crossing its face and chest — see `front`/`clear`),
+// moves like its in-game source and, where it sets a mood, tints the character
+// with a soft steady light.
 export const PARTICLE_EFFECTS = {
+  // Pale garden: pale oak leaves drifting down slowly through still, grey air
+  // with a few motes of dust hanging in it.
   "pale-garden": {
     layers: [
       {
         particle: "pale_oak_leaves",
-        count: 30,
+        count: 24,
         mode: "tumble",
-        shade: [1.25, 1.6],
+        shade: [1.45, 1.85],
+        life: [6, 9],
+        size: [0.13, 0.18],
+        fade: [0.03, 0.06],
+        spawn: { radius: [0, 0.9], y: [2.6, 2.9], z: -0.2 },
+        front: 0.35,
+        clear: 0.38,
+        velocity: [0, -0.4, 0],
+        jitter: [0.04, 0.08, 0.04],
+        sway: [0.13, 0.7],
+        fallback: 0xc2c6b8,
+      },
+      {
+        particle: "white_ash",
+        count: 18,
+        tints: [0xd8dccf, 0xc9cdbf],
+        opacity: 0.55,
         life: [5, 8],
-        size: [0.15, 0.21],
-        fade: [0.03, 0.05],
-        spawn: { radius: [0, 0.85], y: [2.6, 2.9], z: -0.35 },
-        velocity: [0, -0.55, 0],
-        jitter: [0.04, 0.1, 0.04],
-        sway: [0.08, 0.8],
-        fallback: 0xa6ab9f,
+        size: [0.09, 0.13],
+        fade: [0.3, 0.4],
+        spawn: { radius: [0.3, 0.95], y: [0, 2.4], z: -0.1 },
+        front: 0.4,
+        clear: 0.4,
+        velocity: [0, -0.03, 0],
+        wander: 0.06,
+        drag: 1.2,
+        fallback: 0xd8dccf,
       },
     ],
   },
+  // Under any tree: bright green leaves tumbling down and swaying.
   "falling-leaves": {
     layers: [
       {
         particle: "tinted_leaves",
-        count: 30,
+        count: 26,
         mode: "tumble",
         tints: FOLIAGE,
-        shade: [1.6, 2.1],
+        shade: [1.7, 2.3],
         life: [5, 8],
-        size: [0.15, 0.21],
-        fade: [0.03, 0.05],
-        spawn: { radius: [0, 0.85], y: [2.6, 2.9], z: -0.35 },
-        velocity: [0, -0.55, 0],
+        size: [0.13, 0.19],
+        fade: [0.03, 0.06],
+        spawn: { radius: [0, 0.9], y: [2.6, 2.9], z: -0.2 },
+        front: 0.35,
+        clear: 0.38,
+        velocity: [0, -0.46, 0],
         jitter: [0.04, 0.1, 0.04],
-        sway: [0.08, 0.8],
-        fallback: 0x59ae30,
+        sway: [0.12, 0.75],
+        fallback: 0x6cc23a,
       },
     ],
   },
+  // Lush caves: glowing green spores hanging and drifting in the air, others
+  // falling from the blossom above, all under a soft green light.
   "spore-blossom": {
+    ambient: 0xdaf5cb,
+    light: { color: 0x8fe36a, intensity: 2.5, steady: true },
     layers: [
       {
         particle: "spore_blossom_air",
-        count: 45,
-        tints: [0x528038],
-        shade: [1.6, 2.2],
+        count: 34,
+        blend: "additive",
+        tints: [0x9be36a, 0x7fd156, 0xb6f08a],
+        shade: [1.1, 1.5],
         life: [4, 8],
-        size: [0.24, 0.3],
-        fade: [0.25, 0.3],
-        spawn: { radius: [0.15, 0.85], y: [0, 2.2], z: -0.1 },
-        velocity: [0, -0.02, 0],
-        wander: 0.25,
-        drag: 1.2,
-        fallback: 0x7cc050,
+        size: [0.2, 0.26],
+        fade: [0.3, 0.4],
+        flicker: 0.15,
+        spawn: { radius: [0.3, 0.9], y: [0, 2.3], z: -0.05 },
+        front: 0.4,
+        clear: 0.4,
+        velocity: [0, 0.03, 0],
+        wander: 0.18,
+        drag: 1.3,
+        fallback: 0x9be36a,
       },
       {
         particle: "falling_spore_blossom",
-        count: 10,
-        tints: [0x528038],
-        shade: [1.3, 2],
+        count: 12,
+        tints: [0x7fc452],
+        shade: [1.4, 1.9],
         life: [6, 8],
-        size: [0.16, 0.22],
-        fade: [0.03, 0.05],
-        spawn: { radius: [0, 0.8], y: [2.5, 2.8], z: -0.2 },
-        velocity: [0, -0.4, 0],
-        sway: [0.04, 1],
-        fallback: 0x7cc050,
+        size: [0.16, 0.2],
+        fade: [0.03, 0.06],
+        spawn: { radius: [0, 0.75], y: [2.5, 2.8], z: -0.15 },
+        front: 0.4,
+        clear: 0.36,
+        velocity: [0, -0.32, 0],
+        sway: [0.06, 0.9],
+        fallback: 0x7fc452,
       },
     ],
   },
+  // Snow: flakes falling softly, under a cold light.
   snowfall: {
+    ambient: 0xe2efff,
+    light: { color: 0xbfe3ff, intensity: 2, steady: true },
     layers: [
       {
         particle: "snowflake",
-        count: 45,
+        count: 40,
         frames: "life",
-        life: [5, 8],
-        size: [0.12, 0.17],
+        life: [6, 9],
+        size: [0.1, 0.15],
         fade: [0.03, 0.08],
-        spawn: { radius: [0, 0.85], y: [2.5, 2.8], z: -0.35 },
-        velocity: [0, -0.5, 0],
-        jitter: [0.05, 0.1, 0.05],
-        sway: [0.07, 1.1],
+        spawn: { radius: [0, 0.95], y: [2.5, 2.8], z: -0.2 },
+        front: 0.45,
+        clear: 0.36,
+        velocity: [0, -0.38, 0],
+        jitter: [0.05, 0.08, 0.05],
+        sway: [0.09, 0.9],
         fallback: 0xffffff,
       },
     ],
   },
+  // Crimson forest: red spores glowing as they drift down, red light.
   "crimson-spores": {
+    ambient: 0xffd2ca,
+    light: { color: 0xff3a2a, intensity: 2, steady: true },
     layers: [
       {
         particle: "crimson_spore",
-        count: 70,
-        tints: [0xe02020, 0xb81818, 0xff4a3a],
-        life: [4, 8],
-        size: [0.28, 0.36],
-        fade: [0.25, 0.3],
-        spawn: { radius: [0.1, 0.85], y: [-0.1, 2.3] },
-        velocity: [0, -0.08, 0],
-        wander: 0.15,
-        drag: 0.8,
-        fallback: 0xe02020,
+        count: 46,
+        blend: "additive",
+        tints: [0xff3b2f, 0xd62020, 0xff6a4a],
+        shade: [1, 1.4],
+        life: [5, 9],
+        size: [0.38, 0.46],
+        fade: [0.3, 0.4],
+        flicker: 0.1,
+        spawn: { radius: [0.3, 0.95], y: [-0.1, 2.4], z: -0.1 },
+        front: 0.35,
+        clear: 0.4,
+        velocity: [0, -0.06, 0],
+        wander: 0.12,
+        drag: 0.9,
+        fallback: 0xff3b2f,
       },
     ],
   },
+  // Warped forest: turquoise spores rising slowly, teal light.
   "warped-spores": {
+    ambient: 0xcdf5ef,
+    light: { color: 0x2fd6c8, intensity: 2, steady: true },
     layers: [
       {
         particle: "warped_spore",
-        count: 70,
-        tints: [0x3fd0e0, 0x2a9fd6, 0x4ae8c8],
-        life: [4, 8],
-        size: [0.28, 0.36],
-        fade: [0.25, 0.3],
-        spawn: { radius: [0.1, 0.85], y: [-0.1, 2.3] },
-        velocity: [0, 0.08, 0],
-        wander: 0.15,
-        drag: 0.8,
-        fallback: 0x3fd0e0,
+        count: 46,
+        blend: "additive",
+        tints: [0x3fe0e0, 0x2ab0d6, 0x4ae8c8],
+        shade: [1, 1.4],
+        life: [5, 9],
+        size: [0.38, 0.46],
+        fade: [0.3, 0.4],
+        flicker: 0.1,
+        spawn: { radius: [0.3, 0.95], y: [-0.1, 2.4], z: -0.1 },
+        front: 0.35,
+        clear: 0.4,
+        velocity: [0, 0.07, 0],
+        wander: 0.12,
+        drag: 0.9,
+        fallback: 0x3fe0e0,
       },
     ],
   },
+  // Soul sand valley / basalt deltas: ash falling at a slant, pale and dark
+  // flakes (mostly pale, the dark ones vanish against the card).
   ash: {
     layers: [
       {
-        particle: "ash",
-        count: 40,
-        tints: [0x3c3c3c, 0x555555],
-        life: [4, 7],
-        size: [0.3, 0.36],
+        particle: "white_ash",
+        count: 34,
+        tints: [0xd6d6d6, 0xf0f0f0, 0xbdbdbd],
+        life: [5, 8],
+        size: [0.16, 0.22],
         fade: [0.2, 0.3],
-        spawn: { radius: [0.1, 0.85], y: [0, 2.4] },
-        velocity: [0.05, -0.18, 0],
-        wander: 0.12,
+        spawn: { radius: [0.1, 0.95], y: [0, 2.6], z: -0.05 },
+        front: 0.45,
+        clear: 0.36,
+        velocity: [0.08, -0.22, 0],
+        wander: 0.1,
         drag: 0.6,
-        fallback: 0x4a4a4a,
+        fallback: 0xe0e0e0,
       },
       {
-        particle: "white_ash",
-        count: 25,
-        tints: [0xc8c8c8, 0xe6e6e6],
-        life: [4, 7],
-        size: [0.3, 0.36],
+        particle: "ash",
+        count: 22,
+        tints: [0x5a5a5a, 0x6e6e6e],
+        life: [5, 8],
+        size: [0.18, 0.24],
         fade: [0.2, 0.3],
-        spawn: { radius: [0.1, 0.85], y: [0, 2.4] },
-        velocity: [0.05, -0.18, 0],
-        wander: 0.12,
+        spawn: { radius: [0.1, 0.95], y: [0, 2.6], z: -0.05 },
+        front: 0.45,
+        clear: 0.36,
+        velocity: [0.08, -0.22, 0],
+        wander: 0.1,
         drag: 0.6,
-        fallback: 0xd0d0d0,
+        fallback: 0x666666,
       },
     ],
   },
+  // Soul speed: souls breaking free from the ground at the feet and rising.
   souls: {
+    ambient: 0xcbeff4,
+    light: { color: 0x4fd6e6, intensity: 2.5, steady: true },
     layers: [
       {
         particle: "soul",
-        count: 10,
+        count: 12,
         frames: "life",
-        life: [1.6, 2.4],
-        size: [0.3, 0.38],
-        fade: [0.05, 0.2],
-        spawn: { radius: [0.2, 0.7], y: [0, 1.2] },
-        velocity: [0, 0.35, 0],
-        jitter: [0.05, 0.1, 0.05],
+        // its first frames are the brown sand it breaks out of: straight to the soul
+        frameStart: 0.4,
+        life: [2, 3],
+        size: [0.28, 0.34],
+        fade: [0.05, 0.25],
+        spawn: { radius: [0.35, 0.8], y: [-0.05, 0.3], z: -0.05 },
+        front: 0.35,
+        clear: 0.42,
+        velocity: [0, 0.42, 0],
+        jitter: [0.06, 0.08, 0.06],
         fallback: 0x5fd8e6,
       },
     ],
   },
+  // Enchanting table: runes drifting in from all round and flying to you,
+  // vanishing as they reach you, under a lilac glow.
   enchant: {
+    ambient: 0xe6ddff,
+    light: { color: 0xa98bff, intensity: 2.5, steady: true },
     layers: [
       {
         particle: "enchant",
-        count: 30,
-        tints: [0xe6e6ff],
-        shade: [0.6, 1],
-        life: [1.4, 2.2],
-        size: [0.16, 0.2],
-        fade: [0.1, 0.25],
-        spawn: { radius: [0.6, 0.85], y: [0.4, 1.9] },
-        velocity: [0, 0.25, 0],
-        drag: 0.8,
-        attract: { strength: 2.2, y: 1.1, z: 0.4 },
+        count: 28,
+        blend: "additive",
+        tints: [0xffffff, 0xd9ccff, 0xbfa8ff],
+        shade: [0.85, 1.1],
+        life: [1.6, 2.4],
+        size: [0.13, 0.17],
+        fade: [0.15, 0.45],
+        spawn: { radius: [0.75, 1.0], y: [0.2, 2.1] },
+        front: 0.5,
+        clear: 0.45,
+        velocity: [0, 0.15, 0],
+        drag: 0.6,
+        attract: { strength: 1.4, y: 1.15, z: -0.3 },
         fallback: 0xe6e6ff,
       },
     ],
   },
+  // Nether portal / endermen: purple motes swirling in and shrinking away.
   portal: {
+    ambient: 0xecd2ff,
+    light: { color: 0xb04cff, intensity: 3, steady: true },
     layers: [
       {
         particle: "portal",
-        count: 60,
-        tints: [0xe64dff],
-        shade: [0.75, 1.25],
-        life: [1, 1.8],
-        size: [0.2, 0.28],
-        sizeOverLife: [1, 0.3],
+        count: 50,
+        blend: "additive",
+        tints: [0xc04bff, 0x9a2bff, 0xe070ff],
+        shade: [0.8, 1.3],
+        life: [1.2, 2],
+        size: [0.14, 0.2],
+        sizeOverLife: [1, 0.25],
         fade: [0.1, 0.2],
-        spawn: { radius: [0.55, 0.85], y: [0, 2] },
-        attract: { strength: 1.5, y: 1 },
+        spawn: { radius: [0.55, 0.95], y: [0, 2.1] },
+        front: 0.4,
+        clear: 0.42,
+        attract: { strength: 1.3, y: 1, z: -0.2 },
         drag: 0.5,
         fallback: 0xb03cd0,
       },
     ],
   },
+  // End rod: small white sparkles hanging and twinkling.
   "end-rod": {
+    light: { color: 0xfff6e0, intensity: 1.6, steady: true },
     layers: [
       {
         particle: "end_rod",
-        count: 24,
+        count: 22,
         frames: "life",
         blend: "additive",
-        life: [2.5, 4],
-        size: [0.18, 0.24],
-        fade: [0.1, 0.35],
-        flicker: 0.6,
-        spawn: { radius: [0.2, 0.85], y: [0, 2.1] },
-        velocity: [0, 0.02, 0],
-        wander: 0.12,
+        life: [3, 5],
+        size: [0.1, 0.15],
+        fade: [0.15, 0.4],
+        flicker: 0.5,
+        spawn: { radius: [0.35, 0.95], y: [0, 2.2], z: -0.05 },
+        front: 0.35,
+        clear: 0.42,
+        velocity: [0, 0.05, 0],
+        wander: 0.08,
         drag: 1,
         fallback: 0xffffff,
       },
     ],
   },
+  // Glow squid: turquoise glints in the dark.
   glow: {
     night: true,
     layers: [
@@ -300,10 +402,12 @@ export const PARTICLE_EFFECTS = {
         blend: "additive",
         tints: [0x99ffcc, 0x4fd6c6, 0x2aa7a0],
         life: [2, 4],
-        size: [0.2, 0.28],
+        size: [0.16, 0.22],
         sizeOverLife: [1, 0.6],
         fade: [0.2, 0.4],
-        spawn: { radius: [0.2, 0.85], y: [0, 2.1] },
+        spawn: { radius: [0.3, 0.95], y: [0, 2.2], z: -0.05 },
+        front: 0.4,
+        clear: 0.4,
         velocity: [0, 0.05, 0],
         wander: 0.2,
         drag: 1.2,
@@ -311,23 +415,40 @@ export const PARTICLE_EFFECTS = {
       },
     ],
   },
+  // Sculk catalyst: souls escaping upward, charge pops at the feet, in the dark.
   "sculk-souls": {
     night: true,
     layers: [
       {
         particle: "sculk_soul",
-        count: 16,
+        count: 12,
         frames: "life",
         blend: "additive",
-        life: [1.4, 2],
-        size: [0.36, 0.44],
+        life: [1.6, 2.2],
+        size: [0.3, 0.38],
         fade: [0.05, 0.2],
-        spawn: { radius: [0.25, 0.75], y: [0, 1.4] },
+        spawn: { radius: [0.4, 0.85], y: [0, 1.4], z: -0.05 },
+        front: 0.3,
+        clear: 0.45,
         velocity: [0, 0.4, 0],
+        fallback: 0x2fe0e8,
+      },
+      {
+        particle: "sculk_charge_pop",
+        count: 8,
+        frames: "life",
+        blend: "additive",
+        life: [0.8, 1.3],
+        size: [0.12, 0.18],
+        fade: [0.05, 0.3],
+        spawn: { radius: [0.2, 0.75], y: [0, 0.1] },
+        front: 0.5,
+        velocity: [0, 0.15, 0],
         fallback: 0x2fe0e8,
       },
     ],
   },
+  // Note block: coloured notes popping out around the head.
   notes: {
     layers: [
       {
@@ -336,99 +457,147 @@ export const PARTICLE_EFFECTS = {
         tints: [0x5bff3c, 0xffe33c, 0xff6a3c, 0xff3cb4, 0xb43cff, 0x3c7bff, 0x3cf0ff],
         shade: [1.4, 1.8],
         life: [1.2, 1.8],
-        size: [0.2, 0.26],
+        size: [0.18, 0.24],
         fade: [0.1, 0.35],
-        spawn: { radius: [0.3, 0.8], y: [1.2, 2] },
+        spawn: { radius: [0.45, 0.85], y: [1.3, 2.1] },
+        front: 0.5,
+        clear: 0.45,
         velocity: [0, 0.35, 0],
         drag: 1.5,
         fallback: 0x5bff3c,
       },
     ],
   },
+  // Lightning rod: short-lived sparks jumping about, with a flickering
+  // electric light.
   "electric-spark": {
+    light: { color: 0xbfe6ff, intensity: 0.4 },
     layers: [
       {
         particle: "electric_spark",
-        count: 30,
+        count: 26,
         blend: "additive",
         tints: [0xffffff, 0xd7f2ff, 0xfff5b0],
-        life: [0.2, 0.5],
-        size: [0.1, 0.16],
+        life: [0.15, 0.4],
+        size: [0.08, 0.13],
         fade: [0, 0.5],
         flicker: 0.8,
-        spawn: { radius: [0.2, 0.8], y: [0, 2.1] },
+        spawn: { radius: [0.35, 0.9], y: [0, 2.2] },
+        front: 0.4,
+        clear: 0.4,
         jitter: [0.8, 0.8, 0.8],
         drag: 4,
         fallback: 0xd7f2ff,
       },
     ],
   },
+  // Breeding / taming: a few hearts floating up around you.
   hearts: {
     layers: [
       {
         particle: "heart",
-        count: 7,
-        life: [1.6, 2.4],
-        size: [0.2, 0.24],
-        fade: [0.1, 0.3],
-        spawn: { radius: [0.3, 0.75], y: [0.8, 1.5] },
-        velocity: [0, 0.3, 0],
+        count: 6,
+        life: [1.8, 2.6],
+        size: [0.16, 0.2],
+        fade: [0.15, 0.35],
+        spawn: { radius: [0.45, 0.8], y: [1.2, 1.9], z: -0.05 },
+        front: 0.4,
+        clear: 0.45,
+        velocity: [0, 0.25, 0],
         jitter: [0.05, 0.05, 0.05],
         drag: 0.5,
         fallback: 0xd32a2a,
       },
     ],
   },
+  // Dragon's breath: a glowing purple cloud lingering at the feet, a few
+  // motes rising off it.
   "dragon-breath": {
+    ambient: 0xefd6ff,
+    light: { color: 0xb04cff, intensity: 3, steady: true },
     layers: [
       {
         particle: "dragon_breath",
-        count: 40,
+        count: 46,
         frames: "life",
-        opacity: 0.55,
+        blend: "additive",
+        opacity: 0.45,
         tints: [0xc04dff, 0xe060ff, 0x9a3dff],
         shade: [0.8, 1.1],
-        life: [2, 3.5],
-        size: [0.25, 0.4],
-        sizeOverLife: [0.6, 1.2],
-        fade: [0.2, 0.4],
-        spawn: { radius: [0.1, 0.8], y: [0, 0.5] },
-        velocity: [0, 0.06, 0],
-        jitter: [0.12, 0.03, 0.12],
+        life: [2.5, 4],
+        size: [0.3, 0.5],
+        sizeOverLife: [0.5, 1.3],
+        fade: [0.25, 0.45],
+        spawn: { radius: [0.15, 0.85], y: [0, 0.35] },
+        velocity: [0, 0.04, 0],
+        jitter: [0.1, 0.02, 0.1],
         drag: 0.6,
         fallback: 0xc04dff,
       },
+      {
+        particle: "dragon_breath",
+        count: 10,
+        frames: "life",
+        blend: "additive",
+        tints: [0xe9a6ff],
+        life: [1.6, 2.4],
+        size: [0.08, 0.12],
+        fade: [0.1, 0.4],
+        spawn: { radius: [0.3, 0.8], y: [0, 0.6] },
+        front: 0.4,
+        clear: 0.42,
+        velocity: [0, 0.3, 0],
+        jitter: [0.04, 0.05, 0.04],
+        fallback: 0xe9a6ff,
+      },
     ],
   },
+  // Campfire: smoke rising behind you, flames at your feet and embers
+  // popping out of them, by the fire's warm flickering light.
   campfire: {
-    light: { color: 0xff9a3c, intensity: 0.5 },
+    light: { color: 0xff9a3c, intensity: 0.55 },
     layers: [
       {
         particle: "campfire_cosy_smoke",
-        count: 10,
+        count: 9,
         frames: "life",
-        opacity: 0.85,
+        opacity: 0.6,
         life: [4, 6],
-        size: [0.6, 0.9],
-        sizeOverLife: [0.7, 1.3],
-        fade: [0.15, 0.5],
-        spawn: { radius: [0, 0.5], y: [0, 0.6], z: -0.3 },
-        velocity: [0, 0.35, 0],
+        size: [0.7, 1],
+        sizeOverLife: [0.6, 1.3],
+        fade: [0.2, 0.5],
+        spawn: { radius: [0.2, 0.6], y: [0.2, 0.8], z: -0.4 },
+        front: 0,
+        velocity: [0, 0.3, 0],
         wander: 0.05,
         spin: [-0.3, 0.3],
         fallback: 0x6b6661,
       },
       {
         particle: "flame",
-        count: 18,
+        count: 14,
         life: [0.6, 1.1],
-        size: [0.16, 0.22],
+        size: [0.15, 0.2],
         sizeOverLife: [1, 0.2],
         fade: [0, 0.3],
-        spawn: { radius: [0.3, 0.7], y: [0, 0.25] },
+        spawn: { radius: [0.35, 0.7], y: [0, 0.2] },
+        front: 0.6,
         velocity: [0, 0.25, 0],
         jitter: [0.03, 0.05, 0.03],
         fallback: 0xff8a00,
+      },
+      {
+        particle: "lava",
+        count: 6,
+        life: [0.9, 1.5],
+        size: [0.06, 0.09],
+        fade: [0, 0.4],
+        spawn: { radius: [0.25, 0.65], y: [0, 0.2] },
+        front: 0.5,
+        velocity: [0, 0.9, 0],
+        jitter: [0.25, 0.2, 0.25],
+        gravity: -1.6,
+        fallback: 0xff7a1a,
       },
     ],
   },
@@ -606,9 +775,13 @@ class ParticleLayerSystem {
     const d = this.def;
     const angle = Math.random() * Math.PI * 2;
     const r = rand(d.spawn.radius);
-    this.pos[i * 3] = Math.cos(angle) * r;
+    let x = Math.cos(angle) * r;
+    let zr = Math.sin(angle) * r * 0.8;
+    if (d.front !== undefined && zr > 0 && Math.random() > d.front) zr = -zr; // send it behind
+    if (d.clear && zr > 0 && Math.abs(x) < d.clear) x = (x < 0 ? -1 : 1) * (d.clear + Math.random() * 0.15);
+    this.pos[i * 3] = x;
     this.pos[i * 3 + 1] = rand(d.spawn.y);
-    this.pos[i * 3 + 2] = Math.sin(angle) * r * 0.8 + (d.spawn.z ?? 0);
+    this.pos[i * 3 + 2] = zr + (d.spawn.z ?? 0);
     const [vx, vy, vz] = d.velocity ?? [0, 0, 0];
     const [jx, jy, jz] = d.jitter ?? [0, 0, 0];
     this.vel[i * 3] = vx + (Math.random() * 2 - 1) * jx;
@@ -686,7 +859,10 @@ class ParticleLayerSystem {
       let alpha = (d.opacity ?? 1) * Math.min(1, fadeIn > 0 ? t / fadeIn : 1) * Math.min(1, fadeOut > 0 ? (1 - t) / fadeOut : 1);
       if (d.flicker) alpha *= 1 - d.flicker * 0.5 * (1 + Math.sin(this.time * 17 + this.phase[i] * 5));
       this.aAlpha.setX(i, Math.max(0, alpha));
-      if (d.frames === "life") this.aFrame.setX(i, Math.min(this.frameCount - 1, Math.floor(t * this.frameCount)));
+      if (d.frames === "life") {
+        const f0 = d.frameStart ?? 0;
+        this.aFrame.setX(i, Math.min(this.frameCount - 1, Math.floor((f0 + t * (1 - f0)) * this.frameCount)));
+      }
 
       const k = i * 3;
       let x = this.pos[k];
@@ -741,6 +917,7 @@ export class ParticleEffect {
   private layers: ParticleLayerSystem[];
   private light: THREE.PointLight | null = null;
   private baseIntensity = 0;
+  private steady = false;
   private time = 0;
 
   constructor(def: ParticleEffectDef, lift = 0) {
@@ -748,8 +925,14 @@ export class ParticleEffect {
     for (const l of this.layers) this.object.add(l.mesh);
     if (def.light) {
       this.baseIntensity = def.light.intensity;
-      this.light = new THREE.PointLight(def.light.color, def.light.intensity, 2.8, 2);
-      this.light.position.set(0, 0.15, 0.7);
+      this.steady = !!def.light.steady;
+      // Fire: low, at the feet. Mood lights: in front of the body, wide and
+      // soft, so they tint the whole character evenly.
+      this.light = this.steady
+        ? new THREE.PointLight(def.light.color, def.light.intensity, 6, 1.2)
+        : new THREE.PointLight(def.light.color, def.light.intensity, 2.8, 2);
+      if (this.steady) this.light.position.set(0, 1.2, 1.4);
+      else this.light.position.set(0, 0.15, 0.7);
       this.object.add(this.light);
     }
   }
@@ -757,7 +940,10 @@ export class ParticleEffect {
   update(dt: number) {
     this.time += dt;
     for (const l of this.layers) l.update(dt);
-    if (this.light) {
+    if (this.light && this.steady) {
+      // a slow breath, so the mood light feels alive without flickering
+      this.light.intensity = this.baseIntensity * (1 + Math.sin(this.time * 1.3) * 0.08);
+    } else if (this.light) {
       this.light.intensity =
         this.baseIntensity * (1 + Math.sin(this.time * 13) * 0.2 + Math.sin(this.time * 6.7) * 0.15);
     }

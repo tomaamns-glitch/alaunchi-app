@@ -60,6 +60,7 @@ function prefetchLazyPages() {
 }
 import { Titlebar } from "@/components/titlebar";
 import { OnboardingTour } from "@/components/onboarding-tour";
+import { OnlineTour } from "@/components/online-tour";
 import { OptionalGroupsDialog } from "@/components/optional-groups-dialog";
 import { CrashWatcher } from "@/components/crash-watcher";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -69,7 +70,7 @@ import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { useInvites } from "@/hooks/use-invites";
 import { onContentLockPurged, onUpdateInstalled } from "@/services/electron";
 import { useModpacks } from "@/hooks/use-modpacks";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 const queryClient = new QueryClient();
 
@@ -335,6 +336,7 @@ function App() {
             <StartupView />
             <Titlebar />
             <OnboardingTour />
+            <OnlineTour />
             <OptionalGroupsDialog />
             <CrashWatcher />
             <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">

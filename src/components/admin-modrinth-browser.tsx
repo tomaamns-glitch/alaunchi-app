@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangle, Check, Download, Image as ImageIcon, Link2, Loader2, Package, Search, Sparkles } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";

@@ -1,7 +1,7 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 export interface MessageMenuState {
   x: number;
@@ -54,7 +54,7 @@ export function ChatMessageMenu({ menu, onClose }: { menu: MessageMenuState | nu
       />
       <div
         style={{ top, left, width }}
-        className="fixed z-[201] rounded-lg bg-card border border-white/10 shadow-2xl py-1"
+        className="fixed z-[201] rounded-md bg-card border border-transparent shadow-2xl py-1"
       >
         <button
           type="button"

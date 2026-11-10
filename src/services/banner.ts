@@ -10,11 +10,18 @@ export const DEFAULT_PROFILE_BANNER = "./banners/default-profile-banner.png";
  *  DEFAULT_PROFILE_BANNER. */
 export const PRESET_BANNERS: { id: string; label: string; url: string }[] = [
   { id: "default", label: "Predeterminado", url: DEFAULT_PROFILE_BANNER },
-  // Animated presets: free Pexels videos (Pexels License — see
-  // public/banners/NOTICE.md), cut down to small 960×540/640×360 loops.
-  { id: "video-neon", label: "Luces de neón", url: "./banners/video-neon.mp4" },
-  { id: "video-blocks", label: "Bloques", url: "./banners/video-blocks.webm" },
-  { id: "video-portal", label: "Portal de luz", url: "./banners/video-portal.webm" },
+  { id: "night-sky", label: "Noche estrellada", url: "./banners/night-sky.webp" },
+  { id: "violet-sky", label: "Cielo violeta", url: "./banners/violet-sky.webp" },
+  { id: "river-sunset", label: "Atardecer en el río", url: "./banners/river-sunset.webp" },
+  { id: "nether", label: "Nether", url: "./banners/nether.webp" },
+  { id: "the-end", label: "El End", url: "./banners/the-end.webp" },
+  { id: "ocean-ruins", label: "Ruinas submarinas", url: "./banners/ocean-ruins.webp" },
+  { id: "lush-cave", label: "Cueva frondosa", url: "./banners/lush-cave.webp" },
+  { id: "snowy-aurora", label: "Aurora nevada", url: "./banners/snowy-aurora.webp" },
+  { id: "cherry-grove", label: "Cerezos", url: "./banners/cherry-grove.webp" },
+  // The animated presets (video-neon / video-blocks / video-portal) are no
+  // longer offered, but their files stay in public/banners: profiles that
+  // already use one keep showing it.
 ];
 
 /** Video banners (the animated presets) are drawn with a <video>, see BannerMedia. */

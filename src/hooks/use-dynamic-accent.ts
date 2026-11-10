@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { extractDominantColor, type HSL } from "@/lib/dominant-color";
 import { isLightTheme } from "@/lib/theme";
+import { useAdaptiveColor } from "@/lib/adaptive-color";
 
 /** On a light background a light accent (text-accent, icons) barely reads —
  *  darken it there. Same hue, so the instance still "owns" the color. */
@@ -36,6 +37,7 @@ function lerpHue(a: number, b: number, t: number) {
 export function useDynamicAccent(imageUrl: string | undefined | null) {
   const currentRef = useRef<HSL>(DEFAULT_ACCENT);
   const frameRef = useRef<number | undefined>(undefined);
+  const adaptive = useAdaptiveColor((s) => s.enabled);
 
   useEffect(() => {
     const existing = parseAccent(getComputedStyle(document.documentElement).getPropertyValue("--accent"));
@@ -44,6 +46,19 @@ export function useDynamicAccent(imageUrl: string | undefined | null) {
 
   useEffect(() => {
     let cancelled = false;
+
+    // Adaptation off: drop the instance's colours so index.css's own accent
+    // (per theme) shows through.
+    if (!adaptive) {
+      if (frameRef.current) cancelAnimationFrame(frameRef.current);
+      const root = document.documentElement;
+      root.style.removeProperty("--accent");
+      root.style.removeProperty("--primary-border");
+      root.style.removeProperty("--ring");
+      const own = parseAccent(getComputedStyle(root).getPropertyValue("--accent"));
+      currentRef.current = own ?? DEFAULT_ACCENT;
+      return;
+    }
 
     const animateTo = (target: HSL) => {
       const root = document.documentElement;
@@ -83,7 +98,7 @@ export function useDynamicAccent(imageUrl: string | undefined | null) {
     return () => {
       cancelled = true;
     };
-  }, [imageUrl]);
+  }, [imageUrl, adaptive]);
 
   useEffect(() => {
     return () => {

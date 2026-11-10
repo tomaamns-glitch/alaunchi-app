@@ -1,6 +1,7 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ImagePlus, Loader2, Package, Plus, Trash, Upload, X } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -307,14 +308,15 @@ function BuildsEditor({ mod }: { mod: LibraryMod }) {
           <div key={v} className="rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md">
             <div className="flex items-center justify-between px-3 py-2 border-b border-white/5">
               <span className="text-sm font-semibold">Minecraft {v}</span>
-              <button
-                type="button"
-                onClick={() => setVersionToRemove(v)}
-                className="h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/20 hover:text-destructive transition-colors"
-                title="Quitar esta versión"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <Hint label="Quitar esta versión">
+                <button
+                  type="button"
+                  onClick={() => setVersionToRemove(v)}
+                  className="h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/20 hover:text-destructive transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </Hint>
             </div>
             <div className="flex flex-col divide-y divide-white/5">
               {LIBRARY_LOADERS.map((loader) => (
@@ -431,15 +433,16 @@ function BuildSlot({ mod, mcVersion, loader }: { mod: LibraryMod; mcVersion: str
         {build ? "Reemplazar" : "Subir .jar"}
       </Button>
       {build && (
-        <button
-          type="button"
-          onClick={handleRemove}
-          disabled={busy}
-          title="Quitar este archivo"
-          className="h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/20 hover:text-destructive transition-colors disabled:opacity-50"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <Hint label="Quitar este archivo">
+          <button
+            type="button"
+            onClick={handleRemove}
+            disabled={busy}
+            className="h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/20 hover:text-destructive transition-colors disabled:opacity-50"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </Hint>
       )}
     </div>
   );

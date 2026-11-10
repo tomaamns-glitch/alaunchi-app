@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   installSnapshot: (args) => ipcRenderer.invoke("mc:install-snapshot", args),
   listInstanceFiles: (args) => ipcRenderer.invoke("mc:list-instance-files", args),
   deleteInstanceFile: (args) => ipcRenderer.invoke("mc:delete-instance-file", args),
+  renameInstanceFile: (args) => ipcRenderer.invoke("mc:rename-instance-file", args),
   setModEnabled: (args) => ipcRenderer.invoke("mc:set-mod-enabled", args),
   // Diagnóstico de crasheos (electron/crash-diagnosis.js)
   diagnoseCrash: (args) => ipcRenderer.invoke("crash:diagnose", args),
@@ -53,6 +54,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getSchematicPost: (args) => ipcRenderer.invoke("mc:get-schematic-post", args),
   getSchematicFiles: (args) => ipcRenderer.invoke("mc:get-schematic-files", args),
   getCherryPetalFrames: () => ipcRenderer.invoke("mc:get-cherry-petal-frames"),
+  getElytraTexture: () => ipcRenderer.invoke("mc:get-elytra-texture"),
   getParticleFrames: (particleId) => ipcRenderer.invoke("mc:get-particle-frames", { particleId }),
   // DEV ONLY — handlers only exist under `electron:dev` (see main.js).
   devPackList: (kind) => ipcRenderer.invoke("dev:pack-list", { kind }),
@@ -79,6 +81,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   chooseCurseForgeFolder: () => ipcRenderer.invoke("curseforge:choose-folder"),
   importCurseForgeInstance: (args) => ipcRenderer.invoke("curseforge:import", args),
   installModrinthModpack: (args) => ipcRenderer.invoke("modrinth:install-modpack", args),
+  changeModrinthModpackVersion: (args) => ipcRenderer.invoke("modrinth:change-modpack-version", args),
   onModrinthInstallProgress: (callback) => {
     const handler = (_, data) => callback(data);
     ipcRenderer.on("modrinth:install-progress", handler);
@@ -208,6 +211,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   listServerDirectory: (args) => ipcRenderer.invoke("servers:list-directory", args),
   downloadServerFile: (args) => ipcRenderer.invoke("servers:download-file", args),
   uploadServerFile: (args) => ipcRenderer.invoke("servers:upload-file", args),
+  installServerModFromUrl: (args) => ipcRenderer.invoke("servers:install-from-url", args),
   readServerTextFile: (args) => ipcRenderer.invoke("servers:read-text-file", args),
   writeServerTextFile: (args) => ipcRenderer.invoke("servers:write-text-file", args),
   deleteServerFile: (args) => ipcRenderer.invoke("servers:delete-file", args),

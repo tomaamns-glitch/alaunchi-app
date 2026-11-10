@@ -1,3 +1,5 @@
+import { useAdaptiveColor } from "@/lib/adaptive-color";
+
 export interface HSL {
   h: number;
   s: number;
@@ -35,7 +37,8 @@ const cache = new Map<string, Promise<HSL | null>>();
  * (never near-black, near-white, or fully desaturated).
  */
 export function extractDominantColor(imageUrl: string | undefined | null): Promise<HSL | null> {
-  if (!imageUrl) return Promise.resolve(null);
+  // Adaptation off (Personalizar): no instance colour — callers use the app's own.
+  if (!imageUrl || !useAdaptiveColor.getState().enabled) return Promise.resolve(null);
   const cached = cache.get(imageUrl);
   if (cached) return cached;
 

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { formatSize, sizeSuffix, splitOptionalGroups } from "@/components/optional-groups-dialog";
 import type { SnapshotManifest } from "@/services/github";
+import { Hint } from "@/components/hint";
 import type { OptionalGroupChoice } from "@/services/electron";
 
 // "Contenido adicional" screen of an online instance's content manager: every
@@ -27,13 +28,24 @@ function StatusBadge({ installed, total }: { installed: number; total: number })
   const label = installed === 0 ? "No instalado" : installed === total ? "Instalado" : "Instalado en parte";
   const tone =
     installed === total
-      ? "border-accent/30 bg-accent/10 text-accent"
-      : "border-white/15 bg-white/5 text-muted-foreground";
+      ? "bg-accent/15 text-accent"
+      : "bg-white/10 text-gray-300";
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium shrink-0 ${tone}`}>
+    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold shrink-0 ${tone}`}>
       {installed === total && <Check className="h-3 w-3" />}
       {label}
     </span>
+  );
+}
+
+/** Thin accent line along a section's top edge, brightest in the middle —
+ *  same as the account menu's character card. */
+function SectionLine() {
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none absolute top-0 inset-x-0 h-px bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.7),transparent)]"
+    />
   );
 }
 
@@ -116,14 +128,16 @@ export function OptionalContentView({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onBack}
-          className="h-8 w-8 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors shrink-0"
-          aria-label="Volver al contenido"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </button>
+        <Hint label="Volver al contenido">
+          <button
+            type="button"
+            onClick={onBack}
+            className="h-8 w-8 flex items-center justify-center rounded-md bg-white/[0.07] text-gray-300 hover:bg-white/[0.14] hover:text-white transition-colors shrink-0"
+            aria-label="Volver al contenido"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+        </Hint>
         <div className="min-w-0">
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             <Layers className="h-5 w-5 text-accent" /> Contenido adicional
@@ -136,7 +150,8 @@ export function OptionalContentView({
       </div>
 
       {selectable.map((g) => (
-        <section key={g.id} className="rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md p-4">
+        <section key={g.id} className="relative overflow-hidden rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md p-4">
+          <SectionLine />
           <p className="text-[11px] font-semibold uppercase tracking-wide text-accent">{g.name}</p>
           {g.description.trim() && <p className="text-xs text-muted-foreground mt-0.5">{g.description}</p>}
           <div role="radiogroup" aria-label={g.name} className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -151,7 +166,7 @@ export function OptionalContentView({
                   disabled={applying}
                   onClick={() => setPicks((prev) => ({ ...prev, [g.id]: o.id }))}
                   className={`flex items-start gap-3 rounded-md border p-3 text-left transition-colors ${
-                    checked ? "border-accent/60 bg-accent/10" : "border-white/10 bg-black/20 hover:bg-white/[0.06]"
+                    checked ? "border-accent/60 bg-accent/15 shadow-[0_0_12px_hsl(var(--accent)/0.25)]" : "border-white/10 bg-white/[0.04] hover:bg-white/[0.08] hover:border-white/20"
                   }`}
                 >
                   <span
@@ -178,7 +193,8 @@ export function OptionalContentView({
       ))}
 
       {groups.length > 0 && (
-        <section className="rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md p-4">
+        <section className="relative overflow-hidden rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md p-4">
+          <SectionLine />
           {selectable.length > 0 && (
             <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-3">Extras</p>
           )}
@@ -189,7 +205,7 @@ export function OptionalContentView({
                 <label
                   key={g.id}
                   className={`flex items-center gap-3 rounded-md border p-3 cursor-pointer transition-colors ${
-                    on ? "border-accent/40 bg-accent/[0.07]" : "border-white/10 bg-black/20 hover:bg-white/[0.06]"
+                    on ? "border-accent/60 bg-accent/15 shadow-[0_0_12px_hsl(var(--accent)/0.25)]" : "border-white/10 bg-white/[0.04] hover:bg-white/[0.08] hover:border-white/20"
                   }`}
                 >
                   <div className="min-w-0 flex-1 space-y-1">
@@ -208,7 +224,7 @@ export function OptionalContentView({
         </section>
       )}
 
-      <div className="sticky bottom-3 z-10 flex items-center gap-3 rounded-lg border border-white/10 bg-background/95 backdrop-blur px-4 py-3 shadow-xl">
+      <div className="sticky bottom-3 z-10 flex items-center gap-3 rounded-md border border-transparent bg-background/60 backdrop-blur-xl px-4 py-3 shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
         <p className="text-xs text-muted-foreground min-w-0 flex-1">
           {!dirty
             ? "Sin cambios."
@@ -221,7 +237,7 @@ export function OptionalContentView({
           <Button
             variant="ghost"
             size="sm"
-            className="text-muted-foreground hover:text-white"
+            className="bg-white/[0.07] text-gray-300 hover:bg-white/[0.14] hover:text-white"
             disabled={applying}
             onClick={() => {
               setSelected(initial.selected);

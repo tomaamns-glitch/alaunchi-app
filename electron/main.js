@@ -2142,20 +2142,37 @@ function instanceDirFor(modpackId) {
 async function creditPlaytimeAndClearSession(modpackId, startedAt) {
   const metaPath = path.join(instanceDirFor(modpackId), "alaunchi-meta.json");
   let totalPlaytimeMs = 0;
+  let accountUuid = null;
+  const sessionMs = Math.max(0, Date.now() - startedAt);
   try {
     const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
-    meta.totalPlaytimeMs = (meta.totalPlaytimeMs || 0) + Math.max(0, Date.now() - startedAt);
+    accountUuid = meta.activeSession?.accountUuid || null;
+    const previousTotal = meta.totalPlaytimeMs || 0;
+    meta.totalPlaytimeMs = previousTotal + sessionMs;
     totalPlaytimeMs = meta.totalPlaytimeMs;
+    // Time per account: this file is shared by every account used on this PC, so
+    // the instance total alone would credit one account with another's hours.
+    // Whatever was counted before this existed goes to the first account that
+    // plays afterwards (almost always the owner).
+    if (accountUuid) {
+      const byAccount = meta.playtimeByAccount && typeof meta.playtimeByAccount === "object" ? meta.playtimeByAccount : {};
+      if (!meta.playtimeByAccount) byAccount[accountUuid] = previousTotal;
+      byAccount[accountUuid] = (byAccount[accountUuid] || 0) + sessionMs;
+      meta.playtimeByAccount = byAccount;
+    }
     delete meta.activeSession;
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
   } catch (e) {
     console.warn(`[Playtime] No se pudo actualizar el tiempo jugado de ${modpackId}:`, e.message);
   }
   // Main process has no Firebase/GitHub credentials (renderer-only, by design) —
-  // just tell the renderer which modpack's session ended (and the fresh total)
-  // so it can mark itself offline and publish the new playtime to presence.
+  // just tell the renderer which modpack's session ended (the session's length
+  // and which account played it) so it can mark itself offline and ADD the
+  // session to the playtime published to presence/profile. Adding (not
+  // overwriting with this PC's total) is what keeps the real time when the
+  // account is also used on another PC or this one has been reinstalled.
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send("playtime:session-ended", { modpackId, totalPlaytimeMs });
+    mainWindow.webContents.send("playtime:session-ended", { modpackId, totalPlaytimeMs, sessionMs, accountUuid });
   }
 }
 
@@ -2527,6 +2544,21 @@ function normalizeCurseForgeDir(dir) {
   return null;
 }
 
+// The picture an imported instance gets when it had none (public/instances/
+// default-icon.png; packaged: dist/instances/…), resized per use.
+const defaultIconCache = new Map();
+function defaultInstanceIcon(size) {
+  if (defaultIconCache.has(size)) return defaultIconCache.get(size);
+  let out = null;
+  try {
+    const file = path.join(__dirname, isDev ? "../public/instances/default-icon.png" : "../dist/instances/default-icon.png");
+    const img = nativeImage.createFromPath(file);
+    if (!img.isEmpty()) out = img.resize({ width: size, height: size, quality: "good" }).toDataURL();
+  } catch {}
+  defaultIconCache.set(size, out);
+  return out;
+}
+
 async function readCurseForgeInstance(instancesDir, folder, iconSize = 96) {
   const dir = path.join(instancesDir, folder);
   let info;
@@ -2554,6 +2586,9 @@ async function readCurseForgeInstance(instancesDir, folder, iconSize = 96) {
       }
     } catch {}
   }
+
+  // No picture at all: ALaunchi's own default icon (the allay at its forge).
+  if (!iconDataUrl) iconDataUrl = defaultInstanceIcon(iconSize);
 
   const lastPlayed = Date.parse(info.lastPlayed || "");
   return {
@@ -2697,6 +2732,90 @@ function isAllowedMrpackUrl(url) {
   }
 }
 
+async function downloadMrpack(url, sha1, packPath, onProgress) {
+  await downloadFile(url, packPath, onProgress);
+  if (sha1 && (await hashFileSha1(packPath)) !== String(sha1).toLowerCase()) {
+    throw new Error("El modpack llegó dañado (el hash no coincide). Vuelve a intentarlo.");
+  }
+}
+
+/** Reads an .mrpack. `overrides` maps each path to its zip entry, with
+ *  client-overrides/ on top of overrides/. */
+function readMrpack(packPath) {
+  const zip = new AdmZip(packPath);
+  const indexEntry = zip.getEntry("modrinth.index.json");
+  if (!indexEntry) throw new Error("El archivo no es un modpack de Modrinth (falta modrinth.index.json).");
+  const index = JSON.parse(indexEntry.getData().toString("utf8"));
+  if (index.game !== "minecraft") throw new Error("Este modpack no es de Minecraft.");
+  const deps = index.dependencies || {};
+  const minecraftVersion = deps.minecraft;
+  if (!minecraftVersion) throw new Error("El modpack no indica la versión de Minecraft.");
+  if (deps["quilt-loader"]) throw new Error("Este modpack usa Quilt, que ALaunchi no admite.");
+  const loaderKey = Object.keys(MRPACK_LOADERS).find((k) => deps[k]);
+  const overrides = new Map();
+  for (const prefix of ["overrides/", "client-overrides/"]) {
+    for (const entry of zip.getEntries()) {
+      if (entry.isDirectory || !entry.entryName.startsWith(prefix)) continue;
+      const rel = entry.entryName.slice(prefix.length);
+      if (rel) overrides.set(rel, entry);
+    }
+  }
+  return {
+    name: index.name,
+    minecraftVersion,
+    loaderType: loaderKey ? MRPACK_LOADERS[loaderKey] : "vanilla",
+    loaderVersion: loaderKey ? deps[loaderKey] : undefined,
+    // Client side only: files marked unsupported on the client are server-only.
+    files: (index.files || []).filter((f) => f && f.path && (f.env?.client ?? "required") !== "unsupported"),
+    overrides,
+  };
+}
+
+/** Downloads files of an .mrpack under `root`, in parallel; every failure is
+ *  collected before giving up so the error lists all of them at once. */
+async function downloadMrpackFiles(files, root, send) {
+  let done = 0;
+  const failures = [];
+  send({ stage: "files", done, total: files.length });
+  let next = 0;
+  const worker = async () => {
+    while (next < files.length) {
+      const f = files[next++];
+      let dest;
+      try {
+        dest = safeJoin(root, f.path);
+      } catch {
+        failures.push(`${f.path} (ruta no válida)`);
+        continue;
+      }
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      const mirrors = (f.downloads || []).filter(isAllowedMrpackUrl);
+      let ok = false;
+      for (const mirror of mirrors) {
+        try {
+          await downloadFile(mirror, dest);
+          if (f.hashes?.sha1 && (await hashFileSha1(dest)) !== String(f.hashes.sha1).toLowerCase()) {
+            throw new Error("hash");
+          }
+          ok = true;
+          break;
+        } catch {
+          await fs.rm(dest, { force: true }).catch(() => {});
+        }
+      }
+      if (!ok) failures.push(path.basename(f.path));
+      done++;
+      send({ stage: "files", done, total: files.length, current: path.basename(f.path) });
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker));
+  if (failures.length) {
+    throw new Error(
+      `No se pudieron descargar ${failures.length} archivo(s) del modpack: ${failures.slice(0, 8).join(", ")}${failures.length > 8 ? "…" : ""}`
+    );
+  }
+}
+
 ipcMain.handle("modrinth:install-modpack", async (event, { url, sha1, name, iconDataUrl, bannerDataUrl, projectId, versionId, versionNumber }) => {
   if (!isAllowedMrpackUrl(url) || !url.endsWith(".mrpack")) throw new Error("Enlace de modpack no válido.");
   const send = (data) => {
@@ -2708,85 +2827,21 @@ ipcMain.handle("modrinth:install-modpack", async (event, { url, sha1, name, icon
   let instanceDir = null;
   try {
     send({ stage: "pack", done: 0, total: 0 });
-    await downloadFile(url, packPath, (done, total) => send({ stage: "pack", done, total }));
-    if (sha1 && (await hashFileSha1(packPath)) !== String(sha1).toLowerCase()) {
-      throw new Error("El modpack llegó dañado (el hash no coincide). Vuelve a intentarlo.");
-    }
-
-    const zip = new AdmZip(packPath);
-    const indexEntry = zip.getEntry("modrinth.index.json");
-    if (!indexEntry) throw new Error("El archivo no es un modpack de Modrinth (falta modrinth.index.json).");
-    const index = JSON.parse(indexEntry.getData().toString("utf8"));
-    if (index.game !== "minecraft") throw new Error("Este modpack no es de Minecraft.");
-    const deps = index.dependencies || {};
-    const minecraftVersion = deps.minecraft;
-    if (!minecraftVersion) throw new Error("El modpack no indica la versión de Minecraft.");
-    if (deps["quilt-loader"]) throw new Error("Este modpack usa Quilt, que ALaunchi no admite.");
-    const loaderKey = Object.keys(MRPACK_LOADERS).find((k) => deps[k]);
-    const loaderType = loaderKey ? MRPACK_LOADERS[loaderKey] : "vanilla";
-    const loaderVersion = loaderKey ? deps[loaderKey] : undefined;
-
-    // Client side only: files marked unsupported on the client are server-only.
-    const files = (index.files || []).filter((f) => f && f.path && (f.env?.client ?? "required") !== "unsupported");
+    await downloadMrpack(url, sha1, packPath, (done, total) => send({ stage: "pack", done, total }));
+    const index = readMrpack(packPath);
+    const { minecraftVersion, loaderType, loaderVersion, files } = index;
 
     const id = await generateInstanceId(name || index.name || "modpack");
     instanceDir = path.join(CUSTOM_INSTANCES_DIR, id);
     await fs.mkdir(instanceDir, { recursive: true });
 
-    // Files, in parallel; every failure is collected before giving up so the
-    // error lists all of them at once.
-    let done = 0;
-    const failures = [];
-    send({ stage: "files", done, total: files.length });
-    let next = 0;
-    const worker = async () => {
-      while (next < files.length) {
-        const f = files[next++];
-        let dest;
-        try {
-          dest = safeJoin(instanceDir, f.path);
-        } catch {
-          failures.push(`${f.path} (ruta no válida)`);
-          continue;
-        }
-        await fs.mkdir(path.dirname(dest), { recursive: true });
-        const mirrors = (f.downloads || []).filter(isAllowedMrpackUrl);
-        let ok = false;
-        for (const mirror of mirrors) {
-          try {
-            await downloadFile(mirror, dest);
-            if (f.hashes?.sha1 && (await hashFileSha1(dest)) !== String(f.hashes.sha1).toLowerCase()) {
-              throw new Error("hash");
-            }
-            ok = true;
-            break;
-          } catch {
-            await fs.rm(dest, { force: true }).catch(() => {});
-          }
-        }
-        if (!ok) failures.push(path.basename(f.path));
-        done++;
-        send({ stage: "files", done, total: files.length, current: path.basename(f.path) });
-      }
-    };
-    await Promise.all(Array.from({ length: 6 }, worker));
-    if (failures.length) {
-      throw new Error(
-        `No se pudieron descargar ${failures.length} archivo(s) del modpack: ${failures.slice(0, 8).join(", ")}${failures.length > 8 ? "…" : ""}`
-      );
-    }
+    await downloadMrpackFiles(files, instanceDir, send);
 
-    // overrides/ first, then client-overrides/ on top.
     send({ stage: "overrides", done: 0, total: 0 });
-    for (const prefix of ["overrides/", "client-overrides/"]) {
-      for (const entry of zip.getEntries()) {
-        if (entry.isDirectory || !entry.entryName.startsWith(prefix)) continue;
-        const rel = entry.entryName.slice(prefix.length);
-        if (!rel) continue;
-        const dest = safeJoin(instanceDir, rel);
-        await fs.mkdir(path.dirname(dest), { recursive: true });
-        await fs.writeFile(dest, entry.getData());
-      }
+    for (const [rel, entry] of index.overrides) {
+      const dest = safeJoin(instanceDir, rel);
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      await fs.writeFile(dest, entry.getData());
     }
     for (const sub of ["mods", "resourcepacks", "shaderpacks"]) await fs.mkdir(path.join(instanceDir, sub), { recursive: true });
 
@@ -2817,6 +2872,109 @@ ipcMain.handle("modrinth:install-modpack", async (event, { url, sha1, name, icon
     throw e;
   } finally {
     await fs.rm(packPath, { force: true }).catch(() => {});
+  }
+});
+
+// Moves a Modrinth instance to another version of its modpack, keeping what's
+// the player's. The installed version's .mrpack says what came from the pack:
+// only those files are removed, and only if they're unchanged, so mods added by
+// hand, worlds and edited settings stay. Everything is downloaded first: a network
+// failure leaves the instance as it was.
+const MRPACK_CONTENT_RE = /^(mods|resourcepacks|shaderpacks)\//i;
+
+ipcMain.handle("modrinth:change-modpack-version", async (event, { id, url, sha1, oldUrl, oldSha1, versionId, versionNumber }) => {
+  for (const u of [url, oldUrl]) {
+    if (!isAllowedMrpackUrl(u) || !u.endsWith(".mrpack")) throw new Error("Enlace de modpack no válido.");
+  }
+  const send = (data) => {
+    if (!event.sender.isDestroyed()) event.sender.send("modrinth:install-progress", { versionId, ...data });
+  };
+  const instanceDir = instanceDirFor(id);
+  const metaPath = path.join(instanceDir, "alaunchi-meta.json");
+  const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
+  if (meta.source !== "custom" || meta.importedFrom?.type !== "modrinth") {
+    throw new Error("Esta instancia no se instaló desde Modrinth.");
+  }
+
+  acquireModpackOp(id, "installing");
+  const tag = crypto.randomBytes(4).toString("hex");
+  const packPath = path.join(CACHE_DIR, `modpack-${tag}.mrpack`);
+  const oldPackPath = path.join(CACHE_DIR, `modpack-${tag}-old.mrpack`);
+  const stagingDir = path.join(instanceDir, ".alaunchi-version-change");
+  try {
+    await fs.mkdir(CACHE_DIR, { recursive: true });
+    await fs.rm(stagingDir, { recursive: true, force: true });
+    send({ stage: "pack", done: 0, total: 0 });
+    await downloadMrpack(url, sha1, packPath, (done, total) => send({ stage: "pack", done, total }));
+    await downloadMrpack(oldUrl, oldSha1, oldPackPath, () => {});
+    const next = readMrpack(packPath);
+    const prev = readMrpack(oldPackPath);
+
+    const sha1Of = (data) => crypto.createHash("sha1").update(data).digest("hex");
+    // A mod the player disabled lives as foo.jar.disabled, and stays disabled.
+    const liveFile = (dest) => (!fsSync.existsSync(dest) && fsSync.existsSync(dest + DISABLED_SUFFIX) ? dest + DISABLED_SUFFIX : dest);
+    const hasHash = async (file, hash) => fsSync.existsSync(file) && !!hash && (await hashFileSha1(file)) === String(hash).toLowerCase();
+
+    const toDownload = [];
+    for (const f of next.files) {
+      let unchanged = false;
+      try {
+        unchanged = await hasHash(liveFile(safeJoin(instanceDir, f.path)), f.hashes?.sha1);
+      } catch {
+        // Unsafe path: downloadMrpackFiles reports it.
+      }
+      if (!unchanged) toDownload.push(f);
+    }
+    await downloadMrpackFiles(toDownload, stagingDir, send);
+
+    send({ stage: "overrides", done: 0, total: 0 });
+    const kept = new Set([...next.files.map((f) => f.path), ...next.overrides.keys()]);
+    const removeIfUntouched = async (rel, hash) => {
+      if (kept.has(rel)) return;
+      let file;
+      try {
+        file = liveFile(safeJoin(instanceDir, rel));
+      } catch {
+        return;
+      }
+      if (await hasHash(file, hash)) await fs.rm(file, { force: true });
+    };
+    for (const f of prev.files) await removeIfUntouched(f.path, f.hashes?.sha1);
+    for (const [rel, entry] of prev.overrides) await removeIfUntouched(rel, sha1Of(entry.getData()));
+
+    for (const f of toDownload) {
+      const target = liveFile(safeJoin(instanceDir, f.path));
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.rm(target, { force: true });
+      await fs.rename(safeJoin(stagingDir, f.path), target);
+    }
+
+    // Content always follows the pack. Anything else (config, options.txt...)
+    // only if the player hasn't changed it since the pack put it there.
+    for (const [rel, entry] of next.overrides) {
+      const target = liveFile(safeJoin(instanceDir, rel));
+      if (fsSync.existsSync(target) && !MRPACK_CONTENT_RE.test(rel)) {
+        const before = prev.overrides.get(rel);
+        if (!before || !(await hasHash(target, sha1Of(before.getData())))) continue;
+      }
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, entry.getData());
+    }
+
+    // Written last: if anything above failed, the instance still says what it was.
+    const updated = JSON.parse(await fs.readFile(metaPath, "utf8"));
+    updated.minecraftVersion = next.minecraftVersion;
+    updated.loaderType = next.loaderType;
+    updated.loaderVersion = next.loaderVersion;
+    updated.importedFrom = { ...updated.importedFrom, versionId, versionNumber };
+    await fs.writeFile(metaPath, JSON.stringify(updated, null, 2));
+    console.info(`[modrinth] "${updated.name}" → ${versionNumber} (${toDownload.length} archivos nuevos)`);
+    return updated;
+  } finally {
+    await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(packPath, { force: true }).catch(() => {});
+    await fs.rm(oldPackPath, { force: true }).catch(() => {});
+    releaseModpackOp(id);
   }
 });
 
@@ -3655,6 +3813,26 @@ ipcMain.handle("mc:delete-instance-file", async (_, { modpackId, path: relPath }
   return { success: true };
 });
 
+// Renames an emote or a schematic (the name shown in the manager IS the file
+// name). Only inside those folders, keeping the extension; never overwrites.
+ipcMain.handle("mc:rename-instance-file", async (_, { modpackId, path: relPath, newName }) => {
+  const allowedDirs = ["emotes", ...SCHEMATIC_ROOTS.map((r) => r.rel)];
+  const normalized = String(relPath || "").replace(/\\/g, "/");
+  if (!allowedDirs.some((d) => normalized.startsWith(`${d}/`))) {
+    throw new Error("Solo se pueden renombrar emotes y estructuras.");
+  }
+  const instanceDir = instanceDirFor(modpackId);
+  const from = safeJoin(instanceDir, normalized);
+  const ext = path.extname(from);
+  const base = safeFileName(String(newName || "").trim().replace(new RegExp(`${ext.replace(".", "\\.")}$`, "i"), ""), "");
+  if (!base) throw new Error("El nombre no es válido.");
+  const to = path.join(path.dirname(from), base + ext);
+  if (to === from) return { path: normalized };
+  if (await fs.stat(to).then(() => true, () => false)) throw new Error("Ya hay un archivo con ese nombre.");
+  await fs.rename(from, to);
+  return { path: path.posix.join(path.posix.dirname(normalized), base + ext) };
+});
+
 // CurseForge-style mod toggle: a disabled mod is the same jar renamed to
 // "foo.jar.disabled", which no mod loader picks up. Only mods — shaders and
 // resource packs are switched on and off inside the game.
@@ -3839,27 +4017,22 @@ ipcMain.handle("mc:get-cherry-petal-frames", async () => {
   if (cherryPetalFramesCache !== undefined) return cherryPetalFramesCache;
   cherryPetalFramesCache = null;
   try {
-    const versionsDir = path.join(CACHE_DIR, "versions");
-    const ids = await fs.readdir(versionsDir).catch(() => []);
-    const candidates = ids
-      .map((id) => {
-        const m = /^1\.(\d+)(?:\.(\d+))?$/.exec(id);
-        if (!m || Number(m[1]) < 20) return null; // cherry blossoms landed in 1.20
-        const jar = path.join(versionsDir, id, `${id}.jar`);
-        return fsSync.existsSync(jar) ? { jar, minor: Number(m[1]), patch: Number(m[2] || 0) } : null;
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.minor - a.minor || b.patch - a.patch);
-    if (!candidates.length) return null;
-
-    const zip = new AdmZip(candidates[0].jar);
-    const frames = [];
-    for (let i = 0; i < 12; i++) {
-      const entry = zip.getEntry(`assets/minecraft/textures/particle/cherry_${i}.png`);
-      if (!entry) break;
-      frames.push("data:image/png;base64," + entry.getData().toString("base64"));
+    // Newest jar first (26.x included — the old "1.x only" check left anyone
+    // on the new version numbers with the drawn fallback petal); cherry
+    // blossoms landed in 1.20, older jars just don't have the frames.
+    for (const { jar } of await listClientJarsNewestFirst()) {
+      const zip = new AdmZip(jar);
+      const frames = [];
+      for (let i = 0; i < 12; i++) {
+        const entry = zip.getEntry(`assets/minecraft/textures/particle/cherry_${i}.png`);
+        if (!entry) break;
+        frames.push("data:image/png;base64," + entry.getData().toString("base64"));
+      }
+      if (frames.length === 12) {
+        cherryPetalFramesCache = frames;
+        break;
+      }
     }
-    if (frames.length === 12) cherryPetalFramesCache = frames;
   } catch (e) {
     console.log("[cherry-petals] could not read frames:", e.message);
   }
@@ -3887,6 +4060,29 @@ async function listClientJarsNewestFirst() {
     .filter(Boolean)
     .sort((a, b) => b.v[0] - a.v[0] || b.v[1] - a.v[1] || b.v[2] - a.v[2]);
 }
+// The elytra's own texture (what a player without a cape's elytra looks like),
+// from the newest cached client jar: its path moved in 1.21.2, so both are tried.
+let elytraTextureCache;
+ipcMain.handle("mc:get-elytra-texture", async () => {
+  if (elytraTextureCache !== undefined) return elytraTextureCache;
+  elytraTextureCache = null;
+  try {
+    for (const { jar } of await listClientJarsNewestFirst()) {
+      const zip = new AdmZip(jar);
+      const entry =
+        zip.getEntry("assets/minecraft/textures/entity/equipment/wings/elytra.png") ||
+        zip.getEntry("assets/minecraft/textures/entity/elytra.png");
+      if (entry) {
+        elytraTextureCache = "data:image/png;base64," + entry.getData().toString("base64");
+        break;
+      }
+    }
+  } catch (e) {
+    console.log("[elytra] could not read the texture:", e.message);
+  }
+  return elytraTextureCache;
+});
+
 ipcMain.handle("mc:get-particle-frames", async (_e, { particleId }) => {
   if (!/^[a-z0-9_]+$/.test(particleId || "")) return null;
   if (particleFramesCache.has(particleId)) return particleFramesCache.get(particleId);
@@ -4051,7 +4247,11 @@ ipcMain.handle("mc:get-loader-icons", async () => {
   return out;
 });
 
-ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, authToken, username, uuid, xuid, clientId, displayName, imageUrl, groupKey }) => {
+// `prepareOnly`: does everything a first launch has to download — Minecraft's
+// client, libraries and assets, the modloader, natives and the right Java — and
+// stops before building the arguments and spawning the game. A new instance is
+// prepared like this right after it's created, so its first "Jugar" is instant.
+ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, authToken, username, uuid, xuid, clientId, displayName, imageUrl, groupKey, prepareOnly }) => {
   // Refuse to spawn a second JVM against the same instance/world if one's already
   // running. Nothing else guarantees this: the renderer's "disabled while launching"
   // guards are per-component React state, and the same modpack has independent Play
@@ -4084,12 +4284,12 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   acquireModpackOp(modpackId, "launching");
   try {
   // Bloqueo de contenido: last sweep right before the game reads its mods.
-  if (contentLocks.has(modpackId)) await enforceContentLock(modpackId).catch(() => {});
+  if (!prepareOnly && contentLocks.has(modpackId)) await enforceContentLock(modpackId).catch(() => {});
   const effectiveClientId = clientId || LAUNCHER_CONFIG.azureClientId || "";
-  if (!xuid) {
+  if (!xuid && !prepareOnly) {
     console.warn(`[mc:launch] WARNING: launching with empty --xuid. Online server joins will fail with "Sesión no válida". User should re-login with Microsoft.`);
   }
-  if (!effectiveClientId) {
+  if (!effectiveClientId && !prepareOnly) {
     console.warn(`[mc:launch] WARNING: launching with empty --clientId. Online server joins may fail.`);
   }
   progress.set("preparing", "Preparando");
@@ -4328,6 +4528,13 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
     }
   }
 
+  if (prepareOnly) {
+    // Everything is on disk: tell the renderer (the instance's chip turns into a
+    // "ready" check) and leave without spawning anything.
+    win?.webContents.send("launch-status", { modpackId, stage: "prepared", label: "Instancia lista", phaseProgress: 1, overallProgress: 1 });
+    return { success: true, prepared: true };
+  }
+
   // RAM: the instance's own setting (its configuration dialog) wins over the
   // global one in Ajustes → Archivos y RAM.
   let maxMemory = "2G";
@@ -4427,6 +4634,8 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   // update replaces — or the project folder in dev), and any mod writing to a
   // relative path (Crash Assistant's local/, etc.) put its data there: shared
   // between instances and wiped on each update.
+  // A preparation must NEVER open the game (it returned above; this is the net).
+  if (prepareOnly) throw new Error("prepareOnly: no se debe iniciar el juego.");
   progress.set("launching", "Lanzando");
   const spawnedAt = Date.now();
   const child = spawn(javaPath, mcArgs, { detached: true, stdio, cwd: instanceDir });
@@ -4482,7 +4691,7 @@ ipcMain.handle("mc:launch", async (event, { modpackId, mcVersion, loaderType, au
   try {
     const metaPath = path.join(instanceDir, "alaunchi-meta.json");
     const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
-    meta.activeSession = { pid: child.pid, startedAt: playtimeStartedAt, displayName: sessionInfo.name, mcVersion, loaderType, imageUrl: sessionInfo.imageUrl?.startsWith("https:") ? sessionInfo.imageUrl : null, groupKey: sessionInfo.groupKey };
+    meta.activeSession = { pid: child.pid, startedAt: playtimeStartedAt, accountUuid: String(uuid || "").replace(/-/g, "").toLowerCase() || null, displayName: sessionInfo.name, mcVersion, loaderType, imageUrl: sessionInfo.imageUrl?.startsWith("https:") ? sessionInfo.imageUrl : null, groupKey: sessionInfo.groupKey };
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
   } catch (e) {
     console.warn("[Playtime] No se pudo iniciar el seguimiento de tiempo jugado:", e.message);
@@ -6100,12 +6309,39 @@ async function fetchLibrarySource(source, dest) {
 
 ipcMain.handle("library:list-content", async () => readJsonArray(LIBRARY_CONTENT_INDEX));
 
-// meta: { category, displayName, iconUrl?, modrinthProjectId?, schematicSource?, sourceName? }
+// meta: { category, displayName, iconUrl?, modrinthProjectId?, schematicSource?, sourceName?, reference? }
 ipcMain.handle("library:add-content", async (_, { meta, fileName, source }) => {
   if (!LIBRARY_CATEGORIES.includes(meta?.category)) throw new Error("Tipo de contenido no válido.");
   const list = await readJsonArray(LIBRARY_CONTENT_INDEX);
   const id = crypto.randomUUID();
   const name = safeFileName(fileName, "archivo");
+  // A mod / shader / resource pack that lives on Modrinth (or in the group's
+  // mod library, "lib:" ids) is saved as a reference only: no file on disk. The
+  // renderer resolves the right version for the target instance when installing.
+  if (meta.reference === true) {
+    if (!["mods", "shaderpacks", "resourcepacks"].includes(meta.category) || !meta.modrinthProjectId) {
+      throw new Error("Solo se puede guardar como referencia contenido de Modrinth o de la biblioteca del grupo.");
+    }
+    const projectId = String(meta.modrinthProjectId).slice(0, 100);
+    const dup = list.find((e) => e.reference && e.modrinthProjectId === projectId && e.category === meta.category);
+    if (dup) return { entry: dup, alreadySaved: true };
+    const entry = {
+      id,
+      category: meta.category,
+      fileName: name,
+      displayName: String(meta.displayName || name).slice(0, 200),
+      iconUrl: typeof meta.iconUrl === "string" ? meta.iconUrl : null,
+      sha1: "",
+      size: 0,
+      addedAt: Date.now(),
+      reference: true,
+      modrinthProjectId: projectId,
+      ...(meta.sourceName ? { sourceName: String(meta.sourceName).slice(0, 200) } : {}),
+    };
+    list.push(entry);
+    await writeJsonArray(LIBRARY_CONTENT_INDEX, list);
+    return { entry, alreadySaved: false };
+  }
   const dir = path.join(LIBRARY_CONTENT_DIR, id);
   let sha1;
   try {
@@ -6151,6 +6387,7 @@ ipcMain.handle("library:install-content", async (_, { id, modpackId }) => {
   assertLibraryId(id);
   const entry = (await readJsonArray(LIBRARY_CONTENT_INDEX)).find((e) => e.id === id);
   if (!entry) throw new Error("Ese contenido ya no está en tu biblioteca.");
+  if (entry.reference) throw new Error("Este contenido se instala desde Modrinth, no tiene archivo guardado.");
   const folder =
     entry.category === "schematics"
       ? entry.schematicSource === "worldedit"
@@ -6483,6 +6720,41 @@ ipcMain.handle("servers:create-directory", async (_, { id, remotePath }) => {
   const conn = getLiveConnection(id);
   if (conn.protocol === "sftp") await conn.client.mkdir(remotePath, true);
   else await conn.client.ensureDir(remotePath);
+  return { success: true };
+});
+
+// Puts a mod jar (Modrinth / the group's library) straight on the server: downloaded
+// here, checked against its sha1, then uploaded — the renderer never touches the bytes.
+// `replacePath` (the older build of the same mod, in the same folder) is removed after.
+ipcMain.handle("servers:install-from-url", async (_, { id, remoteDir, fileName, url, sha1, replacePath }) => {
+  const conn = getLiveConnection(id);
+  if (typeof url !== "string" || !/^https:\/\//i.test(url)) throw new Error("Dirección de descarga no válida.");
+  const name = String(fileName || "");
+  if (!/^[^/\\:*?"<>|]{1,200}\.jar$/i.test(name) || name.includes("..")) throw new Error("Nombre de archivo no válido.");
+  const dir = String(remoteDir || "").replace(/\/+$/, "") || "/";
+  const remotePath = `${dir === "/" ? "" : dir}/${name}`;
+  const tmpPath = path.join(app.getPath("temp"), `alaunchi-server-${process.pid}-${Date.now().toString(36)}.jar`);
+  try {
+    await downloadFile(url, tmpPath, null);
+    if (sha1) {
+      const actual = await hashFileSha1(tmpPath);
+      if (actual !== String(sha1).toLowerCase()) throw new Error("El archivo descargado no coincide con su hash.");
+    }
+    if (conn.protocol === "sftp") {
+      await conn.client.mkdir(dir, true);
+      await conn.client.fastPut(tmpPath, remotePath);
+    } else {
+      await conn.client.ensureDir(dir);
+      await conn.client.cd("/");
+      await conn.client.uploadFrom(tmpPath, remotePath);
+    }
+    if (replacePath && replacePath !== remotePath && path.posix.dirname(String(replacePath)) === (dir === "/" ? "/" : dir)) {
+      if (conn.protocol === "sftp") await conn.client.delete(replacePath).catch(() => {});
+      else await conn.client.remove(replacePath).catch(() => {});
+    }
+  } finally {
+    await fs.unlink(tmpPath).catch(() => {});
+  }
   return { success: true };
 });
 

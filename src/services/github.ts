@@ -36,8 +36,14 @@ export interface Modpack {
    *  yet (the Hub tile shows a ↺ badge). */
   isCopy?: boolean;
   /** Only for source === "custom": installed from Modrinth or imported from
-   *  CurseForge (the instance page gives its logo a column of its own). */
+   *  CurseForge (the instance page gives its logo a card of its own). */
   isDownloaded?: boolean;
+  /** Only for source === "custom": the Modrinth project it was installed from
+   *  (the instance page shows that project's text and images in "Resumen"). */
+  modrinthProjectId?: string;
+  /** The version of that project it's on. */
+  modrinthVersionId?: string;
+  modrinthVersionNumber?: string;
 }
 
 /** Why an online instance became "past": you left it, its creator removed
@@ -106,7 +112,7 @@ export interface SnapshotManifest {
    *  announcement and as the row label in the history list. */
   changelogTitle?: string;
   /** Every past publish's own changelog, oldest first — skips publishes that left
-   *  the changelog blank. Powers the "ver actualizaciones anteriores" button. */
+   *  the changelog blank. Powers the "Novedades" panel. */
   changelogHistory?: ChangelogEntry[];
   /** Groupings of optional content (name/description + which files). Grouped
    *  files only install if the player picks the group on first install

@@ -1,8 +1,9 @@
+import { Hint } from "@/components/hint";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Bell, Check, MessageCircle, Stethoscope, UserPlus, X, Zap } from "lucide-react";
-import { toast } from "sonner";
+import { Bell, Check, Globe, Stethoscope, UserPlus, X, Zap } from "lucide-react";
+import { toast } from "@/lib/toast";
 import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
 import { sortAllPresence } from "@/services/presence";
 import {
@@ -17,8 +18,10 @@ import { subscribeAllActivity, type UserActivity } from "@/services/user-activit
 import { toPresenceEntries } from "@/lib/friend-presence";
 import { getNicknames } from "@/lib/nicknames";
 import { useAuth } from "@/hooks/use-auth";
-import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
+import { useHeaderOverlay } from "@/hooks/use-chat-heads";
+import { useInvites } from "@/hooks/use-invites";
 import { usePlayerHeadUrl } from "@/hooks/use-player-head";
+import { InstanceLogo } from "@/components/invite-bubbles";
 import { PresenceList } from "@/components/presence-list";
 import { getInstalledModpacksMeta, onInstanceCrashed } from "@/services/electron";
 import { openCrashDiagnosis } from "@/lib/crash-diagnosis";
@@ -88,9 +91,10 @@ function SectionTitle({ children, count, onClick }: { children: React.ReactNode;
 
 /**
  * "Actividad" — replaces the old Jugadores button in the footers (far right).
- * A full-height side panel with notifications (pending friend requests, unread
- * chats, instances that keep crashing) and what friends are up to. The badge
- * counts the notifications. Controlled through useHeaderOverlay ("presence"),
+ * A full-height side panel with notifications (pending friend requests and
+ * instance invitations, instances that keep crashing — not chat messages, the
+ * chat button has those) and what friends are up to. The badge counts the
+ * notifications. Controlled through useHeaderOverlay ("presence"),
  * so it stays mutually exclusive with the other footer popups.
  */
 export function ActivityButton({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -133,13 +137,11 @@ export function ActivityButton({ open, onOpenChange }: { open: boolean; onOpenCh
     }
   };
 
-  // Unread 1:1 chats (muted ones don't count, like their bubble).
-  const chatIndex = useChatHeads((s) => s.chatIndex);
-  const mutedUuids = useChatHeads((s) => s.mutedUuids);
-  const openChat = useChatHeads((s) => s.openChat);
-  const unreadChats = Object.entries(chatIndex)
-    .filter(([uuid, e]) => (e.unreadCount || 0) > 0 && !mutedUuids.has(uuid))
-    .sort(([, a], [, b]) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0));
+  // Pending invitations to online instances — also the ones closed from the bar
+  // (those only lost their bubble: they still await an answer).
+  const invites = useInvites((s) => s.invites);
+  const inviteBusy = useInvites((s) => s.busyKey);
+  const inviteList = Object.values(invites).sort((a, b) => (b.sentAt || 0) - (a.sentAt || 0));
 
   // Instances in a crash streak (alaunchi-meta.json#crashStats).
   const [crashes, setCrashes] = useState<CrashItem[]>([]);
@@ -180,7 +182,7 @@ export function ActivityButton({ open, onOpenChange }: { open: boolean; onOpenCh
     } catch {}
   };
 
-  const notificationCount = requestList.length + unreadChats.length + visibleCrashes.length;
+  const notificationCount = requestList.length + inviteList.length + visibleCrashes.length;
   const nicknames = getNicknames();
 
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -204,17 +206,19 @@ export function ActivityButton({ open, onOpenChange }: { open: boolean; onOpenCh
             // Full height between the titlebar (h-11) and the footer (h-20), 8px off each.
             className="fixed right-6 top-[52px] bottom-[88px] z-40 w-96 flex flex-col rounded-md bg-gray-500/15 backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.35)] overflow-hidden"
           >
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-white/5">
               <Zap className="h-4 w-4 text-accent" />
               <h2 className="font-semibold flex-1">Actividad</h2>
-              <button
-                type="button"
-                onClick={() => onOpenChange(false)}
-                aria-label="Cerrar"
-                className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-white/10 hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <Hint label="Cerrar">
+                <button
+                  type="button"
+                  onClick={() => onOpenChange(false)}
+                  aria-label="Cerrar"
+                  className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-white/10 hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </Hint>
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6">
@@ -225,7 +229,7 @@ export function ActivityButton({ open, onOpenChange }: { open: boolean; onOpenCh
                 ) : (
                   <div className="space-y-1.5">
                     {requestList.map(([uuid, r]) => (
-                      <div key={`req-${uuid}`} className="flex items-center gap-3 rounded-md bg-white/[0.04] p-2">
+                      <div key={`req-${uuid}`} className="flex items-center gap-3 rounded-md bg-white/[0.07] p-2">
                         <Head uuid={uuid} name={r.username} />
                         <div className="min-w-0 flex-1">
                           <p className="text-sm font-medium truncate">{nicknames[uuid] || r.username}</p>
@@ -233,46 +237,62 @@ export function ActivityButton({ open, onOpenChange }: { open: boolean; onOpenCh
                             <UserPlus className="h-3 w-3" /> Solicitud de amistad · {timeAgo(r.sentAt)}
                           </p>
                         </div>
-                        <button
-                          type="button"
-                          disabled={answering === uuid}
-                          onClick={() => answer(uuid, r.username, true)}
-                          title="Aceptar"
-                          className="h-7 w-7 flex items-center justify-center rounded-md bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-50"
-                        >
-                          <Check className="h-4 w-4" strokeWidth={2.75} />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={answering === uuid}
-                          onClick={() => answer(uuid, r.username, false)}
-                          title="Rechazar"
-                          className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/20 hover:text-destructive disabled:opacity-50"
-                        >
-                          <X className="h-4 w-4" strokeWidth={2.75} />
-                        </button>
+                        <Hint label="Aceptar">
+                          <button
+                            type="button"
+                            disabled={answering === uuid}
+                            onClick={() => answer(uuid, r.username, true)}
+                            className="h-7 w-7 flex items-center justify-center rounded-md bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-50"
+                          >
+                            <Check className="h-4 w-4" strokeWidth={2.75} />
+                          </button>
+                        </Hint>
+                        <Hint label="Rechazar">
+                          <button
+                            type="button"
+                            disabled={answering === uuid}
+                            onClick={() => answer(uuid, r.username, false)}
+                            className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/20 hover:text-destructive disabled:opacity-50"
+                          >
+                            <X className="h-4 w-4" strokeWidth={2.75} />
+                          </button>
+                        </Hint>
                       </div>
                     ))}
 
-                    {unreadChats.map(([uuid, c]) => (
-                      <button
-                        key={`chat-${uuid}`}
-                        type="button"
-                        onClick={() => openChat(uuid)}
-                        className="w-full flex items-center gap-3 rounded-md bg-white/[0.04] p-2 text-left hover:bg-white/10 transition-colors"
-                      >
-                        <Head uuid={uuid} name={c.otherUsername} />
+                    {inviteList.map((inv) => (
+                      <div key={`invite-${inv.key}`} className="flex items-center gap-3 rounded-md bg-white/[0.07] p-2">
+                        <InstanceLogo invite={inv} className="h-8 w-8 shrink-0 rounded-md" />
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium truncate">{nicknames[uuid] || c.otherUsername}</p>
+                          <p className="text-sm font-medium truncate">{inv.modpackName}</p>
                           <p className="text-[11px] text-muted-foreground truncate flex items-center gap-1">
-                            <MessageCircle className="h-3 w-3 shrink-0" />
-                            <span className="truncate">{c.lastMessage}</span>
+                            <Globe className="h-3 w-3 shrink-0" />
+                            <span className="truncate">
+                              Invitación de {nicknames[inv.fromUuid] || inv.fromUsername} · {timeAgo(inv.sentAt)}
+                            </span>
                           </p>
                         </div>
-                        <span className="shrink-0 rounded-full bg-accent px-1.5 text-[10px] leading-4 text-accent-foreground">
-                          {c.unreadCount}
-                        </span>
-                      </button>
+                        <Hint label="Aceptar">
+                          <button
+                            type="button"
+                            disabled={inviteBusy === inv.key}
+                            onClick={() => useInvites.getState().accept(inv.key)}
+                            className="h-7 w-7 flex items-center justify-center rounded-md bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-50"
+                          >
+                            <Check className="h-4 w-4" strokeWidth={2.75} />
+                          </button>
+                        </Hint>
+                        <Hint label="Rechazar">
+                          <button
+                            type="button"
+                            disabled={inviteBusy === inv.key}
+                            onClick={() => useInvites.getState().reject(inv.key)}
+                            className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/20 hover:text-destructive disabled:opacity-50"
+                          >
+                            <X className="h-4 w-4" strokeWidth={2.75} />
+                          </button>
+                        </Hint>
+                      </div>
                     ))}
 
                     {visibleCrashes.map((c) => (
@@ -298,14 +318,15 @@ export function ActivityButton({ open, onOpenChange }: { open: boolean; onOpenCh
                             <Stethoscope className="h-3 w-3" /> Diagnosticar
                           </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => dismissCrash(c)}
-                          title="Descartar"
-                          className="h-6 w-6 flex items-center justify-center rounded-md text-muted-foreground hover:bg-white/10 hover:text-foreground"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
+                        <Hint label="Descartar">
+                          <button
+                            type="button"
+                            onClick={() => dismissCrash(c)}
+                            className="h-6 w-6 flex items-center justify-center rounded-md text-muted-foreground hover:bg-white/10 hover:text-foreground"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </Hint>
                       </div>
                     ))}
                   </div>
@@ -329,17 +350,18 @@ export function ActivityButton({ open, onOpenChange }: { open: boolean; onOpenCh
         aria-label="Actividad"
         data-tour="presence-button"
         className={cn(
-          "relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors",
-          open && "bg-white/10"
+          // Accent-tinted, like the account button: these two are yours, not the instance's.
+          "relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-md bg-accent/15 backdrop-blur-md border border-transparent hover:bg-accent/25 transition-colors",
+          open && "bg-accent/25"
         )}
       >
         <span className="relative flex items-center justify-center h-6 w-6">
-          <Bell className="h-4 w-4 text-gray-300" />
+          <Bell className="h-4 w-4 text-accent" />
           {anyFriendOnline && notificationCount === 0 && (
             <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-400 border border-card" />
           )}
         </span>
-        <span className="text-sm font-semibold text-gray-200">Actividad</span>
+        <span className="text-sm font-semibold text-white">Actividad</span>
         {notificationCount > 0 && (
           <span className="rounded-full bg-accent px-1.5 text-[10px] font-bold leading-4 text-accent-foreground">
             {notificationCount}

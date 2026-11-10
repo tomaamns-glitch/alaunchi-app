@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Check, Download, Library, Loader2, Package, RefreshCw, Search } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";

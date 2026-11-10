@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,7 +38,7 @@ export function RedeemCodeDialog({ open, onOpenChange, onRedeemed }: RedeemCodeD
         setError("Código no válido.");
         return;
       }
-      toast.success("Instancia online añadida.");
+      notify.success("Instancia online añadida.");
       onRedeemed();
       onOpenChange(false);
       reset();

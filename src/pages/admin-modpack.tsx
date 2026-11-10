@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation, useParams } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
@@ -13,7 +14,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { LoaderIcon } from "@/components/loader-icon";
 import { AdminModrinthBrowser, ModrinthGlyph, ProjectIcon, type PresentProject } from "@/components/admin-modrinth-browser";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -1036,7 +1037,7 @@ export default function AdminModpack() {
         toUuid,
         toUsername,
       });
-      toast.success(`Invitación enviada a ${toUsername}.`);
+      notify.success(`Invitación enviada a ${toUsername}.`);
     } catch (e: any) {
       toast.error(e?.message ?? "No se pudo enviar la invitación.");
     }
@@ -1058,7 +1059,7 @@ export default function AdminModpack() {
     if (!id || !repoUrl) return;
     try {
       await banFromInstance(repoUrl, id, targetUuid, targetUsername);
-      toast.success(`${targetUsername} bloqueado: ya no puede entrar ni con código ni por invitación.`);
+      notify.success(`${targetUsername} bloqueado: ya no puede entrar ni con código ni por invitación.`);
     } catch (e: any) {
       toast.error(e?.message ?? "No se pudo bloquear.");
     }
@@ -1158,7 +1159,7 @@ export default function AdminModpack() {
         cleanedGroups,
         (p) => setPublishProgress(p)
       );
-      toast.success(
+      notify.success(
         `Publicado v${version} · ${result.uploaded} subido${result.uploaded !== 1 ? "s" : ""} · ${result.reused} reutilizado${result.reused !== 1 ? "s" : ""}`
       );
       loadModpacks();
@@ -1300,13 +1301,15 @@ export default function AdminModpack() {
               <TabsContent value="files" className="flex-1 min-h-0 flex flex-col gap-3 mt-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <div className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/5 min-w-0">
-                    <button
-                      type="button"
-                      onClick={() => setCurrentFolder([])}
-                      className={`flex items-center gap-1 hover:text-white transition-colors ${currentFolder.length === 0 ? "text-white font-semibold" : ""}`}
-                    >
-                      <HomeIcon className="h-3.5 w-3.5" />
-                    </button>
+                    <Hint label="Carpeta raíz">
+                      <button
+                        type="button"
+                        onClick={() => setCurrentFolder([])}
+                        className={`flex items-center gap-1 hover:text-white transition-colors ${currentFolder.length === 0 ? "text-white font-semibold" : ""}`}
+                      >
+                        <HomeIcon className="h-3.5 w-3.5" />
+                      </button>
+                    </Hint>
                     {currentFolder.map((seg, i) => (
                       <span key={i} className="flex items-center gap-1">
                         <ChevronRight className="h-3 w-3 opacity-50" />
@@ -1475,15 +1478,16 @@ export default function AdminModpack() {
                               )}
                               <span className="opacity-50 shrink-0">{entry.fileCount} archivo{entry.fileCount !== 1 ? "s" : ""}</span>
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveFolder([...currentFolder, entry.name].join("/"))}
-                              disabled={publishing}
-                              title="Eliminar carpeta completa"
-                              className="h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive hover:bg-destructive/10 transition-all disabled:opacity-50 shrink-0"
-                            >
-                              <Trash className="h-3.5 w-3.5" />
-                            </button>
+                            <Hint label="Eliminar carpeta completa">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveFolder([...currentFolder, entry.name].join("/"))}
+                                disabled={publishing}
+                                className="h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive hover:bg-destructive/10 transition-all disabled:opacity-50 shrink-0"
+                              >
+                                <Trash className="h-3.5 w-3.5" />
+                              </button>
+                            </Hint>
                             <ChevronRight
                               className="h-4 w-4 shrink-0 opacity-50 cursor-pointer"
                               onClick={() => setCurrentFolder([...currentFolder, entry.name])}
@@ -1655,14 +1659,15 @@ export default function AdminModpack() {
                               onChange={(e) => handleRenameGroup(group.id, { name: e.target.value })}
                               className="h-8 bg-background/50 border-white/10 text-white font-semibold"
                             />
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteGroup(group.id)}
-                              title="Eliminar grupo"
-                              className="h-8 w-8 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
-                            >
-                              <Trash className="h-4 w-4" />
-                            </button>
+                            <Hint label="Eliminar grupo">
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteGroup(group.id)}
+                                className="h-8 w-8 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
+                              >
+                                <Trash className="h-4 w-4" />
+                              </button>
+                            </Hint>
                           </div>
                           <Input
                             value={group.description}
@@ -1702,14 +1707,15 @@ export default function AdminModpack() {
                                         placeholder={`Opción ${i + 1}`}
                                       />
                                       {group.options!.length > 2 && (
-                                        <button
-                                          type="button"
-                                          onClick={() => handleDeleteOption(group.id, option.id)}
-                                          title="Quitar opción"
-                                          className="h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
-                                        >
-                                          <Trash className="h-3.5 w-3.5" />
-                                        </button>
+                                        <Hint label="Quitar opción">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDeleteOption(group.id, option.id)}
+                                            className="h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
+                                          >
+                                            <Trash className="h-3.5 w-3.5" />
+                                          </button>
+                                        </Hint>
                                       )}
                                     </div>
                                     <div className="flex flex-wrap gap-2">
@@ -1852,9 +1858,11 @@ export default function AdminModpack() {
                         <span className="font-mono text-lg tracking-[0.3em] bg-background/50 border border-white/10 rounded-lg px-3 py-1.5 text-white select-text">
                           {formatCode(accessCode)}
                         </span>
-                        <Button variant="outline" size="icon" className="border-white/10" onClick={handleCopyCode} aria-label="Copiar código">
-                          <Copy className="h-4 w-4" />
-                        </Button>
+                        <Hint label="Copiar código">
+                          <Button variant="outline" size="icon" className="border-white/10" onClick={handleCopyCode} aria-label="Copiar código">
+                            <Copy className="h-4 w-4" />
+                          </Button>
+                        </Hint>
                         <Button
                           variant="outline"
                           size="sm"
@@ -1926,26 +1934,28 @@ export default function AdminModpack() {
                             <span className="text-[11px] text-muted-foreground shrink-0">
                               {grant.grantedAt ? new Date(grant.grantedAt).toLocaleDateString() : "—"}
                             </span>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              title="Quitar acceso (podrá volver a entrar con el código)"
-                              onClick={() => handleRevokeAccess(grantUuid, grant.username)}
-                              aria-label={`Quitar acceso a ${grant.username}`}
-                            >
-                              <UserX className="h-4 w-4 text-muted-foreground" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              title="Expulsar y bloquear (no podrá volver a entrar)"
-                              onClick={() => handleBan(grantUuid, grant.username)}
-                              aria-label={`Bloquear a ${grant.username}`}
-                            >
-                              <Ban className="h-4 w-4 text-destructive" />
-                            </Button>
+                            <Hint label="Quitar acceso (podrá volver a entrar con el código)">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() => handleRevokeAccess(grantUuid, grant.username)}
+                                aria-label={`Quitar acceso a ${grant.username}`}
+                              >
+                                <UserX className="h-4 w-4 text-muted-foreground" />
+                              </Button>
+                            </Hint>
+                            <Hint label="Expulsar y bloquear (no podrá volver a entrar)">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() => handleBan(grantUuid, grant.username)}
+                                aria-label={`Bloquear a ${grant.username}`}
+                              >
+                                <Ban className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </Hint>
                           </div>
                         ))}
                       </div>

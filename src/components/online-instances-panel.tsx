@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Archive,
   ArchiveRestore,
+  Clock,
   Download,
   Globe,
   KeyRound,
@@ -11,8 +12,9 @@ import {
   Play,
   RefreshCw,
   Square,
+  Trash2,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
 import { getMySource, repoKey, sameRepo } from "@/lib/sources";
@@ -22,12 +24,29 @@ import { RedeemCodeDialog } from "@/components/redeem-code-dialog";
 import { InstanceLogo } from "@/components/invite-bubbles";
 import { useInvites } from "@/hooks/use-invites";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Hint } from "@/components/hint";
+import { useRepoCreators } from "@/lib/repo-creators";
+import { getInstalledModpacksMeta } from "@/services/electron";
+import { formatPlaytime } from "@/lib/format";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { Modpack } from "@/services/github";
 
-/** "owner/repo" for display — the creator behind a group of instances. */
-function repoLabel(repoUrl: string | undefined): string {
-  return repoUrl?.replace("https://github.com/", "") || "Desconocido";
+/** Who's behind a repo, by name (useRepoCreators) — never the GitHub
+ *  "owner/repo", which means nothing to the players. */
+function creatorLabel(names: Record<string, string>, repoUrl: string | undefined): string {
+  const key = repoKey(repoUrl ?? "");
+  return (key && names[key]) || "Creador desconocido";
 }
 
 type Tab = "online" | "past" | "archived";
@@ -50,6 +69,20 @@ export function OnlineInstancesPanel({ onNavigate }: { onNavigate: (path: string
   const [tab, setTab] = useState<Tab>("online");
   const [redeemOpen, setRedeemOpen] = useState(false);
   const [leaving, setLeaving] = useState<Modpack | null>(null);
+  const [removing, setRemoving] = useState<Modpack | null>(null);
+  const creators = useRepoCreators();
+  // Your own hours on each installed instance (alaunchi-meta.json), reloaded
+  // whenever the catalog does (a session may have ended since).
+  const [playtime, setPlaytime] = useState<Record<string, number>>({});
+  useEffect(() => {
+    getInstalledModpacksMeta()
+      .then((meta) => {
+        const out: Record<string, number> = {};
+        for (const [id, m] of Object.entries(meta)) if ((m as any)?.totalPlaytimeMs) out[id] = (m as any).totalPlaytimeMs;
+        setPlaytime(out);
+      })
+      .catch(() => {});
+  }, [loaded, loading]);
   const invites = Object.values(useInvites((s) => s.invites)).sort((a, b) => (b.sentAt || 0) - (a.sentAt || 0));
   const inviteBusy = useInvites((s) => s.busyKey);
 
@@ -76,22 +109,28 @@ export function OnlineInstancesPanel({ onNavigate }: { onNavigate: (path: string
   const ordered = [...groups.values()].sort((a, b) => {
     const am = sameRepo(a.repoUrl, mine?.repoUrl) ? 0 : 1;
     const bm = sameRepo(b.repoUrl, mine?.repoUrl) ? 0 : 1;
-    return am - bm || repoLabel(a.repoUrl).localeCompare(repoLabel(b.repoUrl));
+    return am - bm || creatorLabel(creators, a.repoUrl).localeCompare(creatorLabel(creators, b.repoUrl));
   });
   const failed = Object.entries(sourceErrors);
 
-  const row = (mp: Modpack) => (
-    <InstanceRow
-      key={mp.id}
-      pack={mp}
-      creator={mp.outOfNetwork ? repoLabel(history[mp.id]?.repoUrl) : undefined}
-      archived={isArchived(mp.id)}
-      canLeave={!mp.outOfNetwork && !sameRepo(mp.repoUrl, mine?.repoUrl)}
-      onOpen={() => onNavigate(`/modpack/${mp.id}`)}
-      onToggleArchive={() => setArchived(mp.id, !isArchived(mp.id))}
-      onLeave={() => setLeaving(mp)}
-    />
-  );
+  const row = (mp: Modpack) => {
+    const own = !mp.outOfNetwork && sameRepo(mp.repoUrl, mine?.repoUrl);
+    return (
+      <InstanceRow
+        key={mp.id}
+        pack={mp}
+        creator={mp.outOfNetwork ? creatorLabel(creators, history[mp.id]?.repoUrl) : undefined}
+        playtimeMs={playtime[mp.id]}
+        archived={isArchived(mp.id)}
+        canLeave={!mp.outOfNetwork && !own}
+        canRemove={!own}
+        onOpen={() => onNavigate(`/modpack/${mp.id}`)}
+        onToggleArchive={() => setArchived(mp.id, !isArchived(mp.id))}
+        onLeave={() => setLeaving(mp)}
+        onRemove={() => setRemoving(mp)}
+      />
+    );
+  };
 
   const empty = (text: string) => <p className="text-xs text-muted-foreground text-center py-6 px-4">{text}</p>;
 
@@ -100,16 +139,17 @@ export function OnlineInstancesPanel({ onNavigate }: { onNavigate: (path: string
       <div className="flex items-center gap-2 px-1 pb-2 shrink-0">
         <Globe className="h-4 w-4 text-accent" />
         <h2 className="flex-1 text-sm font-semibold text-white">Instancias online</h2>
-        <button
-          type="button"
-          onClick={() => loadModpacks()}
-          disabled={loading}
-          title="Recargar"
-          aria-label="Recargar"
-          className="h-7 w-7 flex items-center justify-center rounded-md text-gray-400 hover:bg-white/10 hover:text-white disabled:opacity-50 transition-colors"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-        </button>
+        <Hint label="Recargar">
+          <button
+            type="button"
+            onClick={() => loadModpacks()}
+            disabled={loading}
+            aria-label="Recargar"
+            className="h-7 w-7 flex items-center justify-center rounded-md text-gray-400 hover:bg-white/10 hover:text-white disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          </button>
+        </Hint>
       </div>
 
       <div className="flex gap-1 pb-2 border-b border-white/5 shrink-0">
@@ -137,7 +177,7 @@ export function OnlineInstancesPanel({ onNavigate }: { onNavigate: (path: string
                   Invitaciones ({invites.length})
                 </h3>
                 {invites.map((inv) => (
-                  <div key={inv.key} className="flex items-center gap-2.5 rounded-lg border border-accent/30 bg-accent/[0.06] px-2.5 py-2">
+                  <div key={inv.key} className="flex items-center gap-2.5 rounded-md border border-accent/30 bg-accent/[0.06] px-2.5 py-2">
                     <InstanceLogo invite={inv} className="h-9 w-9 rounded-md shrink-0" />
                     <p className="min-w-0 flex-1 text-xs text-gray-300 leading-snug">
                       <span className="font-semibold text-white">{inv.fromUsername}</span> te invita a{" "}
@@ -178,7 +218,7 @@ export function OnlineInstancesPanel({ onNavigate }: { onNavigate: (path: string
               ordered.map((g) => (
                 <section key={g.repoUrl} className="space-y-1.5">
                   <h3 className="px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground truncate">
-                    {sameRepo(g.repoUrl, mine?.repoUrl) ? "Tus instancias" : repoLabel(g.repoUrl)}
+                    {sameRepo(g.repoUrl, mine?.repoUrl) ? "Tus instancias" : `De ${creatorLabel(creators, g.repoUrl)}`}
                   </h3>
                   {g.packs.map(row)}
                 </section>
@@ -192,7 +232,8 @@ export function OnlineInstancesPanel({ onNavigate }: { onNavigate: (path: string
               >
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                 <span className="min-w-0">
-                  No se pudo leer <span className="font-semibold">{repoLabel(url)}</span>: {message.slice(0, 120)}
+                  No se pudieron leer las instancias de <span className="font-semibold">{creatorLabel(creators, url)}</span>:{" "}
+                  {message.slice(0, 120)}
                 </span>
               </div>
             ))}
@@ -214,7 +255,7 @@ export function OnlineInstancesPanel({ onNavigate }: { onNavigate: (path: string
         <button
           type="button"
           onClick={() => setRedeemOpen(true)}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-accent text-accent-foreground text-sm font-bold hover:bg-accent/90 transition-colors"
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-accent text-accent-foreground text-sm font-bold hover:bg-accent/90 transition-colors"
         >
           <KeyRound className="h-4 w-4" />
           Canjear código
@@ -223,22 +264,39 @@ export function OnlineInstancesPanel({ onNavigate }: { onNavigate: (path: string
 
       <RedeemCodeDialog open={redeemOpen} onOpenChange={setRedeemOpen} onRedeemed={() => loadModpacks()} />
       <LeaveInstanceDialog pack={leaving} onClose={() => setLeaving(null)} />
+      <RemoveInstanceDialog pack={removing} onClose={() => setRemoving(null)} />
     </div>
   );
 }
 
 interface InstanceRowProps {
   pack: Modpack;
-  /** Past instances only — their repo, shown since they're not grouped. */
+  /** Past instances only — their creator, shown since they're not grouped. */
   creator?: string;
+  /** Your hours on it (installed instances that have had a session). */
+  playtimeMs?: number;
   archived: boolean;
   canLeave: boolean;
+  /** Anything but your own repo's instances. */
+  canRemove: boolean;
   onOpen: () => void;
   onToggleArchive: () => void;
   onLeave: () => void;
+  onRemove: () => void;
 }
 
-function InstanceRow({ pack, creator, archived, canLeave, onOpen, onToggleArchive, onLeave }: InstanceRowProps) {
+function InstanceRow({
+  pack,
+  creator,
+  playtimeMs,
+  archived,
+  canLeave,
+  canRemove,
+  onOpen,
+  onToggleArchive,
+  onLeave,
+  onRemove,
+}: InstanceRowProps) {
   const { busy, running, toggle } = useLaunchModpack(pack);
   const [installing, setInstalling] = useState(false);
   const isPast = !!pack.outOfNetwork;
@@ -247,7 +305,7 @@ function InstanceRow({ pack, creator, archived, canLeave, onOpen, onToggleArchiv
     setInstalling(true);
     try {
       if (!(await installOnlineInstance(pack))) return; // cancelled in the groups picker
-      toast.success(`${pack.name} instalada.`);
+      notify.success(`${pack.name} instalada.`);
     } catch (e: any) {
       toast.error(e?.message || "Error al instalar.");
     } finally {
@@ -259,7 +317,7 @@ function InstanceRow({ pack, creator, archived, canLeave, onOpen, onToggleArchiv
     "h-7 w-7 shrink-0 flex items-center justify-center rounded-md text-gray-500 hover:bg-white/10 hover:text-white transition-colors";
 
   return (
-    <div className="flex items-center gap-1.5 rounded-lg border border-white/5 bg-white/[0.03] px-2 py-1.5 hover:bg-white/[0.07] hover:border-white/10 transition-colors">
+    <div className="flex items-center gap-1.5 rounded-md border border-transparent bg-white/[0.07] px-2 py-1.5 hover:bg-white/[0.14] transition-colors">
       <button
         type="button"
         onClick={onOpen}
@@ -281,61 +339,75 @@ function InstanceRow({ pack, creator, archived, canLeave, onOpen, onToggleArchiv
                 <span className="text-red-400/90">{OFFLINE_REASON_LABEL[pack.outOfNetwork!]}</span>
                 {!pack.installed ? " · sin archivos" : creator ? ` · ${creator}` : ""}
               </>
+            ) : !pack.installed ? (
+              "Sin instalar"
             ) : (
-              <>
-                {pack.minecraftVersion} · <span className="uppercase">{pack.loaderType}</span>
-                {pack.updateAvailable ? <span className="text-accent"> · actualización</span> : pack.installed ? "" : " · sin instalar"}
-              </>
+              <span className="inline-flex items-center gap-1">
+                <Clock className="h-2.5 w-2.5 shrink-0 text-accent" />
+                {playtimeMs ? formatPlaytime(playtimeMs) : "Sin jugar todavía"}
+                {pack.updateAvailable && <span className="text-accent"> · actualización</span>}
+              </span>
             )}
           </div>
         </div>
       </button>
 
-      <button
-        type="button"
-        onClick={onToggleArchive}
-        title={archived ? "Desarchivar (volver a mostrar en el carrusel)" : "Archivar (ocultar del carrusel)"}
-        aria-label={archived ? "Desarchivar" : "Archivar"}
-        className={iconBtn}
-      >
-        {archived ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
-      </button>
-      {canLeave && (
-        <button
-          type="button"
-          onClick={onLeave}
-          title="Salir de la instancia"
-          aria-label="Salir de la instancia"
-          className={`${iconBtn} hover:!bg-red-500/15 hover:!text-red-400`}
-        >
-          <LogOut className="h-3.5 w-3.5" />
+      <Hint label={archived ? "Desarchivar" : "Archivar"}>
+        <button type="button" onClick={onToggleArchive} aria-label={archived ? "Desarchivar" : "Archivar"} className={iconBtn}>
+          {archived ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
         </button>
+      </Hint>
+      {canLeave && (
+        <Hint label="Salir de la instancia">
+          <button
+            type="button"
+            onClick={onLeave}
+            aria-label="Salir de la instancia"
+            className={`${iconBtn} hover:!bg-red-500/15 hover:!text-red-400`}
+          >
+            <LogOut className="h-3.5 w-3.5" />
+          </button>
+        </Hint>
+      )}
+      {canRemove && (
+        <Hint label="Eliminar">
+          <button
+            type="button"
+            onClick={onRemove}
+            aria-label="Eliminar"
+            className={`${iconBtn} hover:!bg-red-500/15 hover:!text-red-400`}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </Hint>
       )}
 
       {pack.installed ? (
-        <button
-          type="button"
-          onClick={toggle}
-          disabled={busy}
-          title={running ? "Cerrar Minecraft" : pack.updateAvailable ? "Actualizar y jugar" : "Jugar"}
-          aria-label={running ? "Cerrar Minecraft" : "Jugar"}
-          className={`h-7 w-7 shrink-0 flex items-center justify-center rounded-full disabled:opacity-60 transition-colors ${
-            running ? "bg-red-600 text-white hover:bg-red-500" : "bg-accent text-accent-foreground hover:bg-accent/90"
-          }`}
-        >
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : running ? <Square className="h-3 w-3 fill-current" /> : <Play className="h-3 w-3 fill-current" />}
-        </button>
+        <Hint label={running ? "Cerrar Minecraft" : pack.updateAvailable ? "Actualizar y jugar" : "Jugar"}>
+          <button
+            type="button"
+            onClick={toggle}
+            disabled={busy}
+            aria-label={running ? "Cerrar Minecraft" : "Jugar"}
+            className={`h-7 w-7 shrink-0 flex items-center justify-center rounded-full disabled:opacity-60 transition-colors ${
+              running ? "bg-red-600 text-white hover:bg-red-500" : "bg-accent text-accent-foreground hover:bg-accent/90"
+            }`}
+          >
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : running ? <Square className="h-3 w-3 fill-current" /> : <Play className="h-3 w-3 fill-current" />}
+          </button>
+        </Hint>
       ) : !isPast ? (
-        <button
-          type="button"
-          onClick={handleInstall}
-          disabled={installing}
-          title="Instalar"
-          aria-label="Instalar"
-          className="h-7 w-7 shrink-0 flex items-center justify-center rounded-full border border-white/15 text-gray-300 hover:text-accent hover:border-accent/50 disabled:opacity-60 transition-colors"
-        >
-          {installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-        </button>
+        <Hint label="Instalar">
+          <button
+            type="button"
+            onClick={handleInstall}
+            disabled={installing}
+            aria-label="Instalar"
+            className="h-7 w-7 shrink-0 flex items-center justify-center rounded-md border border-transparent bg-white/[0.07] text-gray-300 hover:text-accent hover:bg-white/[0.14] disabled:opacity-60 transition-colors"
+          >
+            {installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+          </button>
+        </Hint>
       ) : null}
     </div>
   );
@@ -400,5 +472,76 @@ function LeaveInstanceDialog({ pack, onClose }: { pack: Modpack | null; onClose:
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** "Eliminar" — takes the instance out of Instancias online altogether (not to
+ *  Pasadas): leaves it if it's still online, and asks whether to keep its
+ *  files, like deleting a private instance. */
+function RemoveInstanceDialog({ pack, onClose }: { pack: Modpack | null; onClose: () => void }) {
+  const removeInstance = useModpacks((s) => s.removeInstance);
+  const [keepFiles, setKeepFiles] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (pack) setKeepFiles(false);
+  }, [pack]);
+
+  const remove = async () => {
+    if (!pack) return;
+    setBusy(true);
+    try {
+      await removeInstance(pack, keepFiles);
+      toast.success(
+        keepFiles && pack.installed ? `${pack.name} quitada de la app (archivos conservados).` : `${pack.name} eliminada.`
+      );
+      onClose();
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudo eliminar la instancia.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const online = !!pack && !pack.outOfNetwork;
+  return (
+    <AlertDialog open={!!pack} onOpenChange={(open) => !open && !busy && onClose()}>
+      <AlertDialogContent className="border-transparent bg-gray-500/15 backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.35)] sm:rounded-md">
+        <AlertDialogHeader>
+          <AlertDialogTitle>¿Eliminar "{pack?.name}"?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {online
+              ? "Saldrás de la instancia y desaparecerá de Instancias online (no pasará a Pasadas). Para volver necesitarás un código nuevo. "
+              : "Desaparecerá de Instancias online y del carrusel. "}
+            {pack?.installed
+              ? keepFiles
+                ? "Sus archivos (mods, partidas guardadas, configuración) se quedarán en el equipo."
+                : "Se borrará toda la instancia (mods, partidas guardadas, configuración) de este equipo. Esta acción no se puede deshacer."
+              : ""}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {pack?.installed && (
+          <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
+            <Checkbox checked={keepFiles} onCheckedChange={(v) => setKeepFiles(v === true)} disabled={busy} />
+            Conservar los archivos de la instancia
+          </label>
+        )}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy} className="border-transparent bg-white/[0.07] hover:bg-white/[0.14]">
+            Cancelar
+          </AlertDialogCancel>
+          <AlertDialogAction
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            disabled={busy}
+            onClick={(e) => {
+              e.preventDefault();
+              void remove();
+            }}
+          >
+            {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Eliminar
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

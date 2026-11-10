@@ -258,6 +258,12 @@ export async function refreshAccess(code: string): Promise<RedeemedAccess | null
   return resolveEntry(normalizeCode(code), raw);
 }
 
+/** Who created the instance a code leads to (null if the code is gone or old). */
+export async function getCodeCreatorUuid(code: string): Promise<string | null> {
+  const e = parseEntry((await get(ref(rtdb, `codeIndex/${normalizeCode(code)}`))).val());
+  return e && e !== "legacy" ? e.creatorUuid || null : null;
+}
+
 /** grantKeys of every instance this uuid was given access to. */
 export async function getUserAccessSet(uuid: string): Promise<Set<string>> {
   const snap = await get(ref(rtdb, `userAccess/${uuid}`));

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ImagePlus, Loader2, X } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import instanceVanillaIcon from "@/assets/instance-vanilla.png";
 import instanceModdedIcon from "@/assets/instance-modded.png";
 import { Button } from "@/components/ui/button";

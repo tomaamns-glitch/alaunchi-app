@@ -1,3 +1,4 @@
+import { toast } from "@/lib/toast";
 import type { SnapshotManifest } from "./github";
 
 const eAPI = (window as any).electronAPI;
@@ -194,6 +195,16 @@ export async function updateInstanceFile(
 }
 
 /** Downloads a brand-new file into the instance (no existing file to replace). */
+/** Renames an emote or schematic (extension kept). Returns the new relative path. */
+export async function renameInstanceFile(modpackId: string, path: string, newName: string): Promise<string> {
+  if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
+  try {
+    return (await eAPI.renameInstanceFile({ modpackId, path, newName })).path;
+  } catch (e: any) {
+    throw new Error(e?.message?.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") || "No se pudo renombrar.");
+  }
+}
+
 export async function downloadInstanceFile(modpackId: string, path: string, url: string, sha1?: string): Promise<void> {
   if (isElectron) await eAPI.downloadInstanceFile({ modpackId, path, url, sha1 });
 }
@@ -246,7 +257,37 @@ export interface CreateInstanceInput {
  *  writes its alaunchi-meta.json — mirrors the shape mc:get-installed-modpacks reads. */
 export async function createInstance(input: CreateInstanceInput): Promise<Record<string, any>> {
   if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
-  return eAPI.createInstance(input);
+  const meta = await eAPI.createInstance(input);
+  prepareInstanceInBackground(meta);
+  return meta;
+}
+
+// ─── Preparar una instancia nueva ───────────────────────────────────────────
+// A new instance downloads what its first launch needs (Minecraft, libraries,
+// assets, the modloader, Java) right away, in the background, so "Jugar" is
+// instant. Its progress shows on the instance like any launch (the chip). One at
+// a time: instances of the same Minecraft version share those files, and two
+// downloads of the same file at once would trample each other.
+let prepareQueue: Promise<unknown> = Promise.resolve();
+
+/** Queues the download of everything `meta`'s instance needs to open. Never throws. */
+export function prepareInstanceInBackground(
+  meta: { id?: string; name?: string; minecraftVersion?: string; loaderType?: string } | null | undefined
+): void {
+  if (!isElectron || !meta?.id || !meta.minecraftVersion) return;
+  const opts = {
+    modpackId: meta.id,
+    mcVersion: meta.minecraftVersion,
+    loaderType: meta.loaderType || "vanilla",
+    prepareOnly: true,
+  };
+  prepareQueue = prepareQueue
+    .then(() => eAPI.launchMinecraft(opts))
+    .catch((e: any) => {
+      // Nothing is lost: the first "Jugar" downloads what's missing and retries.
+      const why = String(e?.message || "").replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
+      toast.error(`No se pudo preparar ${meta.name || "la instancia"} (se reintentará al jugar).`, { description: why || undefined });
+    });
 }
 
 /** Copies a private instance (all its files) under a new name. Returns the new meta. */
@@ -419,6 +460,16 @@ export async function getCherryPetalFrames(): Promise<string[] | null> {
  *  them), read from the newest cached client jar that has that particle.
  *  `null` when none does (or outside Electron / before an app restart picks up
  *  the handler) — callers draw their own fallback. */
+/** The vanilla elytra texture (data URL) from a cached client jar, null if none. */
+export async function getElytraTexture(): Promise<string | null> {
+  if (!isElectron || !eAPI.getElytraTexture) return null;
+  try {
+    return (await eAPI.getElytraTexture()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function getParticleFrames(particleId: string): Promise<string[] | null> {
   if (!isElectron || !eAPI.getParticleFrames) return null;
   try {
@@ -551,7 +602,7 @@ export function onClosedToTray(callback: () => void): () => void {
 
 /** Fired when the playtime watcher in the main process detects a tracked Minecraft
  *  process has exited — the renderer's cue to mark itself offline in presence. */
-export function onPlaytimeSessionEnded(callback: (data: { modpackId: string; totalPlaytimeMs: number }) => void): () => void {
+export function onPlaytimeSessionEnded(callback: (data: { modpackId: string; totalPlaytimeMs: number; sessionMs?: number; accountUuid?: string | null }) => void): () => void {
   if (!isElectron) return () => {};
   return eAPI.onPlaytimeSessionEnded(callback);
 }
@@ -676,7 +727,9 @@ export async function chooseCurseForgeFolder(): Promise<{ canceled: boolean; ins
 
 export async function importCurseForgeInstance(folder: string): Promise<{ id: string; name: string }> {
   if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
-  return eAPI.importCurseForgeInstance({ folder });
+  const meta = await eAPI.importCurseForgeInstance({ folder });
+  prepareInstanceInBackground(meta);
+  return meta;
 }
 
 export function onCurseForgeImportProgress(callback: (p: CurseForgeImportProgress) => void): () => void {
@@ -706,7 +759,24 @@ export async function installModrinthModpack(args: {
   versionNumber: string;
 }): Promise<{ id: string; name: string }> {
   if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
-  return eAPI.installModrinthModpack(args);
+  const meta = await eAPI.installModrinthModpack(args);
+  prepareInstanceInBackground(meta);
+  return meta;
+}
+
+/** Moves an instance installed from Modrinth to another version of its modpack.
+ *  oldUrl/oldSha1 are the installed version's .mrpack, which says what to replace. */
+export async function changeModrinthModpackVersion(args: {
+  id: string;
+  url: string;
+  sha1: string;
+  oldUrl: string;
+  oldSha1: string;
+  versionId: string;
+  versionNumber: string;
+}): Promise<Record<string, any>> {
+  if (!isElectron) throw new Error("Solo disponible en la app de escritorio.");
+  return eAPI.changeModrinthModpackVersion(args);
 }
 
 export function onModrinthInstallProgress(callback: (p: ModrinthInstallProgress) => void): () => void {

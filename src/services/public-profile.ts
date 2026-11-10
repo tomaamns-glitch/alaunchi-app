@@ -1,4 +1,4 @@
-import { ref, set, update, get, onValue, off, type Unsubscribe } from "firebase/database";
+import { ref, set, update, get, runTransaction, onValue, off, type Unsubscribe } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 import type { FavoriteEntry } from "./favorites";
 import type { Modpack } from "./github";
@@ -56,6 +56,13 @@ export interface PublicProfileSnapshot {
   /** Cosmetic id from decoration-catalog.ts for the card's animated border.
    *  "none" / absent = plain border. */
   frame?: string;
+  /** Colour of the "electric" frame (hex); absent = the default orange. */
+  frameColor?: string;
+  /** The frame is also drawn round the character's card. */
+  frameOnCharacter?: boolean;
+  /** Hidden from everyone else (on top of `visibility`). */
+  hideInstances?: boolean;
+  hideFavorites?: boolean;
   /** Cosmetic id from decoration-catalog.ts drawn around the player's head
    *  icon. "none" / absent = plain head. */
   iconDecoration?: string;
@@ -86,7 +93,33 @@ export async function publishProfile(
   uuid: string,
   data: Omit<PublicProfileSnapshot, "updatedAt" | "visibility" | "favorites">
 ): Promise<void> {
-  await update(ref(rtdb, `profiles/${uuid}`), { ...data, updatedAt: Date.now() });
+  // `data.totalPlaytimeMs` is only what THIS PC knows for the account: it must
+  // never lower what is published (new PC, reinstall, other device's hours).
+  let totalPlaytimeMs = data.totalPlaytimeMs;
+  try {
+    const remote = (await get(ref(rtdb, `profiles/${uuid}/totalPlaytimeMs`))).val();
+    if (typeof remote === "number" && remote > totalPlaytimeMs) totalPlaytimeMs = remote;
+  } catch {
+    // Can't tell what is published: better not to write a possibly lower number.
+    const { totalPlaytimeMs: _skip, ...rest } = data;
+    await update(ref(rtdb, `profiles/${uuid}`), { ...rest, updatedAt: Date.now() });
+    return;
+  }
+  await update(ref(rtdb, `profiles/${uuid}`), { ...data, totalPlaytimeMs, updatedAt: Date.now() });
+}
+
+/** The total published for this account (0 when none yet). */
+export async function getPublishedPlaytime(uuid: string): Promise<number> {
+  const v = (await get(ref(rtdb, `profiles/${uuid}/totalPlaytimeMs`))).val();
+  return typeof v === "number" ? v : 0;
+}
+
+/** Adds a finished session to the published total (atomic; see addPlaytime). */
+export async function addProfilePlaytime(uuid: string, sessionMs: number): Promise<void> {
+  if (!(sessionMs > 0)) return;
+  await runTransaction(ref(rtdb, `profiles/${uuid}/totalPlaytimeMs`), (cur) =>
+    typeof cur === "number" ? cur + sessionMs : sessionMs
+  );
 }
 
 export async function setProfileVisibility(uuid: string, visibility: ProfileVisibility): Promise<void> {
@@ -111,13 +144,23 @@ export async function getProfileBanner(uuid: string): Promise<string | null> {
  *  frame and icon decoration (three small reads, not the whole profile node). */
 export async function getProfileLook(
   uuid: string
-): Promise<{ bannerUrl: string | null; frame: string; iconDecoration: string }> {
-  const [banner, frame, icon] = await Promise.all([
+): Promise<{ bannerUrl: string | null; frame: string; frameColor: string | null; iconDecoration: string; iconColors: string | null; frameOnCharacter: boolean }> {
+  const [banner, frame, icon, frameColor, iconColors, onCharacter] = await Promise.all([
     get(ref(rtdb, `profiles/${uuid}/bannerUrl`)),
     get(ref(rtdb, `profiles/${uuid}/frame`)),
     get(ref(rtdb, `profiles/${uuid}/iconDecoration`)),
+    get(ref(rtdb, `profiles/${uuid}/frameColor`)),
+    get(ref(rtdb, `profiles/${uuid}/iconColors`)),
+    get(ref(rtdb, `profiles/${uuid}/frameOnCharacter`)),
   ]);
-  return { bannerUrl: banner.val() ?? null, frame: frame.val() ?? "none", iconDecoration: icon.val() ?? "none" };
+  return {
+    bannerUrl: banner.val() ?? null,
+    frame: frame.val() ?? "none",
+    frameColor: frameColor.val() ?? null,
+    iconDecoration: icon.val() ?? "none",
+    iconColors: iconColors.val() ?? null,
+    frameOnCharacter: onCharacter.val() === true,
+  };
 }
 
 const RECENT_BANNERS_CAP = 6;
@@ -141,10 +184,34 @@ export async function setProfileBannerRemembered(
   return recent;
 }
 
+/** Takes one of your own (uploaded / recent) banners out of the list. If it's
+ *  the one in use, the profile goes back to the default banner. Returns the
+ *  new list and whether the current banner was cleared. */
+export async function removeRecentBanner(
+  uuid: string,
+  bannerUrl: string
+): Promise<{ recent: string[]; clearedCurrent: boolean }> {
+  const [recentSnap, currentSnap] = await Promise.all([
+    get(ref(rtdb, `profiles/${uuid}/recentBanners`)),
+    get(ref(rtdb, `profiles/${uuid}/bannerUrl`)),
+  ]);
+  const prev: string[] = Array.isArray(recentSnap.val()) ? recentSnap.val() : [];
+  const recent = prev.filter((u) => u !== bannerUrl);
+  const clearedCurrent = currentSnap.val() === bannerUrl;
+  const patch: Record<string, unknown> = { recentBanners: recent.length ? recent : null };
+  if (clearedCurrent) patch.bannerUrl = null;
+  await update(ref(rtdb, `profiles/${uuid}`), patch);
+  return { recent, clearedCurrent };
+}
+
 export interface ProfileCustomization {
   bio: string;
   avatarDecoration: string;
   frame: string;
+  frameColor: string | null;
+  frameOnCharacter: boolean;
+  hideInstances: boolean;
+  hideFavorites: boolean;
   iconDecoration: string;
   bannerUrl: string | null;
   recentBanners: string[];
@@ -159,6 +226,10 @@ export async function getProfileCustomization(uuid: string): Promise<ProfileCust
     bio: typeof v.bio === "string" ? v.bio : "",
     avatarDecoration: v.avatarDecoration ?? "none",
     frame: v.frame ?? "none",
+    frameColor: typeof v.frameColor === "string" ? v.frameColor : null,
+    frameOnCharacter: v.frameOnCharacter === true,
+    hideInstances: v.hideInstances === true,
+    hideFavorites: v.hideFavorites === true,
     iconDecoration: v.iconDecoration ?? "none",
     bannerUrl: v.bannerUrl ?? null,
     recentBanners: Array.isArray(v.recentBanners) ? v.recentBanners : [],
@@ -187,12 +258,41 @@ export async function setProfileFrame(uuid: string, id: string): Promise<void> {
   await update(ref(rtdb, `profiles/${uuid}`), { frame: id });
 }
 
+/** Hides your instances / favorites from everyone viewing your profile. */
+export async function setProfileHidden(uuid: string, patch: { hideInstances?: boolean; hideFavorites?: boolean }): Promise<void> {
+  await update(ref(rtdb, `profiles/${uuid}`), patch);
+}
+
+/** Whether the frame is also drawn round the character's card. */
+export async function setProfileFrameOnCharacter(uuid: string, on: boolean): Promise<void> {
+  await update(ref(rtdb, `profiles/${uuid}`), { frameOnCharacter: on });
+}
+
+/** Colours of the frames (see components/profile-frame parseFrameColors). */
+export async function setProfileFrameColor(uuid: string, color: string): Promise<void> {
+  if (!/^[a-z#0-9:,|]{1,120}$/i.test(color)) throw new Error("Color no válido.");
+  await update(ref(rtdb, `profiles/${uuid}`), { frameColor: color });
+}
+
 export async function setProfileIconDecoration(uuid: string, id: string): Promise<void> {
   await update(ref(rtdb, `profiles/${uuid}`), { iconDecoration: id });
 }
 
 /** Live icon-decoration id ("none" when unset) — for your own head in the
  *  account menu, so a pick in Personalizar shows up right away. */
+/** Colours of the recolourable icon decorations (lib/icon-colors.ts). */
+export async function setProfileIconColors(uuid: string, value: string): Promise<void> {
+  if (!/^[a-z#0-9:,|-]{1,200}$/i.test(value)) throw new Error("Color no válido.");
+  await update(ref(rtdb, `profiles/${uuid}`), { iconColors: value });
+}
+
+/** Live profiles/{uuid}/iconColors (null when unset). */
+export function subscribeIconColors(uuid: string, callback: (value: string | null) => void): Unsubscribe {
+  const r = ref(rtdb, `profiles/${uuid}/iconColors`);
+  const handler = onValue(r, (snap) => callback((snap.val() as string | null) ?? null));
+  return () => off(r, "value", handler);
+}
+
 export function subscribeIconDecoration(uuid: string, callback: (id: string) => void): Unsubscribe {
   const r = ref(rtdb, `profiles/${uuid}/iconDecoration`);
   const handler = onValue(r, (snap) => callback((snap.val() as string | null) ?? "none"));

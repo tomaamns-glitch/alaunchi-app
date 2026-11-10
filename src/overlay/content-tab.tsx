@@ -1,5 +1,6 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { Search, Download, Heart, Check, Lock, AlertTriangle, Sparkles, Image as ImageIcon, X, PackageSearch } from "lucide-react";
 import {
   searchProjects,
@@ -164,7 +165,7 @@ export function ContentTab({ instance, locked }: { instance: Instance; locked: b
       if (!version) throw new Error(`${hit.title} no tiene versión para Minecraft ${mcVersion}.`);
       await downloadInstanceFile(instance.modpackId, `${category}/${version.filename}`, version.url, version.sha1);
       setInstalled((s) => new Set(s).add(hit.projectId));
-      toast.success(`${hit.title} instalado`, { description: ACTIVATE_HINT[category] });
+      notify.success(`${hit.title} instalado`, { description: ACTIVATE_HINT[category] });
     } catch (e: any) {
       toast.error(`No se pudo instalar ${hit.title}`, { description: e?.message });
     } finally {
@@ -195,9 +196,11 @@ export function ContentTab({ instance, locked }: { instance: Instance; locked: b
           autoFocus
           trailing={
             query ? (
-              <button type="button" onClick={() => setQuery("")} aria-label="Borrar" className="text-gray-500 hover:text-gray-200">
-                <X className="h-3.5 w-3.5" />
-              </button>
+              <Hint label="Borrar">
+                <button type="button" onClick={() => setQuery("")} aria-label="Borrar" className="text-gray-500 hover:text-gray-200">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </Hint>
             ) : (
               mcVersion && <span className="shrink-0 rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-gray-400">{mcVersion}</span>
             )

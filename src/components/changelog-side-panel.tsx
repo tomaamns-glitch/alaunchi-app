@@ -1,8 +1,10 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useState } from "react";
 import { ChevronDown, Loader2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { ChangelogViewerDialog } from "@/components/changelog-viewer-dialog";
+import { MoveBackButton } from "@/components/move-to-content-menu";
 import { fetchSnapshot, type ChangelogEntry, type Modpack } from "@/services/github";
 import { findPackSource } from "@/hooks/use-modpacks";
 
@@ -22,9 +24,8 @@ function formatDate(iso: string): string {
 }
 
 /**
- * Vertical "Novedades" panel on the online instance page: every publish's
- * changelog, newest first (same data as the carousel's history button). Each
- * card shows title, version, date and a short preview; clicking it opens the
+ * Vertical "Novedades" panel on the online instance page and the instance
+ * manager: every publish's changelog, newest first. Each card shows title, version, date and a short preview; clicking it opens the
  * full viewer. Pass `history` (null = still loading) when the caller already
  * has the manifest — then nothing is fetched here.
  */
@@ -34,6 +35,7 @@ export function ChangelogSidePanel({
   error: givenError = false,
   collapsed = false,
   onToggleCollapsed,
+  onMoveBack,
   className,
 }: {
   pack: Modpack;
@@ -43,6 +45,8 @@ export function ChangelogSidePanel({
   collapsed?: boolean;
   /** Shows the minimize/expand button in the header. */
   onToggleCollapsed?: () => void;
+  /** Moved to Contenido: sends it back to Inicio's footer. */
+  onMoveBack?: () => void;
   className?: string;
 }) {
   const controlled = given !== undefined;
@@ -78,19 +82,21 @@ export function ChangelogSidePanel({
   }, [pack.id, pack.version, controlled]);
 
   return (
-    <aside className={cn("flex flex-col rounded-md border border-white/10 bg-gray-500/10 backdrop-blur-md overflow-hidden", className)}>
+    <aside className={cn("flex flex-col rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden", className)}>
       <div className={cn("shrink-0 flex items-center gap-2 px-4 py-3", !collapsed && "border-b border-white/5")}>
         <Sparkles className="h-4 w-4 text-accent" />
         <h3 className="text-sm font-semibold text-white">Novedades</h3>
+        {onMoveBack && <MoveBackButton onClick={onMoveBack} className="ml-auto" />}
         {onToggleCollapsed && (
-          <button
-            type="button"
-            onClick={onToggleCollapsed}
-            title={collapsed ? "Desplegar" : "Minimizar"}
-            className="ml-auto h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors shrink-0"
-          >
-            <ChevronDown className={cn("h-4 w-4 transition-transform", collapsed && "-rotate-90")} />
-          </button>
+          <Hint label={collapsed ? "Desplegar" : "Minimizar"}>
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              className={cn("h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors shrink-0", !onMoveBack && "ml-auto")}
+            >
+              <ChevronDown className={cn("h-4 w-4 transition-transform", collapsed && "-rotate-90")} />
+            </button>
+          </Hint>
         )}
       </div>
 
@@ -112,10 +118,10 @@ export function ChangelogSidePanel({
                 key={`${entry.version}-${i}`}
                 type="button"
                 onClick={() => setSelected(entry)}
-                className="w-full text-left rounded-md px-3 py-2.5 hover:bg-white/5 transition-colors space-y-1"
+                className="w-full text-left rounded-md px-3 py-2.5 hover:bg-white/[0.07] transition-colors space-y-1"
               >
                 <div className="flex items-center gap-2 min-w-0">
-                  <Badge variant="secondary" className={`shrink-0 ${i === 0 ? "bg-accent/20 text-accent" : ""}`}>
+                  <Badge variant="secondary" className={`shrink-0 ${i === 0 ? "bg-accent text-accent-foreground" : ""}`}>
                     v{entry.version}
                   </Badge>
                   <span className="ml-auto text-[10px] text-muted-foreground shrink-0">{formatDate(entry.publishedAt)}</span>

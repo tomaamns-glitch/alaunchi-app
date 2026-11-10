@@ -6,7 +6,7 @@ import {
   getInstalledModpacksMeta,
   CreateInstanceInput,
 } from "../services/electron";
-import { backfillModrinthBanners } from "../lib/modrinth-banner";
+import { backfillModrinthBanners, backfillModrinthIcons } from "../lib/modrinth-banner";
 
 // Kept deliberately separate from useModpacks() (the GitHub-catalog store) —
 // home.tsx's carousel iterates that store's array directly, so merging custom
@@ -33,6 +33,9 @@ function metaToModpack(meta: Record<string, any>): Modpack {
     installedAt: meta.installedAt,
     isCopy: !!meta.duplicatedFrom,
     isDownloaded: meta.importedFrom?.type === "modrinth" || meta.importedFrom?.type === "curseforge",
+    modrinthProjectId: meta.importedFrom?.type === "modrinth" ? meta.importedFrom.projectId : undefined,
+    modrinthVersionId: meta.importedFrom?.type === "modrinth" ? meta.importedFrom.versionId : undefined,
+    modrinthVersionNumber: meta.importedFrom?.type === "modrinth" ? meta.importedFrom.versionNumber : undefined,
   };
 }
 
@@ -60,9 +63,12 @@ export const useCustomInstances = create<CustomInstancesState>((set, get) => ({
         .filter((m: any) => m?.source === "custom")
         .map(metaToModpack);
       set({ instances, loading: false, loaded: true });
-      void backfillModrinthBanners(Object.values(meta)).then((changed) => {
-        if (changed) void get().loadInstances();
-      });
+      // One after the other: both rewrite the same alaunchi-meta.json.
+      void (async () => {
+        const banners = await backfillModrinthBanners(Object.values(meta));
+        const icons = await backfillModrinthIcons(Object.values(meta));
+        if (banners || icons) void get().loadInstances();
+      })();
     } catch {
       set({ loading: false });
     }

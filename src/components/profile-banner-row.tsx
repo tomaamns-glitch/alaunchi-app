@@ -8,19 +8,23 @@ import { BannerMedia } from "@/components/banner-media";
 /**
  * A list row styled like someone's profile card: their banner behind it
  * (darkened towards the left so whatever goes on top always reads) and their
- * profile frame around it. Friends panel and Participantes. With `onClick`
- * it's a button (hover zoom + accent border), otherwise a plain row.
+ * profile frame around it (`frameless` leaves the frame out: Participantes).
+ * Friends lists and the overlay's Participantes. With `onClick` it's a button
+ * (hover zoom + accent border), otherwise a plain row.
  */
 export function ProfileBannerRow({
   uuid,
   onClick,
   ariaLabel,
+  frameless = false,
   className,
   children,
 }: {
   uuid: string;
   onClick?: () => void;
   ariaLabel?: string;
+  /** Their banner, but not their profile frame. */
+  frameless?: boolean;
   /** Height / padding of the row. */
   className?: string;
   children: ReactNode;
@@ -28,7 +32,7 @@ export function ProfileBannerRow({
   const look = useProfileLook(uuid);
   const Tag = onClick ? "button" : "div";
   return (
-    <ProfileFrame frame={look?.frame} borderRadius={8}>
+    <ProfileFrame frame={frameless ? undefined : look?.frame} color={look?.frameColor} borderRadius={8}>
       <Tag
         {...(onClick ? { type: "button" as const, onClick, "aria-label": ariaLabel } : {})}
         className={cn(

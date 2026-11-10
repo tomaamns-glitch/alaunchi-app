@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { create } from "zustand";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Modpack, fetchModpacks } from "../services/github";
 import { addGrantedSource, getGrantedSource, getGrantedSources, getMySource, getReadToken, repoKey, sameRepo } from "../lib/sources";
 import { purgeXrayFiles, setContentLocks } from "../services/electron";
@@ -212,6 +212,11 @@ interface ModpackState {
   leaveInstance: (pack: Modpack, keepFiles: boolean) => Promise<void>;
   /** Hides/shows an instance (online or past) in the carousel. */
   setArchived: (id: string, archived: boolean) => void;
+  /** Removes an instance from Instancias online altogether: leaves it first if
+   *  it's still online (drops your grant), optionally deletes its files, and
+   *  forgets it from the history — it doesn't go to "past". Not for your own
+   *  repo's instances (those come from your catalog). */
+  removeInstance: (pack: Modpack, keepFiles: boolean) => Promise<void>;
 }
 
 function pastFromHistory(history: OnlineHistory, installedState: Record<string, InstalledState>): Modpack[] {
@@ -332,6 +337,28 @@ export const useModpacks = create<ModpackState>((set, get) => ({
     await revokeAccess(pack.repoUrl, pack.id, uuid);
     const history = readOnlineHistory(uuid);
     history[pack.id] = markPast(history[pack.id] ?? historyEntryFrom(pack), "left");
+    writeOnlineHistory(uuid, history);
+    set({ history });
+    await get().loadModpacks();
+  },
+
+  removeInstance: async (pack, keepFiles) => {
+    const uuid = useAuth.getState().uuid;
+    if (!uuid) throw new Error("No se puede eliminar esta instancia.");
+    const isPast = !!pack.outOfNetwork;
+    if (!isPast && sameRepo(pack.repoUrl, getMySource()?.repoUrl)) {
+      throw new Error("Es una instancia tuya: no puedes eliminarla de aquí (puedes archivarla).");
+    }
+    // Files first: if the game is running this fails, and nothing has changed yet.
+    if (!keepFiles && pack.installed && isElectron) {
+      await eAPI.deleteOnlineInstanceFiles({ id: pack.id });
+    }
+    if (!isPast) {
+      if (!pack.repoUrl) throw new Error("No se puede eliminar esta instancia.");
+      await revokeAccess(pack.repoUrl, pack.id, uuid);
+    }
+    const history = readOnlineHistory(uuid);
+    delete history[pack.id];
     writeOnlineHistory(uuid, history);
     set({ history });
     await get().loadModpacks();

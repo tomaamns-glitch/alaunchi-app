@@ -1,16 +1,16 @@
+import { Hint } from "@/components/hint";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { useAuth } from "@/hooks/use-auth";
 import { invalidatePlayerHead } from "@/hooks/use-player-head";
 import { useShowcaseSkin } from "@/hooks/use-showcase-skin";
-import { useAvatarDecoration } from "@/hooks/use-avatar-decoration";
 import { getShowcaseUsernames, addShowcaseUsername, removeShowcaseUsername } from "@/lib/skin-showcase";
-import { SkinViewerAnimated } from "@/components/skin-viewer-animated";
+import { CharacterCard } from "@/components/character-card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
-import { Loader2, Upload, Trash, Check, Store, Plus, X, AlertCircle } from "lucide-react";
+import { Loader2, Upload, Trash, Check, Store, Plus, X, AlertCircle, Feather, Pause, Play, PersonStanding } from "lucide-react";
 import {
   getSkinProfile,
   changeSkin,
@@ -25,7 +25,7 @@ import {
   type SkinProfile,
   type LibrarySkin,
 } from "@/services/skin";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 interface SkinManagerPanelProps {
   uuid: string;
@@ -37,9 +37,39 @@ interface SkinManagerPanelProps {
   previewActionsSlot?: HTMLElement | null;
 }
 
+/** A round icon button under the character; lit in the accent while it's on. */
+function ViewerButton({
+  label,
+  active,
+  onClick,
+  children,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Hint label={label}>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={label}
+        aria-pressed={active}
+        className={`flex h-9 flex-1 items-center justify-center rounded-md border transition-colors ${
+          active
+            ? "border-accent/60 bg-accent/20 text-accent"
+            : "border-transparent bg-white/[0.07] text-gray-200 hover:bg-white/[0.14]"
+        }`}
+      >
+        {children}
+      </button>
+    </Hint>
+  );
+}
+
 export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsSlot }: SkinManagerPanelProps) {
   const { mcToken } = useAuth();
-  const decoration = useAvatarDecoration(uuid);
   const [profile, setProfile] = useState<SkinProfile | null>(null);
   const [library, setLibrary] = useState<LibrarySkin[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,9 +106,20 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
   const shownCape = profile?.capes.find((c) => c.id === shownCapeId) ?? null;
   const [shownCapeDataUrl, setShownCapeDataUrl] = useState<string | null>(null);
   const hasPreview = shownSkin !== null || previewCapeId !== undefined;
-  const shownVariant: "slim" | "classic" | null = shownSkin
+  const skinVariant: "slim" | "classic" | null = shownSkin
     ? shownSkin.variant
     : activeSkin ? (activeSkin.variant === "SLIM" ? "slim" : "classic") : null;
+
+  // Viewer controls under the character: elytra on/off, freeze the animation,
+  // and swap the arm model (slim ⇄ classic) just to look — nothing is applied.
+  const [elytra, setElytra] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [modelOverride, setModelOverride] = useState<"slim" | "classic" | null>(null);
+  const shownSkinKey = shownSkin?.key ?? activeSkin?.id ?? null;
+  // Another skin on the character: its own model again.
+  useEffect(() => setModelOverride(null), [shownSkinKey]);
+  const shownVariant = modelOverride ?? skinVariant;
+  const viewedModel: "slim" | "classic" = shownVariant ?? "classic";
 
   const refresh = useCallback(async () => {
     if (!mcToken) return;
@@ -284,77 +325,99 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
           >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Aplicar"}
           </Button>
-          <Button
-            onClick={discardPreview}
-            disabled={busy}
-            size="sm"
-            variant="outline"
-            title="Descartar cambios"
-            className="h-8 w-8 p-0"
-          >
-            <X className="h-3.5 w-3.5" />
-          </Button>
+          <Hint label="Descartar cambios">
+            <Button
+              onClick={discardPreview}
+              disabled={busy}
+              size="sm"
+              variant="outline"
+              className="h-8 w-8 p-0"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </Hint>
         </motion.div>
       )}
     </AnimatePresence>
   );
 
   return (
-    <div className="flex gap-6">
-      {/* Same size, backdrop and spot as the account menu's character column
-          (190×254, bottom-aligned), so switching to "Personalizar" doesn't make
-          it jump. */}
-      <div className="flex flex-col items-center gap-2 shrink-0 self-end">
-        <div className="relative rounded-xl bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.18),transparent_70%)]">
-          <SkinViewerAnimated
-            skinUrl={
-              shownSkin
-                ? `data:image/png;base64,${shownSkin.base64}`
-                : skinDataUrl ?? `https://mc-heads.net/skin/${uuid}`
-            }
-            capeUrl={shownCapeDataUrl}
-            variant={shownVariant ?? "auto-detect"}
-            width={190}
-            height={254}
-            effect={decoration}
-            className="cursor-grab active:cursor-grabbing"
-          />
-          {/* Over the viewer instead of below it, so the column keeps the same
-              height as in the other menu views. */}
+    <div className="flex gap-6 h-full">
+      {/* The same card as the account menu's character (menu, Perfil), so
+          switching to "Personalizar" doesn't make it jump. */}
+      <CharacterCard
+        skinUrl={shownSkin ? `data:image/png;base64,${shownSkin.base64}` : skinDataUrl ?? `https://mc-heads.net/skin/${uuid}`}
+        capeUrl={shownCapeDataUrl}
+        variant={shownVariant ?? "auto-detect"}
+        // Personalizar shows the character bare, on a mesh: the decoration's
+        // effect (particles…) would hide the skin and cape being chosen.
+        effect="none"
+        grid
+        viewer={{ elytra, paused }}
+        badge={
+          // Over the character instead of below it, so the card keeps its height.
           <AnimatePresence>
             {hasPreview && (
               <motion.span
                 initial={{ opacity: 0, y: -4 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -4 }}
-                className="absolute bottom-1 left-1/2 -translate-x-1/2 pointer-events-none px-2 py-0.5 rounded-full bg-accent/15 text-[9px] uppercase tracking-wide text-accent font-semibold whitespace-nowrap"
+                className="absolute bottom-9 left-1/2 -translate-x-1/2 pointer-events-none px-2 py-0.5 rounded-full bg-accent/20 backdrop-blur-sm text-[9px] uppercase tracking-wide text-accent font-semibold whitespace-nowrap"
               >
                 Vista previa
               </motion.span>
             )}
           </AnimatePresence>
-        </div>
+        }
+      >
         {viewerFooter}
+        <div className="flex w-full items-center justify-center gap-1.5">
+          <ViewerButton
+            label={elytra ? "Quitar la elytra" : "Ver con elytra"}
+            active={elytra}
+            onClick={() => setElytra((v) => !v)}
+          >
+            <Feather className="h-4 w-4" />
+          </ViewerButton>
+          <ViewerButton
+            label={paused ? "Reanudar la animación" : "Pausar la animación"}
+            active={paused}
+            onClick={() => setPaused((v) => !v)}
+          >
+            {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+          </ViewerButton>
+          <ViewerButton
+            label={viewedModel === "slim" ? "Modelo slim: cambiar a clásico" : "Modelo clásico: cambiar a slim"}
+            active={viewedModel === "slim"}
+            onClick={() => setModelOverride(viewedModel === "slim" ? "classic" : "slim")}
+          >
+            <PersonStanding className="h-4 w-4" />
+          </ViewerButton>
+        </div>
         {previewActionsSlot ? createPortal(previewActions, previewActionsSlot) : previewActions}
-      </div>
+      </CharacterCard>
 
-      <div className="w-[29rem] h-[300px] flex flex-col">
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="w-full bg-card/50 border border-white/5">
-            <TabsTrigger value="library" className="flex-1 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground">
-              Biblioteca ({library.length})
+      <div className="w-[27rem] min-h-[300px] min-h-0 flex flex-col">
+        <Tabs value={tab} onValueChange={setTab} className="flex-1 flex flex-col min-h-0">
+          {/* Same segmented tabs as Amigos. */}
+          <TabsList className="w-full h-auto gap-0.5 p-0.5 rounded-md bg-white/[0.04] border border-transparent">
+            <TabsTrigger value="library" className={TAB_TRIGGER}>
+              Biblioteca
+              {library.length > 0 && <TabCount n={library.length} />}
             </TabsTrigger>
-            <TabsTrigger value="showcase" className="flex-1 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground">
+            <TabsTrigger value="showcase" className={TAB_TRIGGER}>
               Escaparate
+              {showcaseUsernames.length > 0 && <TabCount n={showcaseUsernames.length} />}
             </TabsTrigger>
             {profile && profile.capes.length > 0 && (
-              <TabsTrigger value="capes" className="flex-1 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground">
+              <TabsTrigger value="capes" className={TAB_TRIGGER}>
                 Capas
+                <TabCount n={profile.capes.length} />
               </TabsTrigger>
             )}
           </TabsList>
 
-          <TabsContent value="library" className="mt-3">
+          <TabsContent value="library" className="mt-3 flex-1 min-h-0 overflow-y-auto pr-1">
             <TabBody>
             <input
               ref={fileInputRef}
@@ -365,7 +428,7 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
             />
 
             {pendingPreviewUrl ? (
-              <div className="space-y-3 p-2.5 rounded-md border border-white/10 bg-white/5">
+              <div className="space-y-3 p-2.5 rounded-md border border-transparent bg-white/[0.07]">
                 <div className="flex items-center gap-3">
                   <img
                     src={pendingPreviewUrl}
@@ -377,7 +440,7 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
                     value={pendingName}
                     onChange={(e) => setPendingName(e.target.value)}
                     placeholder="Nombre de la skin"
-                    className="flex-1 bg-background/50 border-white/10 text-sm h-8"
+                    className="flex-1 bg-white/[0.07] border-transparent text-sm h-8"
                   />
                 </div>
                 <div className="flex gap-2">
@@ -415,7 +478,7 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-md border border-dashed border-white/15 text-muted-foreground hover:text-gray-200 hover:border-white/30 transition-colors text-xs"
+                className="w-full h-10 flex items-center justify-center gap-2 rounded-md border border-dashed border-white/15 bg-white/[0.02] text-muted-foreground hover:text-gray-200 hover:border-accent/50 hover:bg-accent/[0.06] transition-colors text-xs font-medium"
               >
                 <Upload className="h-4 w-4" />
                 Subir nueva skin
@@ -449,15 +512,16 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
                       {equipped ? (
                         <EquippedBadge />
                       ) : (
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); handleDeleteFromLibrary(entry.id); }}
-                          disabled={busy}
-                          title="Eliminar"
-                          className="absolute -top-1.5 -right-1.5 h-5 w-5 flex items-center justify-center rounded-full bg-destructive text-white hover:bg-destructive/90 opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          <Trash className="h-3 w-3" />
-                        </button>
+                        <Hint label="Eliminar">
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); handleDeleteFromLibrary(entry.id); }}
+                            disabled={busy}
+                            className="absolute -top-1.5 -right-1.5 h-5 w-5 flex items-center justify-center rounded-full bg-destructive text-white hover:bg-destructive/90 opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <Trash className="h-3 w-3" />
+                          </button>
+                        </Hint>
                       )}
                     </div>
                   );
@@ -467,7 +531,7 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
             </TabBody>
           </TabsContent>
 
-          <TabsContent value="showcase" className="mt-3">
+          <TabsContent value="showcase" className="mt-3 flex-1 min-h-0 overflow-y-auto pr-1">
             <TabBody>
             <div className="flex gap-2">
               <Input
@@ -475,18 +539,20 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
                 onChange={(e) => setNewShowcaseName(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleAddShowcaseName()}
                 placeholder="Nombre de Minecraft..."
-                className="flex-1 bg-background/50 border-white/10 text-sm h-8"
+                className="flex-1 bg-white/[0.07] border-transparent text-sm h-8"
               />
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={handleAddShowcaseName}
-                disabled={!newShowcaseName.trim()}
-                className="h-8 px-2.5"
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </Button>
+              <Hint label="Añadir nombre">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={handleAddShowcaseName}
+                  disabled={!newShowcaseName.trim()}
+                  className="h-8 px-2.5"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              </Hint>
             </div>
 
             {showcaseUsernames.length === 0 ? (
@@ -563,9 +629,23 @@ interface PreviewSkin {
   variant: "slim" | "classic";
 }
 
-/** Highlighted = what the character is wearing right now (preview or not). */
+/** Highlighted = what the character is wearing right now (preview or not).
+ *  Same tile look as the account menu's buttons: hairline border, faint fill. */
 function tileClass(shown: boolean): string {
-  return shown ? "bg-accent/15 border-accent/50" : "bg-white/5 border-white/5 hover:bg-white/10";
+  return shown
+    ? "bg-accent/15 border-accent/60 shadow-[0_0_12px_hsl(var(--accent)/0.25)]"
+    : "bg-white/[0.04] border-white/10 hover:bg-white/[0.08] hover:border-white/20";
+}
+
+const TAB_TRIGGER =
+  "flex-1 h-7 gap-1.5 rounded-[5px] text-xs font-medium text-gray-400 hover:text-gray-200 hover:bg-white/[0.07] data-[state=active]:bg-white/[0.14] data-[state=active]:text-white data-[state=active]:shadow-none";
+
+function TabCount({ n }: { n: number }) {
+  return (
+    <span className="min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-white/10 text-[10px] font-bold leading-none text-gray-300">
+      {n}
+    </span>
+  );
 }
 
 /** Marks what's actually equipped on the account, as opposed to just previewed. */
@@ -674,14 +754,15 @@ function ShowcaseEntry({ username, busy, selected, onPreview, onSave, onRemove }
         ready ? "cursor-pointer" : ""
       } ${tileClass(selected)}`}
     >
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); onRemove(); }}
-        title="Quitar del escaparate"
-        className="absolute -top-1.5 -left-1.5 h-4 w-4 flex items-center justify-center rounded-full bg-white/10 text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-white/20"
-      >
-        <X className="h-2.5 w-2.5" />
-      </button>
+      <Hint label="Quitar del escaparate">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          className="absolute -top-1.5 -left-1.5 h-4 w-4 flex items-center justify-center rounded-full bg-white/10 text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-white/20"
+        >
+          <X className="h-2.5 w-2.5" />
+        </button>
+      </Hint>
 
       {loading ? (
         <div className="h-10 w-10 flex items-center justify-center">
@@ -705,15 +786,16 @@ function ShowcaseEntry({ username, busy, selected, onPreview, onSave, onRemove }
       </span>
 
       {ready && (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onSave(username, fullDataUrl!, variant); }}
-          disabled={busy}
-          title="Guardar en biblioteca"
-          className="absolute -top-1.5 -right-1.5 h-5 w-5 flex items-center justify-center rounded-full bg-white/10 text-gray-200 hover:bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity"
-        >
-          <Store className="h-3 w-3" />
-        </button>
+        <Hint label="Guardar en biblioteca">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onSave(username, fullDataUrl!, variant); }}
+            disabled={busy}
+            className="absolute -top-1.5 -right-1.5 h-5 w-5 flex items-center justify-center rounded-full bg-white/10 text-gray-200 hover:bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            <Store className="h-3 w-3" />
+          </button>
+        </Hint>
       )}
     </div>
   );

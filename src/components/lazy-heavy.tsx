@@ -3,7 +3,7 @@ import { Loader2 } from "lucide-react";
 import type { SkinViewerAnimated as SkinViewerAnimatedImpl } from "@/components/skin-viewer-animated";
 import type { SkinManagerPanel as SkinManagerPanelImpl } from "@/components/skin-manager-panel";
 import type { ChatContentPicker as ChatContentPickerImpl } from "@/components/chat-content-picker";
-import type { ProfileCustomizeDialog as ProfileCustomizeDialogImpl } from "@/components/profile-customize-dialog";
+import type { ProfileDecorationPicker as ProfileDecorationPickerImpl, ProfileCustomizeContent as ProfileCustomizeContentImpl, ProfileCustomizeDialog as ProfileCustomizeDialogImpl } from "@/components/profile-customize-dialog";
 
 // Rendimiento: these pull in three.js (+ skin models, particle effects, emote
 // players), yet they're rendered by components that are on screen from the
@@ -23,6 +23,14 @@ const SkinManagerPanelLazy = lazy(() => loadSkinManagerPanel().then((m) => ({ de
 const ChatContentPickerLazy = lazy(() => loadChatContentPicker().then((m) => ({ default: m.ChatContentPicker })));
 const ProfileCustomizeDialogLazy = lazy(() =>
   loadProfileCustomizeDialog().then((m) => ({ default: m.ProfileCustomizeDialog }))
+);
+
+const ProfileCustomizeContentLazy = lazy(() =>
+  loadProfileCustomizeDialog().then((m) => ({ default: m.ProfileCustomizeContent }))
+);
+
+const ProfileDecorationPickerLazy = lazy(() =>
+  loadProfileCustomizeDialog().then((m) => ({ default: m.ProfileDecorationPicker }))
 );
 
 export function SkinViewerAnimated(props: ComponentProps<typeof SkinViewerAnimatedImpl>) {
@@ -60,6 +68,34 @@ export function ProfileCustomizeDialog(props: ComponentProps<typeof ProfileCusto
   return (
     <Suspense fallback={null}>
       <ProfileCustomizeDialogLazy {...props} />
+    </Suspense>
+  );
+}
+
+export function ProfileCustomizeContent(props: ComponentProps<typeof ProfileCustomizeContentImpl>) {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center py-16 text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" />
+        </div>
+      }
+    >
+      <ProfileCustomizeContentLazy {...props} />
+    </Suspense>
+  );
+}
+
+export function ProfileDecorationPicker(props: ComponentProps<typeof ProfileDecorationPickerImpl>) {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center py-10 text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" />
+        </div>
+      }
+    >
+      <ProfileDecorationPickerLazy {...props} />
     </Suspense>
   );
 }

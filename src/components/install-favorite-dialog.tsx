@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useState } from "react";
 import { Boxes, Check, Download, Home as HomeIcon, Loader2, X } from "lucide-react";
 import { useModpacks } from "@/hooks/use-modpacks";
@@ -7,7 +8,7 @@ import type { FavoriteEntry } from "@/services/favorites";
 import type { Modpack } from "@/services/github";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 
 interface InstallFavoriteDialogProps {
   favorite: FavoriteEntry | null;
@@ -49,7 +50,7 @@ export function InstallFavoriteDialog({ favorite, onOpenChange }: InstallFavorit
   const applyOutcome = (target: Modpack, outcome: InstallOutcome) => {
     if (outcome.kind === "installed") {
       setStatus((s) => ({ ...s, [target.id]: { state: "done" } }));
-      toast.success(`${favorite!.title} instalado en ${target.name}.`);
+      notify.success(`${favorite!.title} instalado en ${target.name}.`);
     } else if (outcome.kind === "incompatible") {
       setStatus((s) => ({
         ...s,
@@ -59,7 +60,7 @@ export function InstallFavoriteDialog({ favorite, onOpenChange }: InstallFavorit
       setStatus((s) => ({ ...s, [target.id]: { state: "error", message: outcome.reason } }));
     } else if (outcome.kind === "skipped") {
       setStatus((s) => ({ ...s, [target.id]: { state: "done" } }));
-      toast(outcome.reason);
+      notify(outcome.reason);
     } else {
       setStatus((s) => ({ ...s, [target.id]: { state: "needsChoice", existingLabel: outcome.existingLabel, proceed: outcome.proceed } }));
     }
@@ -118,14 +119,16 @@ export function InstallFavoriteDialog({ favorite, onOpenChange }: InstallFavorit
                         <Button size="sm" className="h-6 px-2 text-[11px]" onClick={() => confirmChoice(target, st.proceed)}>
                           Sustituir
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-6 px-2 text-[11px]"
-                          onClick={() => setStatus((s) => ({ ...s, [target.id]: { state: "idle" } }))}
-                        >
-                          <X className="h-3 w-3" />
-                        </Button>
+                        <Hint label="Descartar">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 px-2 text-[11px]"
+                            onClick={() => setStatus((s) => ({ ...s, [target.id]: { state: "idle" } }))}
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </Hint>
                       </div>
                     </div>
                   )}

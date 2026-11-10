@@ -1,13 +1,14 @@
+import { Hint } from "@/components/hint";
+import { LauncherCustomizeDialog } from "@/components/launcher-customize-dialog";
 import { useEffect, useState } from "react";
 import { useLocation, useRoute } from "wouter";
-import { ArrowLeft, Download, GalleryHorizontal, Home, KeyRound, LayoutGrid, Loader2, Minus, Server, Square, Copy, X } from "lucide-react";
-import { toast } from "sonner";
+import { ArrowLeft, Download, GalleryHorizontal, Home, LayoutGrid, Loader2, Minus, Paintbrush, Square, Copy, X } from "lucide-react";
+import { toast } from "@/lib/toast";
 import { getAppUpdateState, installAppUpdate, isElectron, onAppUpdateReady } from "@/services/electron";
 import { getLastViewPath } from "@/lib/last-view";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { useCarouselModpacks, useModpacks } from "@/hooks/use-modpacks";
 import { useAuth } from "@/hooks/use-auth";
-import { RedeemCodeDialog } from "@/components/redeem-code-dialog";
 import { ONLINE_DRAWER_AVAILABLE, useOnlineViewMode } from "@/lib/online-view-mode";
 
 const api = (window as any).electronAPI;
@@ -93,9 +94,9 @@ export function Titlebar() {
   const [onHome] = useRoute("/");
   const showBack =
     onModpackDetail || onOnlineInstance || onHub || onProfile || onPublicProfile || onFriends || onServers || onExplore || onSettings || onAdmin || onAdminSubpage;
-  const backTarget = onAdminSubpage ? "/admin" : getLastViewPath();
+  const backTarget = onAdminSubpage || onServers ? "/admin" : getLastViewPath();
   const isAdmin = useIsAdmin();
-  const [redeemOpen, setRedeemOpen] = useState(false);
+  const [customizeOpen, setCustomizeOpen] = useState(false);
   const onlineViewMode = useOnlineViewMode((s) => s.mode);
   const toggleOnlineViewMode = useOnlineViewMode((s) => s.toggle);
   const { loadModpacks } = useModpacks();
@@ -134,21 +135,23 @@ export function Titlebar() {
               <img src="./logo.png" alt="ALaunchi" className="h-5 w-5 object-contain" draggable={false} />
             </div>
           ) : (
-            <button
-              style={noDragStyle}
-              data-tour="titlebar-carousel"
-              onClick={() => setLocation(onHub ? "/" : showBack ? backTarget : "/hub")}
-              className="h-7 w-7 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-              aria-label={onHub ? "Ir a las instancias online" : showBack ? "Volver" : "Panel"}
-            >
-              {onHub ? (
-                <GalleryHorizontal className="h-4 w-4" />
-              ) : showBack ? (
-                <ArrowLeft className="h-4 w-4" />
-              ) : (
-                <Home className="h-4 w-4" />
-              )}
-            </button>
+            <Hint label={onHub ? "Instancias online" : showBack ? "Volver" : "Panel"}>
+              <button
+                style={noDragStyle}
+                data-tour="titlebar-carousel"
+                onClick={() => setLocation(onHub ? "/" : showBack ? backTarget : "/hub")}
+                className="h-7 w-7 flex items-center justify-center rounded text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+                aria-label={onHub ? "Ir a las instancias online" : showBack ? "Volver" : "Panel"}
+              >
+                {onHub ? (
+                  <GalleryHorizontal className="h-4 w-4" />
+                ) : showBack ? (
+                  <ArrowLeft className="h-4 w-4" />
+                ) : (
+                  <Home className="h-4 w-4" />
+                )}
+              </button>
+            </Hint>
           )}
           <span className="font-bold tracking-tight text-white text-sm">
             <span className="text-accent">AL</span>aunchi
@@ -156,22 +159,8 @@ export function Titlebar() {
         </div>
         <div style={noDragStyle} className="flex items-center h-full">
           <AppUpdateBanner />
-          {/* SERVER and ADMIN: only for creators (GitHub repo + tokens verified in
-              Ajustes), on every view — online instances (/) and private ones (/hub). */}
-          {isAdmin && (
-            <>
-              <button
-                onClick={() => setLocation("/servers")}
-                className={`h-full px-3 flex items-center gap-1.5 text-[10px] font-mono font-bold transition-colors ${
-                  onServers ? "text-accent bg-white/5" : "text-gray-400 hover:bg-white/10 hover:text-white"
-                }`}
-              >
-                <Server className="h-3 w-3" />
-                SERVER
-              </button>
-              <div className="w-px h-4 bg-white/10" />
-            </>
-          )}
+          {/* ADMIN: only for creators (GitHub repo + tokens verified in Ajustes), on
+              every view. Servers lives inside the admin panel. */}
           {isAdmin && (
             <>
               <button
@@ -183,57 +172,64 @@ export function Titlebar() {
               <div className="w-px h-4 bg-white/10" />
             </>
           )}
-          {onHome && (
-            <>
-              <button
-                onClick={() => setRedeemOpen(true)}
-                className="h-full px-3 flex items-center gap-1.5 text-[10px] font-mono font-bold text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-              >
-                <KeyRound className="h-3 w-3" />
-                AÑADIR
-              </button>
-              <div className="w-px h-4 bg-white/10" />
-            </>
-          )}
+          {/* Personalizar: the launcher's look (theme, background, sounds) in a window. */}
+          <Hint label="Personalizar">
+            <button
+              onClick={() => setCustomizeOpen(true)}
+              aria-label="Personalizar"
+              className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+            >
+              <Paintbrush className="h-3.5 w-3.5" />
+            </button>
+          </Hint>
+          <div className="w-px h-4 bg-white/10" />
           {onHome && ONLINE_DRAWER_AVAILABLE && (
             <>
               {/* Carousel ⇄ drawer view of the online instances (lib/online-view-mode.ts).
                   The icon is the view you'd switch to. */}
-              <button
-                onClick={toggleOnlineViewMode}
-                className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-                aria-label={onlineViewMode === "carousel" ? "Ver como cajón" : "Ver como carrusel"}
-                title={onlineViewMode === "carousel" ? "Ver como cajón" : "Ver como carrusel"}
-              >
-                {onlineViewMode === "carousel" ? <LayoutGrid className="h-3.5 w-3.5" /> : <GalleryHorizontal className="h-3.5 w-3.5" />}
-              </button>
+              <Hint label={onlineViewMode === "carousel" ? "Ver como cajón" : "Ver como carrusel"}>
+                <button
+                  onClick={toggleOnlineViewMode}
+                  data-tour="titlebar-view-mode"
+                  className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+                  aria-label={onlineViewMode === "carousel" ? "Ver como cajón" : "Ver como carrusel"}
+                >
+                  {onlineViewMode === "carousel" ? <LayoutGrid className="h-3.5 w-3.5" /> : <GalleryHorizontal className="h-3.5 w-3.5" />}
+                </button>
+              </Hint>
               <div className="w-px h-4 bg-white/10" />
             </>
           )}
-          <button
-            onClick={() => api.minimize()}
-            className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-            aria-label="Minimizar"
-          >
-            <Minus className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={() => api.maximize()}
-            className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
-            aria-label={maximized ? "Restaurar" : "Pantalla completa"}
-          >
-            {maximized ? <Copy className="h-3 w-3" /> : <Square className="h-3 w-3" />}
-          </button>
-          <button
-            onClick={() => api.close()}
-            className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-red-600 hover:text-white transition-colors"
-            aria-label="Cerrar"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+          <Hint label="Minimizar">
+            <button
+              onClick={() => api.minimize()}
+              className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+              aria-label="Minimizar"
+            >
+              <Minus className="h-3.5 w-3.5" />
+            </button>
+          </Hint>
+          <Hint label={maximized ? "Restaurar" : "Pantalla completa"}>
+            <button
+              onClick={() => api.maximize()}
+              className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-white/10 hover:text-white transition-colors"
+              aria-label={maximized ? "Restaurar" : "Pantalla completa"}
+            >
+              {maximized ? <Copy className="h-3 w-3" /> : <Square className="h-3 w-3" />}
+            </button>
+          </Hint>
+          <Hint label="Cerrar">
+            <button
+              onClick={() => api.close()}
+              className="h-full w-11 flex items-center justify-center text-gray-400 hover:bg-red-600 hover:text-white transition-colors"
+              aria-label="Cerrar"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </Hint>
         </div>
       </div>
-      <RedeemCodeDialog open={redeemOpen} onOpenChange={setRedeemOpen} onRedeemed={() => loadModpacks()} />
+      <LauncherCustomizeDialog open={customizeOpen} onOpenChange={setCustomizeOpen} />
     </>
   );
 }

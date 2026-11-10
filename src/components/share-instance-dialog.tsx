@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader2, Package } from "lucide-react";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { SendToFriendDialog } from "@/components/send-to-friend-dialog";
 import { useAuth } from "@/hooks/use-auth";
 import { buildInstanceRecipe } from "@/lib/instance-recipe";
@@ -72,7 +72,7 @@ export function ShareInstanceDialog({
       ...(icon ? { iconDataUrl: icon } : {}),
     };
     await sendSharedInstance(myUuid, myUsername, uuid, username, shared);
-    toast.success(`${instance.name} compartida con ${username}.`);
+    notify.success(`${instance.name} compartida con ${username}.`);
   };
 
   return (

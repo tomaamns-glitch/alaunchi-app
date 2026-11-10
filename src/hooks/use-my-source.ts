@@ -50,7 +50,9 @@ export const useMySource = create<MySourceState>((set) => ({
     const result = await verifyCreatorRepo(
       config.repoUrl.trim(),
       config.adminToken.trim(),
-      config.isPrivate ? config.readToken.trim() : undefined
+      // Regardless of the form's switch: GitHub decides whether it's private, and
+      // the switch starts off wherever this origin's localStorage has no flag.
+      config.readToken.trim() || undefined
     );
     // GitHub has the last word on private/public — a mismatch would leave
     // players unable to download (public reads of a private repo 404).

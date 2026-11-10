@@ -2,7 +2,7 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bookmark, Check, PackagePlus } from "lucide-react";
 import { ServerIcon } from "@/components/server-icon";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { sendSharedServer, type SharedServer } from "@/services/chat";
 import { useSavedServers } from "@/lib/saved-servers";
 import { ServerInstancePicker } from "@/components/server-instance-picker";
@@ -43,7 +43,7 @@ export function ChatServerPicker({
   return (
     <motion.div
       {...popover}
-      className="absolute bottom-full left-0 mb-2 z-50 w-64 max-h-64 overflow-y-auto rounded-lg bg-card border border-white/10 shadow-xl py-1"
+      className="absolute bottom-full left-0 mb-2 z-50 w-64 max-h-64 overflow-y-auto rounded-md bg-card border border-transparent shadow-xl py-1"
     >
       <p className="text-[10px] uppercase tracking-wide text-muted-foreground px-2.5 pt-1 pb-1.5">Compartir server</p>
       {servers.length === 0 ? (
@@ -117,7 +117,7 @@ export function SharedServerCard({ server }: { server: SharedServer }) {
           {showPicker && (
             <motion.div
               {...popover}
-              className="absolute bottom-full right-0 mb-1 z-50 w-60 max-h-64 overflow-y-auto rounded-lg bg-card border border-white/10 shadow-xl p-2"
+              className="absolute bottom-full right-0 mb-1 z-50 w-60 max-h-64 overflow-y-auto rounded-md bg-card border border-transparent shadow-xl p-2"
             >
               <ServerInstancePicker server={server} onDone={() => setShowPicker(false)} />
             </motion.div>

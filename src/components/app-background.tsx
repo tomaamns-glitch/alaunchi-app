@@ -3,6 +3,7 @@ import SwellLight from "@/components/swell-light";
 import { StaticGlow } from "@/components/static-glow";
 import { useAnimatedBackground } from "@/lib/animated-background";
 import { useTheme } from "@/lib/theme";
+import { useAdaptiveColor } from "@/lib/adaptive-color";
 import { extractDominantColor, type HSL } from "@/lib/dominant-color";
 
 /**
@@ -18,6 +19,7 @@ export function AppBackground({ tintFrom }: { tintFrom?: string }) {
   const theme = useTheme((s) => s.theme);
   const animatedBackground = useAnimatedBackground((s) => s.enabled);
   const [iconHsl, setIconHsl] = useState<HSL | null>(null);
+  const adaptive = useAdaptiveColor((s) => s.enabled);
 
   useEffect(() => {
     if (!tintFrom) return;
@@ -29,7 +31,7 @@ export function AppBackground({ tintFrom }: { tintFrom?: string }) {
     return () => {
       cancelled = true;
     };
-  }, [tintFrom]);
+  }, [tintFrom, adaptive]);
 
   const colors = useMemo(() => {
     if (tintFrom && iconHsl) {

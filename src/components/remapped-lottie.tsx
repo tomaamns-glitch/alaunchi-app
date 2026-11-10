@@ -95,6 +95,7 @@ export function RemappedLottie({
   band,
   once,
   replayKey = 0,
+  filter,
 }: {
   load: () => Promise<{ default: unknown }>;
   source: RingSource;
@@ -110,6 +111,8 @@ export function RemappedLottie({
   band: number;
   /** Each change restarts the animation from its first frame (clicking the icon). */
   replayKey?: number;
+  /** CSS filter on the canvas (Fuego's colour). */
+  filter?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animRef = useRef<{ goToAndPlay: (f: number, isFrame: boolean) => void; playCount: number } | null>(null);
@@ -217,7 +220,7 @@ export function RemappedLottie({
       height={out}
       aria-hidden
       className="pointer-events-none absolute z-[2]"
-      style={{ width: cssOut, height: cssOut, left: -head * band, top: -head * band }}
+      style={{ width: cssOut, height: cssOut, left: -head * band, top: -head * band, filter }}
     />
   );
 }

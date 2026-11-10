@@ -1,13 +1,16 @@
+import { Hint } from "@/components/hint";
+import { CuriositiesCard } from "@/components/curiosities-card";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronDown, Compass, Download, LayoutGrid, Plus, Search, X } from "lucide-react";
+import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
+import { Compass, LayoutGrid, Plus, Search, X } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { useInstanceFolders } from "@/hooks/use-instance-folders";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import { AccountMenuButton } from "@/components/account-menu-button";
-import { ChatBubbleRow } from "@/components/chat-bubble-row";
+import { ChatButton } from "@/components/chat-button";
 import { ChatWindow } from "@/components/chat-window";
 import { GroupChatNotifications } from "@/components/instance-group-chat";
 import { ActivityButton } from "@/components/activity-button";
@@ -19,11 +22,8 @@ import { InstanceTile } from "@/components/hub-tile";
 import { Button } from "@/components/ui/button";
 import { AppBackground } from "@/components/app-background";
 import { CurseForgeImportDialog, CurseForgeLogo } from "@/components/curseforge-import-dialog";
-import { ModrinthModpacksDialog } from "@/components/modrinth-modpacks-dialog";
-import { ModrinthGlyph } from "@/components/admin-modrinth-browser";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 // Minimum tile width in px. The grid uses `repeat(auto-fill, minmax(SIZE, 1fr))`:
 // columns reflow when the window is resized, and the row always spans the full
@@ -34,7 +34,6 @@ const TILE_MAX = 340;
 
 export default function Hub() {
   const [curseForgeOpen, setCurseForgeOpen] = useState(false);
-  const [modrinthOpen, setModrinthOpen] = useState(false);
   const { isAuthenticated, username, uuid } = useAuth();
   const [, setLocation] = useLocation();
   const { instances, loaded: instancesLoaded, loadInstances } = useCustomInstances();
@@ -56,6 +55,8 @@ export default function Hub() {
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [sizeOpen, setSizeOpen] = useState(false);
+  const sizeRef = useRef<HTMLDivElement | null>(null);
+  useDismissOnOutsideClick([sizeRef], () => setSizeOpen(false), sizeOpen);
   const searchRef = useRef<HTMLInputElement>(null);
   const [tileSize, setTileSize] = useState(() => {
     const raw = Number(localStorage.getItem(TILE_SIZE_KEY));
@@ -200,26 +201,15 @@ export default function Hub() {
             {/* Importar + Nueva instancia on top; search and tile size right under them. */}
             <div className="flex flex-col items-end gap-1 shrink-0">
               <div className="flex items-center gap-1.5">
-                {/* Modrinth + CurseForge behind one "Importar" (dialogs open next tick, once the menu has closed). */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button size="sm" variant="outline" className="border-white/10 gap-1.5">
-                      <Download className="h-3.5 w-3.5" /> Importar
-                      <ChevronDown className="h-3.5 w-3.5 opacity-70" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="min-w-[13rem]">
-                    <DropdownMenuItem onSelect={() => setTimeout(() => setModrinthOpen(true), 0)}>
-                      <ModrinthGlyph className="h-4 w-4 text-[#1bd96a]" />
-                      Modpack de Modrinth
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onSelect={() => setTimeout(() => setCurseForgeOpen(true), 0)}>
-                      <CurseForgeLogo className="h-4 w-4 text-[#F16436]" />
-                      Instancias de CurseForge
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                {/* Importar instancias de CurseForge. */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-white/10 gap-1.5"
+                  onClick={() => setCurseForgeOpen(true)}
+                >
+                  <CurseForgeLogo className="h-3.5 w-3.5 text-[#F16436]" /> Importar de CurseForge
+                </Button>
                 {/* Explorar: Modrinth content and creators (pages/explore.tsx). */}
                 <Button
                   size="sm"
@@ -245,24 +235,26 @@ export default function Hub() {
                   {/* Search + tile size side by side, with a thin line between them. Opening the
                       search, the box grows out to the magnifier's right — pushing it left. */}
                   <div className="flex items-center">
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    // No box around it, open or not: just the icon (accent while searching).
-                    className={`h-8 w-8 shrink-0 hover:bg-transparent focus-visible:ring-0 ${searchOpen ? "text-accent hover:text-accent" : "text-muted-foreground hover:text-foreground"}`}
-                    aria-label={searchOpen ? "Cerrar búsqueda" : "Buscar instancia"}
-                    onClick={() => {
-                      if (searchOpen) {
-                        setSearch("");
-                        setSearchOpen(false);
-                      } else {
-                        setSearchOpen(true);
-                        setTimeout(() => searchRef.current?.focus(), 0);
-                      }
-                    }}
-                  >
-                    <Search className="h-4 w-4" />
-                  </Button>
+                  <Hint label={searchOpen ? "Cerrar búsqueda" : "Buscar instancia"}>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      // No box around it, open or not: just the icon (accent while searching).
+                      className={`h-8 w-8 shrink-0 hover:bg-transparent focus-visible:ring-0 ${searchOpen ? "text-accent hover:text-accent" : "text-muted-foreground hover:text-foreground"}`}
+                      aria-label={searchOpen ? "Cerrar búsqueda" : "Buscar instancia"}
+                      onClick={() => {
+                        if (searchOpen) {
+                          setSearch("");
+                          setSearchOpen(false);
+                        } else {
+                          setSearchOpen(true);
+                          setTimeout(() => searchRef.current?.focus(), 0);
+                        }
+                      }}
+                    >
+                      <Search className="h-4 w-4" />
+                    </Button>
+                  </Hint>
                   <AnimatePresence initial={false}>
                     {searchOpen && (
                       <motion.div
@@ -288,18 +280,21 @@ export default function Hub() {
                     )}
                   </AnimatePresence>
                   <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden />
-                {/* Tile size: like the search, the slider slides out to the button's right. */}
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => setSizeOpen((v) => !v)}
-                  className={`h-8 w-8 shrink-0 hover:bg-transparent focus-visible:ring-0 ${sizeOpen ? "text-accent hover:text-accent" : "text-muted-foreground hover:text-foreground"}`}
-                  aria-label="Tamaño de las instancias"
-                  aria-expanded={sizeOpen}
-                  title="Tamaño de las instancias"
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                </Button>
+                {/* Tile size: like the search, the slider slides out to the button's right.
+                    A click anywhere else folds it back (useDismissOnOutsideClick below). */}
+                <div ref={sizeRef} className="flex items-center">
+                <Hint label="Tamaño de las instancias">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => setSizeOpen((v) => !v)}
+                    className={`h-8 w-8 shrink-0 hover:bg-transparent focus-visible:ring-0 ${sizeOpen ? "text-accent hover:text-accent" : "text-muted-foreground hover:text-foreground"}`}
+                    aria-label="Tamaño de las instancias"
+                    aria-expanded={sizeOpen}
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                  </Button>
+                </Hint>
                 <AnimatePresence initial={false}>
                   {sizeOpen && (
                     <motion.div
@@ -327,6 +322,7 @@ export default function Hub() {
                     </motion.div>
                   )}
                 </AnimatePresence>
+                </div>
                   </div>
                 </div>
               )}
@@ -381,19 +377,21 @@ export default function Hub() {
         onCreated={(id) => setLocation(`/modpack/${id}`)}
       />
       <CurseForgeImportDialog open={curseForgeOpen} onOpenChange={setCurseForgeOpen} />
-      <ModrinthModpacksDialog
-        open={modrinthOpen}
-        onOpenChange={setModrinthOpen}
-        onOpenInstance={(id) => setLocation(`/modpack/${id}`)}
-      />
       <NewFolderDialog open={newFolderOpen} onOpenChange={setNewFolderOpen} onCreate={createFolder} />
 
-      <footer className="relative z-20 h-20 bg-gray-500/10 backdrop-blur-xl flex items-center justify-between px-6 shrink-0">
+      {/* Rotating tips, just above the footer's left end. */}
+      <CuriositiesCard className="bottom-24 left-5" />
+
+      <footer className="relative z-20 h-20 [transform:translateZ(0)] flex items-center justify-between px-6 shrink-0">
+        {/* The blur in a layer of its own: on the footer itself, the chat windows
+            inside it couldn't blur the page behind them (backdrop root). The
+            transform keeps `fixed` descendants relative to the footer, as the blur did. */}
+        <div aria-hidden className="absolute inset-0 -z-10 bg-gray-500/10 backdrop-blur-xl" />
         <div className="flex items-center gap-1">
           <AccountMenuButton uuid={uuid} username={username} />
           {uuid && (
             <div className="relative">
-              <ChatBubbleRow />
+              <ChatButton />
               <ChatWindow myUuid={uuid} myUsername={username ?? ""} defaultMode={{ type: "general" }} />
             </div>
           )}

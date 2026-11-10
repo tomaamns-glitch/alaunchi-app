@@ -1,10 +1,12 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { Shirt, Settings, Users, Globe, Server, ChevronLeft, ChevronDown, BookMarked, type LucideIcon } from "lucide-react";
+import { Shirt, Settings, Users, Globe, Server, ChevronLeft, ChevronDown, ChevronRight, BookMarked, type LucideIcon } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 // Loaded on demand (three.js) — see components/lazy-heavy.tsx.
-import { SkinManagerPanel, SkinViewerAnimated } from "@/components/lazy-heavy";
+import { SkinManagerPanel } from "@/components/lazy-heavy";
+import { CharacterCard } from "@/components/character-card";
+import { useProfileLook } from "@/hooks/use-profile-look";
 import { usePlayerHeadUrl, usePlayerSkinUrl } from "@/hooks/use-player-head";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { FriendsPanel } from "@/components/friends-panel";
@@ -18,8 +20,9 @@ import { UserProfileMenuView } from "@/components/user-profile-menu-panel";
 import { useAvatarDecoration } from "@/hooks/use-avatar-decoration";
 import { subscribeIncomingRequests } from "@/services/friends";
 import { useDevDecoOverride } from "@/lib/dev-deco-override";
-import { DecoratedIcon, useLiveIconDecoration } from "@/components/icon-decoration";
+import { DecoratedIcon, useLiveIconColors, useLiveIconDecoration } from "@/components/icon-decoration";
 import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
+import { cn } from "@/lib/utils";
 
 // DEV ONLY: decoration picked in Personalizar → Pruebas, drawn around your head
 // here. Lazy + gated on import.meta.env.DEV so the lab isn't in the prod bundle.
@@ -38,8 +41,8 @@ interface AccountMenuButtonProps {
 // start-menu style, and swallowing the players button/chat bubbles beside it.
 // Same "calc(N% - Npx)" shape on both ends so framer-motion can interpolate it.
 const clipFromButton = (w: number, h: number) =>
-  `inset(calc(100% - ${h}px) calc(100% - ${w}px) calc(0% - 0px) calc(0% - 0px) round 8px)`;
-const CLIP_OPEN = "inset(calc(0% - 0px) calc(0% - 0px) calc(0% - 0px) calc(0% - 0px) round 14px)";
+  `inset(calc(100% - ${h}px) calc(100% - ${w}px) calc(0% - 0px) calc(0% - 0px) round 6px)`;
+const CLIP_OPEN = "inset(calc(0% - 0px) calc(0% - 0px) calc(0% - 0px) calc(0% - 0px) round 6px)";
 
 type ViewDir = "forward" | "back";
 
@@ -62,6 +65,12 @@ const VIEW_VARIANTS = {
   }),
 };
 
+/** The main menu's body: its character card is 340px tall (12 + 254 + 16 + 40 + 16
+ *  + 2 border) plus the panel's 24px padding on each side. Personalizar uses the
+ *  very same height, so going in and out never resizes the panel. */
+const MENU_BODY_MIN_H = "min-h-[388px]";
+const MENU_BODY_H = "h-[388px]";
+
 /** The account button in the bottom bar — expands into the account panel
  *  (your character, Personalizar, Perfil/Amigos/Instancias online/Configuración), coordinated
  *  with the other footer popups (presence, chat) via useHeaderOverlay so only
@@ -71,7 +80,11 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
   const myHeadUrl = usePlayerHeadUrl(uuid);
   const mySkinUrl = usePlayerSkinUrl(uuid);
   const decoration = useAvatarDecoration(uuid);
+  // Your frame round the character too, if you chose so in Editar perfil.
+  const look = useProfileLook(uuid ?? "");
+  const characterFrame = look?.frameOnCharacter ? look.frame : null;
   const iconDecoration = useLiveIconDecoration(uuid);
+  const iconColors = useLiveIconColors(uuid);
   const activePopup = useHeaderOverlay((s) => s.active);
   const openOverlay = useHeaderOverlay((s) => s.open);
   const closeOverlay = useHeaderOverlay((s) => s.close);
@@ -90,6 +103,12 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
   const [buttonSize, setButtonSize] = useState({ w: 160, h: 38 });
   const [previewSlot, setPreviewSlot] = useState<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  // The 3D character waits for the open animation to finish: creating its WebGL
+  // context (+ shaders, glTF clone) mid-animation is what made opening stutter.
+  const [panelSettled, setPanelSettled] = useState(false);
+  useEffect(() => {
+    if (!profileOpen) setPanelSettled(false);
+  }, [profileOpen]);
 
   // Direction of the last view change: Volver (to the menu, or back from
   // someone's profile) slides the view out to the right; going into a section
@@ -156,9 +175,24 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
             animate={{ clipPath: CLIP_OPEN, opacity: 1 }}
             exit={{ clipPath: collapsedClip, opacity: 0 }}
             transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            onAnimationComplete={() => {
+              if (useHeaderOverlay.getState().active === "profile") setPanelSettled(true);
+            }}
             data-account-panel
-            className="absolute bottom-0 left-0 z-50 min-w-[32rem] rounded-[14px] bg-card/95 backdrop-blur-xl border border-white/10 shadow-2xl flex flex-col"
+            className="absolute bottom-0 left-0 z-50 min-w-[32rem] rounded-md bg-background/60 backdrop-blur-xl border border-transparent shadow-[0_8px_24px_rgba(0,0,0,0.35)] flex flex-col"
           >
+            {/* A brief flash in the accent colour (the carousel instance's, see useDynamicAccent) along the menu's edge once it has opened, which
+                then settles into a faint rim that stays. Drawn inset: the
+                panel's clip-path would cut anything outside it. */}
+            {panelSettled && (
+              <motion.div
+                aria-hidden
+                initial={{ opacity: 0 }}
+                animate={{ opacity: [0, 1, 0.35] }}
+                transition={{ duration: 0.9, times: [0, 0.25, 1], ease: "easeOut" }}
+                className="pointer-events-none absolute inset-0 z-10 rounded-md shadow-[inset_0_0_0_1px_hsl(var(--accent)/0.9),inset_0_0_18px_hsl(var(--accent)/0.45)]"
+              />
+            )}
             <AnimatePresence mode="wait" initial={false} custom={viewDir}>
               {profileView === "menu" ? (
                 <motion.div
@@ -168,28 +202,30 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   initial="enter"
                   animate="center"
                   exit="exit"
-                  className="flex gap-6 p-6"
+                  className={`flex gap-6 p-6 ${MENU_BODY_MIN_H}`}
                 >
-                  <CharacterColumn skinUrl={mySkinUrl} effect={decoration}>
+                  <CharacterCard skinUrl={mySkinUrl} effect={decoration} ready={panelSettled} frame={characterFrame} frameColor={look?.frameColor}>
                     <button
                       type="button"
                       data-tour="account-customize"
                       onClick={() => setProfileView("skin")}
-                      className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-accent-foreground text-xs font-bold hover:bg-accent/90 transition-colors"
+                      className="relative w-full h-10 flex items-center justify-center gap-2 rounded-md bg-accent/70 text-white text-sm font-semibold shadow-[0_4px_16px_hsl(var(--accent)/0.25)] hover:bg-accent/85 transition-colors"
                     >
-                      <Shirt className="h-3.5 w-3.5" />
+                      <Shirt className="h-4 w-4" />
                       Personalizar
                     </button>
-                  </CharacterColumn>
+                  </CharacterCard>
 
-                  <div className="flex-1 flex flex-col gap-2 pt-1 w-[19rem]">
+                  <div className="flex-1 flex flex-col gap-4 w-[27rem]">
                     {/* Your profile card (banner, bio, stats, ⋮), straight in the menu. */}
                     {username && <ProfileBannerCard uuid={uuid} username={username} onNavigate={go} />}
-                    <MenuTile icon={Users} label="Amigos" badge={pendingRequests} onClick={() => setProfileView("friends")} />
-                    <MenuTile icon={Globe} label="Instancias online" badge={inviteCount} tourId="account-online" onClick={() => setProfileView("online")} />
-                    <MenuTile icon={Server} label="Servers" onClick={() => setProfileView("servers")} />
-                    <MenuTile icon={BookMarked} label="Biblioteca" onClick={() => setProfileView("library")} />
-                    <MenuTile icon={Settings} label="Configuración" onClick={() => go("/settings")} />
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <MenuTile icon={Users} label="Amigos" badge={pendingRequests} onClick={() => setProfileView("friends")} />
+                      <MenuTile icon={Globe} label="Instancias online" badge={inviteCount} tourId="account-online" onClick={() => setProfileView("online")} />
+                      <MenuTile icon={Server} label="Servers" onClick={() => setProfileView("servers")} />
+                      <MenuTile icon={BookMarked} label="Biblioteca" onClick={() => setProfileView("library")} />
+                      <MenuTile icon={Settings} label="Configuración" onClick={() => go("/settings")} className="col-span-2" />
+                    </div>
                   </div>
                 </motion.div>
               ) : profileView === "friends" ? (
@@ -203,7 +239,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   className="flex flex-col gap-3 p-6"
                 >
                   <motion.div
-                    className="w-[42rem] h-[300px]"
+                    className="w-[34rem] h-[440px]"
                   >
                     {username && (
                       <FriendsPanel
@@ -229,7 +265,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   exit="exit"
                   className="flex gap-6 p-6"
                 >
-                  <CharacterColumn skinUrl={mySkinUrl} effect={decoration} />
+                  <CharacterCard skinUrl={mySkinUrl} effect={decoration} ready={panelSettled} frame={characterFrame} frameColor={look?.frameColor} />
                   <motion.div
                     className="w-[29rem] h-[300px]"
                   >
@@ -247,7 +283,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   className="flex flex-col gap-3 p-6"
                 >
                   <motion.div
-                    className="w-[42rem] h-[300px]"
+                    className="w-[34rem] h-[440px]"
                   >
                     <OnlineInstancesPanel onNavigate={go} />
                   </motion.div>
@@ -263,7 +299,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   className="flex flex-col gap-3 p-6"
                 >
                   <motion.div
-                    className="w-[42rem] h-[300px]"
+                    className="w-[34rem] h-[440px]"
                   >
                     <ServersPanel />
                   </motion.div>
@@ -279,7 +315,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   className="flex flex-col gap-3 p-6"
                 >
                   <motion.div
-                    className="w-[42rem] h-[300px]"
+                    className="w-[42rem] h-[440px]"
                   >
                     <PersonalLibraryPanel />
                   </motion.div>
@@ -297,6 +333,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                 >
                   {username && (
                     <UserProfileMenuView
+                      ready={panelSettled}
                       targetUuid={viewedUserUuid}
                       myUuid={uuid}
                       myUsername={username}
@@ -312,7 +349,9 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   initial="enter"
                   animate="center"
                   exit="exit"
-                  className="p-6"
+                  // Exactly the menu's frame (same width, same height): Personalizar opens
+                  // in it, and its lists scroll inside instead of growing the panel.
+                  className={`p-6 ${MENU_BODY_H}`}
                 >
                   <SkinManagerPanel
                     uuid={uuid}
@@ -324,16 +363,16 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
             </AnimatePresence>
 
             {/* The button itself, grown — clicking it again collapses the panel. */}
-            <div className="relative flex items-center border-t border-white/5 bg-white/[0.03] hover:bg-white/[0.06] transition-colors rounded-b-[14px]">
+            <div className="relative flex items-center border-t border-white/5 bg-white/[0.03] hover:bg-white/[0.06] transition-colors rounded-b-md">
               <button
                 type="button"
                 onClick={() => setProfileOpen(false)}
-                className="flex-1 min-w-0 flex items-center gap-3 px-6 py-3.5 text-left rounded-b-[14px]"
+                className="flex-1 min-w-0 flex items-center gap-3 px-6 py-3.5 text-left rounded-b-md"
               >
-                <HeadAvatar headUrl={myHeadUrl} username={username} size={40} radius={8} decoration={iconDecoration}>
-                  <Avatar className="h-10 w-10 rounded-lg border border-white/10">
-                    {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-lg" />}
-                    <AvatarFallback className="rounded-lg bg-accent/20 text-accent text-base font-bold">
+                <HeadAvatar headUrl={myHeadUrl} username={username} size={40} radius={6} decoration={iconDecoration} colors={iconColors}>
+                  <Avatar className="h-10 w-10 rounded-md border border-white/10">
+                    {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-md" />}
+                    <AvatarFallback className="rounded-md bg-accent/20 text-accent text-base font-bold">
                       {username?.charAt(0)?.toUpperCase() ?? "?"}
                     </AvatarFallback>
                   </Avatar>
@@ -359,9 +398,10 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
         type="button"
         data-tour="account-button"
         onClick={() => setProfileOpen((v) => !v)}
-        className="relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors"
+        // Accent-tinted, like Actividad: these two are yours, not the instance's.
+        className="relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-md bg-accent/15 backdrop-blur-md border border-transparent hover:bg-accent/25 transition-colors"
       >
-        <HeadAvatar headUrl={myHeadUrl} username={username} size={24} radius={6} decoration={iconDecoration}>
+        <HeadAvatar headUrl={myHeadUrl} username={username} size={24} radius={6} decoration={iconDecoration} colors={iconColors}>
           <Avatar className="h-6 w-6 rounded-md border border-white/10">
             {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-md" />}
             <AvatarFallback className="rounded-md bg-accent/20 text-accent text-xs font-bold">
@@ -369,7 +409,7 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
             </AvatarFallback>
           </Avatar>
         </HeadAvatar>
-        <span className="text-sm font-medium text-gray-200" data-testid="text-username">
+        <span className="text-sm font-medium text-white" data-testid="text-username">
           {username}
         </span>
       </button>
@@ -387,6 +427,7 @@ function HeadAvatar({
   size,
   radius,
   decoration,
+  colors,
   children,
 }: {
   headUrl: string | null;
@@ -396,13 +437,14 @@ function HeadAvatar({
   radius: number;
   /** Your saved icon decoration (ICON_DECORATIONS id). */
   decoration: string;
+  colors?: string | null;
   children: React.ReactNode;
 }) {
   const devDeco = useDevDecoOverride((s) => s.name);
   const devSquare = useDevDecoOverride((s) => s.square);
   if (!DevDecoratedHead || !devDeco) {
     return (
-      <DecoratedIcon decoration={decoration} size={size} radius={radius}>
+      <DecoratedIcon decoration={decoration} colors={colors} size={size} radius={radius}>
         {children}
       </DecoratedIcon>
     );
@@ -420,68 +462,12 @@ function HeadAvatar({
   );
 }
 
-/** Your character on the left of the panel — main menu and Perfil only, same
- *  size/spot in both so it never jumps when switching between them. */
-function CharacterColumn({
-  skinUrl,
-  effect,
-  children,
-}: {
-  skinUrl: string | null;
-  effect: ReturnType<typeof useAvatarDecoration>;
-  children?: React.ReactNode;
-}) {
-  // The panel is much taller than the character's box, so falling particles
-  // (leaves, petals, snow…) used to pop in mid-air at the box's top. The
-  // viewer now draws up to the panel's top border (which clips it, rounded)
-  // and they start from there. Measured, rounded to 8px so it doesn't rebuild
-  // the scene on every pixel of change.
-  const boxRef = useRef<HTMLDivElement | null>(null);
-  const [extendTop, setExtendTop] = useState(0);
-  useLayoutEffect(() => {
-    const box = boxRef.current;
-    const panel = box?.closest<HTMLElement>("[data-account-panel]");
-    if (!box || !panel) return;
-    const measure = () => {
-      const gap = box.getBoundingClientRect().top - panel.getBoundingClientRect().top;
-      setExtendTop(Math.max(0, Math.round(gap / 8) * 8));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(panel);
-    return () => ro.disconnect();
-  }, []);
-  return (
-    <div className="flex flex-col items-center gap-2 shrink-0 self-end">
-      <div
-        ref={boxRef}
-        className="relative w-[190px] h-[254px] rounded-xl bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.18),transparent_70%)]"
-      >
-        {skinUrl && (
-          <SkinViewerAnimated
-            skinUrl={skinUrl}
-            variant="auto-detect"
-            width={190}
-            height={254}
-            extendTop={effect === "none" ? 0 : extendTop}
-            effect={effect}
-            // Anchored to the box's bottom, growing upward out of it (the
-            // extension is empty panel space above the column).
-            className="absolute bottom-0 left-0 cursor-grab active:cursor-grabbing"
-          />
-        )}
-      </div>
-      {children}
-    </div>
-  );
-}
-
 function BackButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="h-9 flex items-center justify-center gap-1.5 px-3 rounded-lg bg-white/5 border border-white/10 text-sm font-bold text-gray-200 hover:bg-white/10 transition-colors"
+      className="h-9 flex items-center justify-center gap-1.5 px-3 rounded-md bg-white/[0.07] border border-transparent text-sm font-bold text-gray-200 hover:bg-white/[0.14] transition-colors"
     >
       <ChevronLeft className="h-4 w-4" />
       Volver
@@ -496,26 +482,30 @@ interface MenuTileProps {
   onClick: () => void;
   /** data-tour anchor for the onboarding tour. */
   tourId?: string;
+  className?: string;
 }
 
-function MenuTile({ icon: Icon, label, badge, onClick, tourId }: MenuTileProps) {
+function MenuTile({ icon: Icon, label, badge, onClick, tourId, className }: MenuTileProps) {
   return (
     <button
       type="button"
       data-tour={tourId}
       onClick={onClick}
-      // Single line even if that widens the menu ("Instancias online").
-      className="group flex items-center gap-2.5 px-2 py-1 rounded-lg bg-white/[0.04] border border-white/5 text-sm font-medium text-gray-200 whitespace-nowrap hover:bg-white/10 hover:border-white/10 transition-colors"
-    >
-      <span className="h-7 w-7 shrink-0 flex items-center justify-center rounded-md bg-accent/15 text-accent group-hover:bg-accent/25 transition-colors">
-        <Icon className="h-3.5 w-3.5" />
-      </span>
-      {label}
-      {!!badge && badge > 0 && (
-        <span className="ml-auto h-4 min-w-4 px-1 rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground flex items-center justify-center">
-          {badge}
-        </span>
+      className={cn(
+        "group h-12 flex items-center gap-3 px-3.5 rounded-md bg-white/[0.04] border border-white/10 text-sm font-semibold text-gray-100 whitespace-nowrap hover:bg-white/[0.08] hover:border-white/20 transition-colors",
+        className
       )}
+    >
+      <Icon className="h-5 w-5 shrink-0 text-accent" />
+      <span className="truncate">{label}</span>
+      <span className="ml-auto flex items-center gap-2 shrink-0">
+        {!!badge && badge > 0 && (
+          <span className="h-4 min-w-4 px-1 rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground flex items-center justify-center">
+            {badge}
+          </span>
+        )}
+        <ChevronRight className="h-4 w-4 text-gray-500 group-hover:text-gray-300 group-hover:translate-x-0.5 transition-all" />
+      </span>
     </button>
   );
 }

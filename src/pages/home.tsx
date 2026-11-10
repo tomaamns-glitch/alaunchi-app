@@ -1,3 +1,4 @@
+import { CuriositiesCard } from "@/components/curiosities-card";
 import { useAuth } from "@/hooks/use-auth";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useLocation } from "wouter";
@@ -19,31 +20,32 @@ import {
   Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { installSnapshot, launchMinecraft, onClosedToTray, type OptionalGroupChoice } from "@/services/electron";
+import { installSnapshot, launchMinecraft, prepareInstanceInBackground, onClosedToTray, type OptionalGroupChoice } from "@/services/electron";
 import { askOptionalGroups } from "@/components/optional-groups-dialog";
 import { markOnline } from "@/services/presence";
 import { markPlayingInstance } from "@/services/user-activity";
 import { touchUserDirectory } from "@/services/chat";
 import { getAzureClientId } from "@/services/auth";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { Modpack, SnapshotManifest, fetchSnapshot, snapshotBaseUrl, getCachedSnapshot, type OfflineReason } from "@/services/github";
 import { OFFLINE_REASON_LABEL } from "@/lib/online-history";
 import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AccountMenuButton } from "@/components/account-menu-button";
-import { DRAWER_EXAMPLE_MEMBERS, DRAWER_EXAMPLE_PACK, useOnlineViewMode } from "@/lib/online-view-mode";
+import { useOnlineViewMode } from "@/lib/online-view-mode";
+import { useOnlinePanels, type MovablePanel } from "@/lib/online-panels";
 import { OnlineNowPanel } from "@/components/online-now-panel";
 import { playingNow, useInstancesPresence } from "@/hooks/use-instances-presence";
 import { OnlineBannerTile } from "@/components/online-banner-tile";
 import { AppBackground } from "@/components/app-background";
 import { GroupChatNotifications, InstanceGroupChat } from "@/components/instance-group-chat";
-import { FooterPanelButton } from "@/components/footer-panel-button";
+import { FooterPanelButton, HoverLabel } from "@/components/footer-panel-button";
 import { InstanceMembersPanel } from "@/components/instance-members-panel";
-import { ChangelogHistoryButton } from "@/components/changelog-history-button";
 import { ChangelogViewerDialog } from "@/components/changelog-viewer-dialog";
+import { ChangelogSidePanel } from "@/components/changelog-side-panel";
 import { ActivityButton } from "@/components/activity-button";
 import { ChatWindow } from "@/components/chat-window";
-import { ChatBubbleRow } from "@/components/chat-bubble-row";
+import { ChatButton } from "@/components/chat-button";
 import type { ChatMode } from "@/lib/instance-context";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { findPackSource, requirePackSource, useCarouselModpacks } from "@/hooks/use-modpacks";
@@ -225,7 +227,9 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   const handleInstall = async () => {
     try {
       if (!(await installFromSnapshot("installing"))) return; // cancelled in the groups picker
-      toast.success(`${pack.name} instalado correctamente.`);
+      // Minecraft, the modloader and Java download now, not at the first "Jugar".
+      prepareInstanceInBackground(pack);
+      notify.success(`${pack.name} instalado correctamente.`);
     } catch (e: any) {
       toast.error(e?.message || "Error al instalar.");
     } finally {
@@ -237,7 +241,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   const handleUpdateOnly = async () => {
     try {
       const manifest = (await installFromSnapshot("updating"))!; // updates never ask, so never null
-      toast.success(`${pack.name} actualizado a v${manifest.version}.`);
+      notify.success(`${pack.name} actualizado a v${manifest.version}.`);
     } catch (e: any) {
       toast.error(e?.message || "Error al actualizar.");
     } finally {
@@ -252,7 +256,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
     try {
       if (pack.updateAvailable) {
         const manifest = (await installFromSnapshot("updating"))!; // updates never ask, so never null
-        toast.success(`${pack.name} actualizado a v${manifest.version}.`);
+        notify.success(`${pack.name} actualizado a v${manifest.version}.`);
       }
       setStatus("launching");
       setStageLabel("Preparando...");
@@ -354,18 +358,18 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
             installed={!!pack.installed && status !== "installing"}
             online={pack.source !== "custom"}
             size={56}
-            radius={8}
+            radius={6}
             className="text-base"
           />
         ) : (
         <Button
           data-testid={pack.installed ? `button-play-${pack.id}` : `button-install-${pack.id}`}
-          className={`w-full rounded-lg font-bold h-14 text-base tracking-wide transition-all border-transparent focus-visible:ring-0 focus-visible:ring-offset-0 ${
+          className={`w-full rounded-md font-bold h-14 text-base tracking-wide transition-all border-transparent focus-visible:ring-0 focus-visible:ring-offset-0 ${
             isRunning
               ? "bg-red-600 hover:bg-red-500 text-white shadow-[0_0_15px_rgba(220,38,38,0.25)]"
               : pack.installed
               ? "bg-accent hover:bg-accent/90 text-accent-foreground shadow-[0_0_15px_hsl(var(--accent)/0.25)]"
-              : "bg-white/10 hover:bg-white/20 text-white"
+              : "bg-white/[0.07] backdrop-blur-md hover:bg-white/[0.14] text-white"
           }`}
           onClick={isRunning ? handleStop : pack.installed ? handlePlay : handleInstall}
           disabled={isActing || isBusyElsewhere}
@@ -437,7 +441,7 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
       )}
 
       <Dialog open={showAnnouncement} onOpenChange={(open) => !open && setAnnouncementDismissed(true)}>
-        <DialogContent className="bg-card border-white/10 text-foreground sm:max-w-md text-center">
+        <DialogContent className="border-transparent bg-gray-500/15 backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.35)] text-foreground sm:max-w-md sm:rounded-md text-center">
           <DialogHeader className="items-center">
             <DialogTitle className="text-white text-xl flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-accent" />
@@ -476,17 +480,18 @@ function ModpackActionBar({ pack }: ModpackActionBarProps) {
   );
 }
 
-/** Red "Instancia fuera de red" button under Play for a past online instance
+/** Red "Instancia fuera de red" button above Play for a past online instance
  *  (you left, were removed, or it was deleted) — expands into what that means.
- *  The explanation opens upwards, over the carousel: the footer has no room below. */
+ *  Out of the flow, so Play stays where it always is; the explanation opens
+ *  upwards from here, over the carousel. */
 function OutOfNetworkNotice({ reason }: { reason: OfflineReason }) {
   const [open, setOpen] = useState(false);
   return (
-    <>
+    <div className="absolute bottom-full inset-x-0 mb-1.5">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full mt-1.5 h-7 flex items-center justify-center gap-1.5 rounded-md border border-red-500/40 bg-red-500/15 text-xs font-semibold text-red-400 hover:bg-red-500/25 transition-colors"
+        className="w-full h-7 flex items-center justify-center gap-1.5 rounded-md border border-red-500/40 bg-red-500/15 text-xs font-semibold text-red-400 hover:bg-red-500/25 transition-colors"
       >
         <AlertTriangle className="h-3.5 w-3.5" />
         Instancia fuera de red
@@ -498,7 +503,7 @@ function OutOfNetworkNotice({ reason }: { reason: OfflineReason }) {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 8 }}
             transition={{ duration: 0.15 }}
-            className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-80 z-30 rounded-lg border border-red-500/40 bg-card/95 backdrop-blur p-4 shadow-2xl space-y-2"
+            className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-80 z-30 rounded-md border border-red-500/40 bg-background/60 backdrop-blur-xl p-4 shadow-[0_8px_24px_rgba(0,0,0,0.35)] space-y-2"
           >
             <div className="flex items-center gap-2 text-sm font-semibold text-red-400">
               <AlertTriangle className="h-4 w-4 shrink-0" />
@@ -517,7 +522,7 @@ function OutOfNetworkNotice({ reason }: { reason: OfflineReason }) {
           </motion.div>
         )}
       </AnimatePresence>
-    </>
+    </div>
   );
 }
 
@@ -532,6 +537,11 @@ export default function Home() {
   const { loadModpacks, loading, error: modpacksError } = useModpacks();
   // The carousel's own list — online + past-with-files, minus archived — not the raw catalog.
   const modpacks = useCarouselModpacks();
+  const movedPanels = useOnlinePanels((s) => s.moved);
+  const moveToContent = (panel: MovablePanel) => {
+    useOnlinePanels.getState().setMoved(panel, true);
+    toast.success(`${panel === "members" ? "Participantes" : "El chat de grupo"} ahora está en Contenido.`);
+  };
   const isAdmin = useIsAdmin();
   const [redeemOpen, setRedeemOpen] = useState(false);
   // Carousel (one banner at a time) or drawer (Hub-style page) — toggled from the titlebar.
@@ -595,7 +605,7 @@ export default function Home() {
       if (data.stage === "done") {
         setJavaInstalling(false);
         setJavaStatus("ok");
-        toast.success("Java instalado correctamente.");
+        notify.success("Java instalado correctamente.");
       }
     });
     return off;
@@ -642,7 +652,9 @@ export default function Home() {
   // pack (if any) is this page currently showing" in the same shape. A past
   // (out-of-network) instance has no instance chat/players anymore → general.
   const viewContext: ChatMode =
-    !drawerView && currentPack && !currentPack.outOfNetwork ? { type: "carousel", pack: currentPack } : { type: "general" };
+    !drawerView && currentPack && !currentPack.outOfNetwork
+      ? { type: "carousel", pack: currentPack }
+      : { type: "general" };
 
   useEffect(() => {
     if (currentPack) localStorage.setItem(CAROUSEL_POSITION_KEY, currentPack.id);
@@ -757,16 +769,6 @@ export default function Home() {
                       onClick={() => setLocation(`/online/${pack.id}`)}
                     />
                   ))}
-                  {/* DEV: a fake one, to see how a banner looks without any real instance. */}
-                  {import.meta.env.DEV && (
-                    <OnlineBannerTile
-                      pack={DRAWER_EXAMPLE_PACK}
-                      badge="Ejemplo"
-                      preview
-                      playingCount={playingNow(DRAWER_EXAMPLE_MEMBERS, uuid).length}
-                      onClick={() => setLocation(`/online/${DRAWER_EXAMPLE_PACK.id}`)}
-                    />
-                  )}
                 </div>
               </div>
 
@@ -805,7 +807,7 @@ export default function Home() {
           <div className="absolute inset-0 flex items-center justify-center px-6">
             <div className="absolute inset-0 bg-gradient-to-b from-destructive/[0.04] via-transparent to-transparent" />
             <div className="relative w-full max-w-sm rounded-md border border-transparent bg-gray-500/10 backdrop-blur-sm px-8 py-10 flex flex-col items-center text-center gap-5 shadow-xl shadow-black/20">
-              <div className="h-16 w-16 rounded-2xl bg-destructive/10 border border-destructive/25 flex items-center justify-center">
+              <div className="h-16 w-16 rounded-md bg-destructive/10 flex items-center justify-center">
                 <AlertTriangle className="h-7 w-7 text-destructive" />
               </div>
               <div className="space-y-2">
@@ -822,7 +824,7 @@ export default function Home() {
           <div className="absolute inset-0 flex items-center justify-center px-6">
             <div className="absolute inset-0 bg-gradient-to-b from-accent/[0.04] via-transparent to-transparent" />
             <div className="relative w-full max-w-sm rounded-md border border-transparent bg-gray-500/10 backdrop-blur-sm px-8 py-10 flex flex-col items-center text-center gap-5 shadow-xl shadow-black/20">
-              <div className="h-16 w-16 rounded-2xl bg-accent/10 border border-accent/25 flex items-center justify-center">
+              <div className="h-16 w-16 rounded-md bg-accent/10 flex items-center justify-center">
                 {isAdmin ? <Settings className="h-7 w-7 text-accent" /> : <KeyRound className="h-7 w-7 text-accent" />}
               </div>
               <div className="space-y-2">
@@ -897,15 +899,16 @@ export default function Home() {
                       profileOpen ? "cursor-default pointer-events-none" : "cursor-pointer"
                     }`}
                   >
-                    <div className="h-11 w-11 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="h-11 w-11 rounded-md bg-gray-500/15 backdrop-blur-xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                       <ChevronLeft className="h-5 w-5 text-white" />
                     </div>
                   </div>
                   <div
                     onClick={(e) => { e.stopPropagation(); goNext(); }}
+                    data-tour="online-next"
                     className="group absolute inset-y-0 right-0 w-24 flex items-center justify-end pr-4 cursor-pointer z-10"
                   >
-                    <div className="h-11 w-11 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="h-11 w-11 rounded-md bg-gray-500/15 backdrop-blur-xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                       <ChevronRight className="h-5 w-5 text-white" />
                     </div>
                   </div>
@@ -937,26 +940,42 @@ export default function Home() {
             </div>
           )
         )}
+      <CuriositiesCard className="bottom-5 left-5" />
       </main>
 
       {/* Always mounted: the account menu (Instancias online included) and chats
           don't depend on the catalog, and unmounting would close whatever popup is open. */}
-      <footer className="relative z-20 h-20 bg-gray-500/10 backdrop-blur-xl flex items-center justify-between px-6 shrink-0">
+      <footer className="relative z-20 h-20 [transform:translateZ(0)] flex items-center justify-between px-6 shrink-0">
+          {/* The blur in a layer of its own: on the footer itself, the chat windows
+              inside it couldn't blur the page behind them (backdrop root). The
+              transform keeps `fixed` descendants relative to the footer, as the blur did. */}
+          <div aria-hidden className="absolute inset-0 -z-10 bg-gray-500/10 backdrop-blur-xl" />
           {/* Always here — the account menu (Skin, Ajustes…) and your chats
               don't need a selected modpack. */}
           <div className="flex items-center gap-1">
             <AccountMenuButton uuid={uuid} username={username} />
             {uuid && (
               <div className="relative">
-                <ChatBubbleRow />
+                <ChatButton />
                 <ChatWindow myUuid={uuid} myUsername={username ?? ""} defaultMode={viewContext} />
               </div>
+            )}
+            {uuid && viewContext.type === "carousel" && (
+              // Moved to Contenido: the button only comes back to say there's something unread.
+              <InstanceGroupChat
+                pack={viewContext.pack}
+                myUuid={uuid}
+                myUsername={username ?? ""}
+                onlyWhenUnread={movedPanels.includes("groupChat")}
+                onMoveToContent={movedPanels.includes("groupChat") ? undefined : () => moveToContent("groupChat")}
+                card
+              />
             )}
           </div>
 
           {/* Play button only once there's a modpack. */}
           {currentPack && !drawerView && (
-            <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2">
+            <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2" data-tour="online-play">
               <ModpackActionBar key={currentPack.id} pack={currentPack} />
             </div>
           )}
@@ -969,11 +988,15 @@ export default function Home() {
           {currentPack && !drawerView && (
             <>
               <div className="flex items-center gap-1">
-                {!currentPack.outOfNetwork && <ChangelogHistoryButton modpackId={currentPack.id} />}
-                {!currentPack.outOfNetwork && (
-                  // Same panel as the online instance page's; label hidden on
-                  // narrow windows so the corner never reaches the Play button.
-                  <FooterPanelButton icon={Users} label="Participantes" labelClassName="hidden lg:inline">
+                {!currentPack.outOfNetwork && !!currentPack.repoUrl && !movedPanels.includes("changelog") && (
+                  // Same panel as the instance manager's column; right click → Mover a Contenido.
+                  <FooterPanelButton icon={Sparkles} label="Novedades" iconOnly tourId="online-changelog" onMoveToContent={() => moveToContent("changelog")}>
+                    <ChangelogSidePanel key={currentPack.id} pack={currentPack} className="min-h-0" />
+                  </FooterPanelButton>
+                )}
+                {!currentPack.outOfNetwork && !movedPanels.includes("members") && (
+                  // Same panel as the online instance page's.
+                  <FooterPanelButton icon={Users} label="Participantes" iconOnly tourId="online-members" onMoveToContent={() => moveToContent("members")}>
                     <InstanceMembersPanel key={currentPack.id} modpackId={currentPack.id} className="min-h-0" />
                   </FooterPanelButton>
                 )}
@@ -981,14 +1004,13 @@ export default function Home() {
                   type="button"
                   onClick={() => setLocation(`/modpack/${currentPack.id}`)}
                   data-testid="button-instance-manager"
-                  className="h-[38px] flex items-center gap-2 px-3 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors text-gray-200"
+                  data-tour="online-content"
+                  aria-label="Contenido"
+                  className="group h-[38px] flex items-center px-[10px] rounded-md bg-white/[0.07] backdrop-blur-md border border-transparent hover:bg-white/[0.14] transition-colors text-gray-200"
                 >
-                  <Package className="h-4 w-4" />
-                  <span className="text-sm font-medium">Contenido</span>
+                  <Package className="h-4 w-4 shrink-0" />
+                  <HoverLabel>Contenido</HoverLabel>
                 </button>
-                {uuid && viewContext.type === "carousel" && (
-                  <InstanceGroupChat pack={viewContext.pack} myUuid={uuid} myUsername={username ?? ""} />
-                )}
               </div>
             </>
           )}

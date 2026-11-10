@@ -20,7 +20,7 @@ interface ChangelogViewerDialogProps {
 export function ChangelogViewerDialog({ title, version, changelog, onClose }: ChangelogViewerDialogProps) {
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="bg-card border-white/10 text-foreground sm:max-w-2xl">
+      <DialogContent className="border-transparent bg-gray-500/15 backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.35)] text-foreground sm:max-w-2xl sm:rounded-md [&>button:last-child]:hidden">
         <DialogHeader>
           <div className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-accent shrink-0" />
@@ -31,7 +31,7 @@ export function ChangelogViewerDialog({ title, version, changelog, onClose }: Ch
           </Badge>
         </DialogHeader>
 
-        <div className="max-h-[65vh] overflow-y-auto rounded-md bg-background/50 border border-white/5 p-4 prose prose-invert prose-sm max-w-none prose-headings:text-white prose-strong:text-white prose-img:rounded-md">
+        <div className="max-h-[65vh] overflow-y-auto rounded-md bg-gray-500/10 border border-transparent p-4 prose prose-invert prose-sm max-w-none prose-headings:text-white prose-strong:text-white prose-img:rounded-md">
           <ReactMarkdown rehypePlugins={[rehypeRaw, [rehypeSanitize, HTML_SANITIZE_SCHEMA]]}>{changelog}</ReactMarkdown>
         </div>
 

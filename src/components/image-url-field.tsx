@@ -1,6 +1,7 @@
+import { Hint } from "@/components/hint";
 import { useRef, useState } from "react";
 import { AlertTriangle, Loader2, Upload } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
@@ -71,17 +72,18 @@ export function ImageUrlField({
           className="hidden"
           onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
         />
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="shrink-0 border-white/10"
-          title="Subir imagen"
-          disabled={disabled || uploading || !uuid}
-          onClick={() => fileRef.current?.click()}
-        >
-          {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-        </Button>
+        <Hint label="Subir imagen">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="shrink-0 border-white/10"
+            disabled={disabled || uploading || !uuid}
+            onClick={() => fileRef.current?.click()}
+          >
+            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+          </Button>
+        </Hint>
       </div>
       {isExpiringImageUrl(value) && (
         <p className="flex items-start gap-1 text-[11px] text-amber-400">

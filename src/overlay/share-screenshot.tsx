@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { ArrowLeft, Camera, Check, Search, Send, Users } from "lucide-react";
 import { subscribeFriends, type FriendEntry } from "@/services/friends";
 import { sendSharedContent } from "@/services/chat";
@@ -70,7 +70,7 @@ export function ShareScreenshot({ shot }: { shot: ShareableShot }) {
       };
       await sendSharedContent(me.uuid, me.username, uuid, username, content);
       setSent((s) => new Set(s).add(uuid));
-      toast.success(`Captura enviada a ${name}`);
+      notify.success(`Captura enviada a ${name}`);
     } catch (e: any) {
       toast.error("No se pudo enviar la captura", { description: e?.message });
     } finally {

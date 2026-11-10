@@ -1,4 +1,4 @@
-import { ref, set, update, onValue, onDisconnect, serverTimestamp, off, type Unsubscribe } from "firebase/database";
+import { ref, update, runTransaction, onValue, onDisconnect, serverTimestamp, off, type Unsubscribe } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 
 export interface PresenceEntry {
@@ -24,8 +24,10 @@ export interface PresenceEntry {
  *  exit — a network drop, a crash, or the whole PC losing power. */
 export async function markOnline(modpackId: string, uuid: string, username: string): Promise<void> {
   const presenceRef = ref(rtdb, `presence/${modpackId}/${uuid}`);
-  await onDisconnect(presenceRef).set({ username, online: false, lastSeen: serverTimestamp() });
-  await set(presenceRef, { username, online: true, lastSeen: serverTimestamp() });
+  // update, not set: a set would erase the playtimeMs kept in the same node
+  // (on every launch, and on a crash/disconnect for good).
+  await onDisconnect(presenceRef).update({ username, online: false, lastSeen: serverTimestamp() });
+  await update(presenceRef, { username, online: true, lastSeen: serverTimestamp() });
 }
 
 /** Marks a player offline for a modpack (clean exit — the game process ended
@@ -33,14 +35,31 @@ export async function markOnline(modpackId: string, uuid: string, username: stri
  *  powers playtime tracking). */
 export async function markOffline(modpackId: string, uuid: string, username: string): Promise<void> {
   const presenceRef = ref(rtdb, `presence/${modpackId}/${uuid}`);
-  await set(presenceRef, { username, online: false, lastSeen: serverTimestamp() });
+  await update(presenceRef, { username, online: false, lastSeen: serverTimestamp() });
 }
 
-/** Publishes this player's local total playtime for one modpack so others can
- *  see it (e.g. in the chat header) — a partial merge, so it never clobbers
- *  online/lastSeen written elsewhere. */
-export async function updatePlaytime(modpackId: string, uuid: string, playtimeMs: number): Promise<void> {
-  await update(ref(rtdb, `presence/${modpackId}/${uuid}`), { playtimeMs });
+/** Adds a finished session to this player's published playtime for one modpack
+ *  (atomic, so two PCs ending sessions at once don't lose either). Never
+ *  lowers it: a PC that doesn't have the old hours (new PC, reinstall) only
+ *  adds what it played. With nothing published yet it starts from this PC's
+ *  total, which is the history it has. */
+export async function addPlaytime(modpackId: string, uuid: string, sessionMs: number, localTotalMs: number): Promise<void> {
+  await runTransaction(ref(rtdb, `presence/${modpackId}/${uuid}/playtimeMs`), (cur) => {
+    if (typeof cur !== "number") return Math.max(localTotalMs, sessionMs);
+    return cur + Math.max(0, sessionMs);
+  });
+}
+
+/** Live-subscribes to one player's total playtime on one modpack (undefined
+ *  until they've finished a session there). */
+export function subscribePlayerPlaytime(
+  modpackId: string,
+  uuid: string,
+  callback: (playtimeMs: number | undefined) => void
+): Unsubscribe {
+  const playtimeRef = ref(rtdb, `presence/${modpackId}/${uuid}/playtimeMs`);
+  const handler = onValue(playtimeRef, (snap) => callback(snap.val() ?? undefined));
+  return () => off(playtimeRef, "value", handler);
 }
 
 /** Live-subscribes to every player's presence for one modpack. Returns an

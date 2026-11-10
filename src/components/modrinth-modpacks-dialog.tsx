@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { formatDistanceToNow } from "date-fns";
@@ -21,9 +22,12 @@ import {
   Package,
   ScrollText,
   Heart,
+  FileText,
+  History,
+  Image as ImageIcon,
   type LucideIcon,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -33,9 +37,21 @@ import { ModrinthGlyph, ProjectIcon } from "@/components/admin-modrinth-browser"
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { searchModpacks, listModpackVersions, type ModpackHit, type ModpackSearch, type ModpackVersion } from "@/services/modrinth";
+import {
+  searchModpacks,
+  listModpackVersions,
+  getProjectDetail,
+  type ModrinthProjectDetail,
+  isSupportedModpackVersion as isSupported,
+  SUPPORTED_MODPACK_LOADERS as SUPPORTED_LOADERS,
+  type ModpackHit,
+  type ModpackSearch,
+  type ModpackVersion,
+} from "@/services/modrinth";
 import { installModrinthModpack, onModrinthInstallProgress, type ModrinthInstallProgress } from "@/services/electron";
-import { fetchModrinthBanner } from "@/lib/modrinth-banner";
+import { fetchModrinthBanner, fetchModrinthIcon } from "@/lib/modrinth-banner";
+import { ModrinthSummary } from "@/components/modrinth-summary";
+import { ImageLightbox } from "@/components/image-lightbox";
 
 // Modrinth's modpack categories, in Spanish.
 const CATEGORIES: { id: string; label: string; icon: LucideIcon }[] = [
@@ -67,7 +83,6 @@ const LOADERS: { id: ModpackSearch["loader"]; label: string }[] = [
   { id: "neoforge", label: "NeoForge" },
 ];
 
-const SUPPORTED_LOADERS = new Set(["fabric", "forge", "neoforge"]);
 
 function formatCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")} M`;
@@ -86,21 +101,6 @@ async function fetchReleaseVersions(): Promise<string[]> {
     releaseVersionsCache = [];
   }
   return releaseVersionsCache;
-}
-
-/** Turns a remote (webp/png) icon into a small PNG data URL for the instance meta. */
-async function iconToDataUrl(url: string | null): Promise<string | undefined> {
-  if (!url) return undefined;
-  try {
-    const blob = await (await fetch(url)).blob();
-    const bmp = await createImageBitmap(blob);
-    const canvas = document.createElement("canvas");
-    canvas.width = canvas.height = 96;
-    canvas.getContext("2d")!.drawImage(bmp, 0, 0, 96, 96);
-    return canvas.toDataURL("image/png");
-  } catch {
-    return undefined;
-  }
 }
 
 /**
@@ -320,7 +320,7 @@ export function ModrinthModpacksDialog({
   );
 }
 
-function FilterSelect({
+export function FilterSelect({
   value,
   onChange,
   options,
@@ -344,6 +344,26 @@ function FilterSelect({
   );
 }
 
+export const LOADER_LABEL: Record<string, string> = { fabric: "Fabric", forge: "Forge", neoforge: "NeoForge", quilt: "Quilt" };
+
+/** Newest Minecraft version first ("1.21.4" before "1.21", before "1.20.6"). */
+export function compareMcVersionsDesc(a: string, b: string): number {
+  const pa = a.split(/[.-]/).map((n) => parseInt(n, 10) || 0);
+  const pb = b.split(/[.-]/).map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pb[i] ?? 0) - (pa[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+type DetailSection = "summary" | "versions" | "images";
+const DETAIL_SECTIONS: { id: DetailSection; label: string; icon: LucideIcon }[] = [
+  { id: "summary", label: "Resumen", icon: FileText },
+  { id: "versions", label: "Versiones", icon: History },
+  { id: "images", label: "Imágenes", icon: ImageIcon },
+];
+
 /** Also used by Explorar (pages/explore.tsx) for a modpack's page. */
 export function ModpackDetail({
   hit,
@@ -366,6 +386,21 @@ export function ModpackDetail({
   const [progress, setProgress] = useState<ModrinthInstallProgress | null>(null);
   const [busy, setBusy] = useState(false);
   const [installedId, setInstalledId] = useState<string | null>(null);
+  const [section, setSection] = useState<DetailSection>("summary");
+  const [actionsEl, setActionsEl] = useState<HTMLDivElement | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<{ src: string; title?: string } | null>(null);
+  // The project's images with their originals and titles; until they load (or if
+  // that fails) the search hit's plain urls stand in.
+  const [galleryDetail, setGalleryDetail] = useState<ModrinthProjectDetail["gallery"] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setGalleryDetail(null);
+    getProjectDetail(hit.projectId).then((d) => !cancelled && setGalleryDetail(d?.gallery ?? null));
+    return () => {
+      cancelled = true;
+    };
+  }, [hit.projectId]);
+  const gallery: ModrinthProjectDetail["gallery"] = galleryDetail ?? hit.gallery.map((url) => ({ url }));
 
   useEffect(() => {
     let cancelled = false;
@@ -391,6 +426,46 @@ export function ModpackDetail({
 
   useEffect(() => onModrinthInstallProgress((p) => setProgress(p)), []);
 
+  // Filters of the Versiones list: a Minecraft version and a loader ("" = any).
+  const [mcFilter, setMcFilter] = useState("");
+  const [loaderFilter, setLoaderFilter] = useState("");
+  // Each selector only offers what exists given the other one: with a loader
+  // chosen, just the Minecraft versions the modpack has for it, and vice versa.
+  // Versions ALaunchi can't install (Quilt-only) aren't offered either.
+  const installable = useMemo(() => (versions ?? []).filter(isSupported), [versions]);
+  const mcOptions = useMemo(
+    () =>
+      [...new Set(installable.filter((v) => !loaderFilter || v.loaders.includes(loaderFilter)).flatMap((v) => v.gameVersions))].sort(
+        compareMcVersionsDesc
+      ),
+    [installable, loaderFilter]
+  );
+  const loaderOptions = useMemo(
+    () =>
+      [...new Set(installable.filter((v) => !mcFilter || v.gameVersions.includes(mcFilter)).flatMap((v) => v.loaders))]
+        .filter((l) => SUPPORTED_LOADERS.has(l))
+        .sort(),
+    [installable, mcFilter]
+  );
+  useEffect(() => {
+    if (mcFilter && !mcOptions.includes(mcFilter)) setMcFilter("");
+    if (loaderFilter && !loaderOptions.includes(loaderFilter)) setLoaderFilter("");
+  }, [mcOptions, loaderOptions, mcFilter, loaderFilter]);
+  const filteredVersions = useMemo(
+    () =>
+      (versions ?? []).filter(
+        (v) => (!mcFilter || v.gameVersions.includes(mcFilter)) && (!loaderFilter || v.loaders.includes(loaderFilter))
+      ),
+    [versions, mcFilter, loaderFilter]
+  );
+  // A filter that leaves the chosen version out moves the choice to the best one
+  // still shown (a supported release first), so "Instalar" never uses a hidden one.
+  useEffect(() => {
+    if (!versions || filteredVersions.some((v) => v.versionId === versionId)) return;
+    const usable = filteredVersions.filter(isSupported);
+    setVersionId((usable.find((v) => v.versionType === "release") ?? usable[0])?.versionId ?? null);
+  }, [filteredVersions, versions, versionId]);
+
   const version = versions?.find((v) => v.versionId === versionId) ?? null;
   const supported = version ? isSupported(version) : false;
 
@@ -401,7 +476,7 @@ export function ModpackDetail({
     setProgress(null);
     try {
       const [iconDataUrl, bannerDataUrl] = await Promise.all([
-        iconToDataUrl(hit.iconUrl),
+        fetchModrinthIcon(hit.projectId, hit.iconUrl),
         fetchModrinthBanner(hit.projectId),
       ]);
       const meta = await installModrinthModpack({
@@ -416,7 +491,7 @@ export function ModpackDetail({
       });
       await loadInstances();
       setInstalledId(meta.id);
-      toast.success(`${hit.title} instalado como instancia privada.`);
+      notify.success(`${hit.title} instalado como instancia privada.`);
     } catch (e: any) {
       toast.error(e?.message?.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") || "No se pudo instalar el modpack.");
     } finally {
@@ -443,15 +518,17 @@ export function ModpackDetail({
           </div>
         )}
         <div className="relative px-5 py-4 flex items-start gap-4">
-          <button
-            type="button"
-            onClick={onBack}
-            disabled={busy}
-            className="h-8 w-8 shrink-0 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors disabled:opacity-40"
-            aria-label="Volver a la lista"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
+          <Hint label="Volver a la lista">
+            <button
+              type="button"
+              onClick={onBack}
+              disabled={busy}
+              className="h-8 w-8 shrink-0 flex items-center justify-center rounded-full text-gray-400 hover:bg-white/10 hover:text-white transition-colors disabled:opacity-40"
+              aria-label="Volver a la lista"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+          </Hint>
           <ProjectIcon url={hit.iconUrl} title={hit.title} className="h-20 w-20 rounded-xl shadow-xl" />
           <div className="min-w-0 flex-1">
             <h3 className="text-xl font-bold text-white leading-tight">{hit.title}</h3>
@@ -479,61 +556,150 @@ export function ModpackDetail({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-4">
-        {hit.gallery.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {hit.gallery.slice(0, 8).map((g) => (
-              <img key={g} src={g} alt="" className="h-28 rounded-lg object-cover shrink-0 border border-white/10" />
-            ))}
-          </div>
-        )}
-
-        <section className="space-y-1.5">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Versión</p>
-          {versions === null ? (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Cargando versiones...
-            </div>
-          ) : versions.length === 0 ? (
-            <p className="text-xs text-amber-400">Este modpack no tiene versiones instalables.</p>
-          ) : (
-            <select
-              value={versionId ?? ""}
-              onChange={(e) => setVersionId(e.target.value)}
-              disabled={busy}
-              className="w-full h-9 rounded-md border border-white/10 bg-background/60 px-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-accent"
+      {/* Section buttons under the header; the summary's translation toggle
+          portals into the right-hand slot. */}
+      <div className="px-5 py-2.5 shrink-0 flex items-center gap-2 border-b border-white/5">
+        <div className="flex items-center gap-1 p-1 rounded-md bg-white/[0.07]">
+          {DETAIL_SECTIONS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setSection(id)}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold transition-colors",
+                section === id ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-white"
+              )}
             >
-              {versions.map((v) => (
-                <option key={v.versionId} value={v.versionId}>
-                  {v.versionNumber} · MC {v.gameVersions.join(", ")} · {v.loaders.join("/")}
-                  {v.versionType !== "release" ? ` · ${v.versionType}` : ""}
-                  {isSupported(v) ? "" : " (no compatible)"}
-                </option>
-              ))}
-            </select>
-          )}
-          {version && (
-            <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
-              {version.loaders.filter((l) => SUPPORTED_LOADERS.has(l)).map((l) => (
-                <LoaderIcon key={l} loader={l} className="h-3 w-3" />
-              ))}
-              Minecraft {version.gameVersions.join(", ")} · {formatBytes(version.size)} el paquete (los mods se descargan aparte)
-            </p>
-          )}
-          {version && !supported && (
-            <p className="text-[11px] text-amber-400 flex items-center gap-1">
-              <AlertTriangle className="h-3 w-3" /> Esta versión usa Quilt, que ALaunchi no admite. Elige otra.
-            </p>
-          )}
-        </section>
-
-        {busy && (
-          <div className="space-y-1.5">
-            <Progress value={progress?.stage === "overrides" ? 100 : pct} className="h-2" />
-            <p className="text-[11px] text-muted-foreground truncate font-mono">{stageText(progress)}</p>
-          </div>
-        )}
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
+        <div ref={setActionsEl} className="ml-auto flex items-center gap-2" />
       </div>
+
+      {/* Minecraft versions the modpack is available for, and a loader filter. */}
+      {section === "versions" && versions && versions.length > 0 && (
+        <div className="px-5 py-2.5 shrink-0 flex items-center gap-2 border-b border-white/5">
+          <FilterSelect
+            value={mcFilter}
+            onChange={setMcFilter}
+            options={[{ value: "", label: "Todas las versiones de Minecraft" }, ...mcOptions.map((v) => ({ value: v, label: `Minecraft ${v}` }))]}
+          />
+          <FilterSelect
+            value={loaderFilter}
+            onChange={setLoaderFilter}
+            options={[{ value: "", label: "Cualquier loader" }, ...loaderOptions.map((l) => ({ value: l, label: LOADER_LABEL[l] ?? l }))]}
+          />
+          <span className="ml-auto text-[11px] text-muted-foreground">
+            {filteredVersions.length} {filteredVersions.length === 1 ? "versión" : "versiones"}
+          </span>
+        </div>
+      )}
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-4">
+        {section === "summary" && (
+          <ModrinthSummary projectId={hit.projectId} onOpenImage={setLightboxImage} actionsEl={actionsEl} showGallery={false} />
+        )}
+
+        {section === "versions" && (
+          <section className="space-y-1.5 pt-4">
+            {versions === null ? (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Cargando versiones...
+              </div>
+            ) : versions.length === 0 ? (
+              <p className="text-xs text-amber-400">Este modpack no tiene versiones instalables.</p>
+            ) : filteredVersions.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-8 text-center">Ninguna versión coincide con esos filtros.</p>
+            ) : (
+              filteredVersions.map((v) => {
+                const ok = isSupported(v);
+                const selected = v.versionId === versionId;
+                return (
+                  <button
+                    key={v.versionId}
+                    type="button"
+                    disabled={busy || !ok}
+                    onClick={() => setVersionId(v.versionId)}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-3 py-2 rounded-md border text-left transition-colors disabled:cursor-not-allowed",
+                      selected
+                        ? "bg-accent/15 border-accent/50"
+                        : "bg-gray-500/10 border-transparent hover:bg-white/[0.08] disabled:opacity-45 disabled:hover:bg-gray-500/10"
+                    )}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-sm font-medium text-white truncate">{v.versionNumber}</span>
+                        {v.versionType !== "release" && (
+                          <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] text-gray-200 shrink-0">{v.versionType}</span>
+                        )}
+                        {!ok && (
+                          <span className="rounded-full bg-amber-400/15 px-1.5 py-0.5 text-[10px] text-amber-400 shrink-0">
+                            no compatible (Quilt)
+                          </span>
+                        )}
+                      </span>
+                      <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground mt-0.5">
+                        {v.loaders.filter((l) => SUPPORTED_LOADERS.has(l)).map((l) => (
+                          <LoaderIcon key={l} loader={l} className="h-3 w-3" />
+                        ))}
+                        <span className="truncate">
+                          Minecraft {v.gameVersions.join(", ")} · hace {formatDistanceToNow(new Date(v.datePublished), { locale: es })} ·{" "}
+                          {formatCount(v.downloads)} descargas · {formatBytes(v.size)}
+                        </span>
+                      </span>
+                    </span>
+                    {selected && <Check className="h-4 w-4 text-accent shrink-0" />}
+                  </button>
+                );
+              })
+            )}
+            {versions && versions.length > 0 && (
+              <p className="text-[11px] text-muted-foreground pt-1">El paquete pesa lo indicado; los mods se descargan aparte al instalar.</p>
+            )}
+          </section>
+        )}
+
+        {section === "images" &&
+          (gallery.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+              <ImageIcon className="h-6 w-6" />
+              <p className="text-sm">Este modpack no tiene imágenes en Modrinth.</p>
+            </div>
+          ) : (
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-4">
+              {gallery.map((image) => (
+                <button
+                  type="button"
+                  key={image.url}
+                  onClick={() => setLightboxImage({ src: image.rawUrl || image.url, title: image.title })}
+                  className="block"
+                >
+                  <img
+                    src={image.url}
+                    alt={image.title || ""}
+                    className="w-full aspect-video object-cover rounded-md border border-white/10 hover:border-white/30 transition-colors"
+                  />
+                </button>
+              ))}
+            </div>
+          ))}
+      </div>
+
+      {busy && (
+        <div className="px-5 py-2.5 space-y-1.5 border-t border-white/5 shrink-0">
+          <Progress value={progress?.stage === "overrides" ? 100 : pct} className="h-2" />
+          <p className="text-[11px] text-muted-foreground truncate font-mono">{stageText(progress)}</p>
+        </div>
+      )}
+      {version && !supported && !busy && (
+        <p className="px-5 py-2 border-t border-white/5 text-[11px] text-amber-400 flex items-center gap-1 shrink-0">
+          <AlertTriangle className="h-3 w-3" /> Esta versión usa Quilt, que ALaunchi no admite. Elige otra en Versiones.
+        </p>
+      )}
+      <ImageLightbox image={lightboxImage} onClose={() => setLightboxImage(null)} />
 
       <div className="px-5 py-3 border-t border-white/5 flex items-center justify-end gap-2 shrink-0">
         {installedId ? (
@@ -553,8 +719,4 @@ export function ModpackDetail({
       </div>
     </div>
   );
-}
-
-function isSupported(v: ModpackVersion): boolean {
-  return v.loaders.length === 0 || v.loaders.some((l) => SUPPORTED_LOADERS.has(l)) || v.loaders.includes("minecraft");
 }

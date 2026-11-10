@@ -11,8 +11,9 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-           // @replit: no hover, and add primary border
-           "bg-primary text-primary-foreground border border-primary-border",
+           // The app's accent (the instance's colour, like Jugar / Nueva instancia),
+           // not the theme's golden primary.
+           "bg-accent text-accent-foreground border border-transparent",
         destructive:
           "bg-destructive text-destructive-foreground shadow-sm border-destructive-border",
         outline:

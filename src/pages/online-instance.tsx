@@ -1,62 +1,26 @@
 import { useEffect, useState } from "react";
 import { useParams } from "wouter";
-import { AlertTriangle, ArrowUpCircle, Loader2, Play, Sparkles, Users } from "lucide-react";
-import { toast } from "sonner";
+import { AlertTriangle, ArrowUpCircle, Loader2, Sparkles, Users } from "lucide-react";
 import { findPackSource, useCarouselModpacks, useModpacks } from "@/hooks/use-modpacks";
 import { fetchSnapshot, type SnapshotManifest } from "@/services/github";
 import { useDynamicAccent } from "@/hooks/use-dynamic-accent";
-import {
-  DRAWER_EXAMPLE_HISTORY,
-  DRAWER_EXAMPLE_MEMBERS,
-  DRAWER_EXAMPLE_PACK,
-} from "@/lib/online-view-mode";
 import { ModpackManager } from "@/pages/modpack-detail";
 import { InstanceMembersPanel } from "@/components/instance-members-panel";
 import { ChangelogSidePanel } from "@/components/changelog-side-panel";
 import { LoaderIcon } from "@/components/loader-icon";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { BannerPlayButton } from "@/components/online-banner-tile";
 import { AccountMenuButton } from "@/components/account-menu-button";
 import { AppBackground } from "@/components/app-background";
 import { ActivityButton } from "@/components/activity-button";
 import { InstanceGroupChat, InstanceGroupChatPanel } from "@/components/instance-group-chat";
-import { ChatBubbleRow } from "@/components/chat-bubble-row";
+import { ChatButton } from "@/components/chat-button";
 import { ChatWindow } from "@/components/chat-window";
 import { useAuth } from "@/hooks/use-auth";
 import { useHeaderOverlay } from "@/hooks/use-chat-heads";
 import type { ChatMode } from "@/lib/instance-context";
 import { FooterPanelButton } from "@/components/footer-panel-button";
-
-// Minimized side panels (Participantes / Novedades), remembered per device.
-const COLLAPSED_KEY = "alaunchi_online_collapsed_panels";
-type SidePanel = "members" | "changelog";
-
-function readCollapsed(): SidePanel[] {
-  try {
-    const v = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]");
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-}
-
-// Below this width the three columns no longer fit: the side columns (Participantes
-// + Novedades, group chat) give way to buttons in the footer's corner. Tailwind's xl.
-const WIDE_QUERY = "(min-width: 1280px)";
-
-/** In JS rather than CSS so only one group chat is mounted at a time — a
- *  hidden footer one would still count unread and play the sound. */
-function useWideLayout(): boolean {
-  const [wide, setWide] = useState(() => window.matchMedia(WIDE_QUERY).matches);
-  useEffect(() => {
-    const mq = window.matchMedia(WIDE_QUERY);
-    const onChange = () => setWide(mq.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-  return wide;
-}
+import { useOnlinePanels, useWideLayout } from "@/lib/online-panels";
 
 /**
  * An online instance opened from Inicio's drawer view (/online/:id): a header
@@ -84,9 +48,7 @@ export default function OnlineInstance() {
   const { id } = useParams<{ id: string }>();
   const modpacks = useCarouselModpacks();
   const catalogLoaded = useModpacks((s) => s.loaded);
-  const pack =
-    modpacks.find((m) => m.id === id) ??
-    (import.meta.env.DEV && id === DRAWER_EXAMPLE_PACK.id ? DRAWER_EXAMPLE_PACK : undefined);
+  const pack = modpacks.find((m) => m.id === id);
   const [brokenBanner, setBrokenBanner] = useState(false);
   const { username, uuid } = useAuth();
   const activePopup = useHeaderOverlay((s) => s.active);
@@ -97,25 +59,17 @@ export default function OnlineInstance() {
   // Header slots the embedded manager portals its Play group / extras card into.
   const [actionsSlot, setActionsSlot] = useState<HTMLDivElement | null>(null);
   const [extrasSlot, setExtrasSlot] = useState<HTMLDivElement | null>(null);
-  const [collapsed, setCollapsed] = useState<SidePanel[]>(readCollapsed);
-  const toggleCollapsed = (panel: SidePanel) =>
-    setCollapsed((prev) => {
-      const next = prev.includes(panel) ? prev.filter((p) => p !== panel) : [...prev, panel];
-      try {
-        localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next));
-      } catch {}
-      return next;
-    });
+  const collapsed = useOnlinePanels((s) => s.collapsed);
+  const toggleCollapsed = useOnlinePanels((s) => s.toggleCollapsed);
 
   useDynamicAccent(pack?.bannerUrl || pack?.imageUrl);
 
   // The published manifest (for Novedades; the embedded manager reads its own).
   // undefined = loading, null = none published / no source.
-  const isExample = pack?.id === DRAWER_EXAMPLE_PACK.id;
   const [manifest, setManifest] = useState<SnapshotManifest | null | undefined>(undefined);
   const [manifestError, setManifestError] = useState(false);
   useEffect(() => {
-    if (!pack || isExample) return;
+    if (!pack) return;
     let cancelled = false;
     setManifest(undefined);
     setManifestError(false);
@@ -131,7 +85,7 @@ export default function OnlineInstance() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pack?.id, pack?.version, pack?.repoUrl, isExample]);
+  }, [pack?.id, pack?.version, pack?.repoUrl]);
 
   if (!pack && !catalogLoaded) {
     return (
@@ -151,9 +105,8 @@ export default function OnlineInstance() {
 
   const hasBanner = !!pack.bannerUrl && !brokenBanner;
   // Same footer as Inicio's carousel: players and chats framed in this instance
-  // (the dev example and past instances have none → general).
-  const viewContext: ChatMode =
-    !isExample && !pack.outOfNetwork ? { type: "carousel", pack } : { type: "general" };
+  // (past instances have none → general).
+  const viewContext: ChatMode = !pack.outOfNetwork ? { type: "carousel", pack } : { type: "general" };
 
   const hasGroupChat = !!uuid && viewContext.type === "carousel";
   const membersCollapsed = collapsed.includes("members");
@@ -162,7 +115,6 @@ export default function OnlineInstance() {
   const membersPanel = (className: string, inColumn = false) => (
     <InstanceMembersPanel
       modpackId={pack.id}
-      entries={isExample ? DRAWER_EXAMPLE_MEMBERS : undefined}
       className={className}
       collapsed={inColumn && membersCollapsed}
       onToggleCollapsed={inColumn ? () => toggleCollapsed("members") : undefined}
@@ -171,13 +123,7 @@ export default function OnlineInstance() {
   const changelogPanel = (className: string, inColumn = false) => (
     <ChangelogSidePanel
       pack={pack}
-      history={
-        isExample
-          ? DRAWER_EXAMPLE_HISTORY
-          : manifest === undefined
-            ? null
-            : [...(manifest?.changelogHistory ?? [])].reverse()
-      }
+      history={manifest === undefined ? null : [...(manifest?.changelogHistory ?? [])].reverse()}
       error={manifestError}
       className={className}
       collapsed={inColumn && changelogCollapsed}
@@ -258,13 +204,7 @@ export default function OnlineInstance() {
                 <div ref={setActionsSlot} className="shrink-0 self-center" />
               ) : (
                 <div className="shrink-0 self-center">
-                  {isExample ? (
-                    <Button size="sm" className="h-11 px-6 text-base font-bold border-0" onClick={() => toast.info("Instancia de ejemplo — no se puede jugar.")}>
-                      <Play className="mr-1.5 h-4 w-4 fill-current" /> JUGAR
-                    </Button>
-                  ) : (
-                    <BannerPlayButton pack={pack} large />
-                  )}
+                  <BannerPlayButton pack={pack} large />
                 </div>
               )}
             </div>
@@ -286,21 +226,27 @@ export default function OnlineInstance() {
           )}
 
           {/* The real instance manager (same as a private instance's or the
-              carousel's "Contenido"), embedded — this column is its scroll
-              container. */}
-          <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden">
+              carousel's "Contenido"), embedded — it fills this column and its
+              content card scrolls inside, like everywhere else. */}
+          <div className="flex-1 min-w-0 min-h-0 flex flex-col">
             <ModpackManager embeddedId={pack.id} slots={{ actions: actionsSlot, extras: extrasSlot }} />
           </div>
 
-          {/* Right column: the instance's group chat, always open. Narrow
-              window → the usual popup button in the footer's corner instead. */}
+          {/* Right column: the instance's group chat, minimizable to its header.
+              Narrow window → the usual popup button in the footer's corner instead. */}
           {wide && (
             <div className="w-96 shrink-0">
               {hasGroupChat ? (
-                <InstanceGroupChatPanel pack={pack} myUuid={uuid!} myUsername={username ?? ""} />
+                <InstanceGroupChatPanel
+                  pack={pack}
+                  myUuid={uuid!}
+                  myUsername={username ?? ""}
+                  collapsed={collapsed.includes("groupChat")}
+                  onToggleCollapsed={() => toggleCollapsed("groupChat")}
+                />
               ) : (
                 <aside className="h-full flex items-center justify-center rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md p-6 text-center text-xs text-muted-foreground">
-                  {isExample ? "La instancia de ejemplo no tiene chat de grupo." : "Esta instancia ya no tiene chat de grupo."}
+                  Esta instancia ya no tiene chat de grupo.
                 </aside>
               )}
             </div>
@@ -308,28 +254,34 @@ export default function OnlineInstance() {
         </div>
       </div>
 
-      <footer className="relative z-20 h-20 bg-gray-500/10 backdrop-blur-xl flex items-center justify-between px-6 shrink-0">
+      <footer className="relative z-20 h-20 [transform:translateZ(0)] flex items-center justify-between px-6 shrink-0">
+        {/* The blur in a layer of its own: on the footer itself, the chat windows
+            inside it couldn't blur the page behind them (backdrop root). The
+            transform keeps `fixed` descendants relative to the footer, as the blur did. */}
+        <div aria-hidden className="absolute inset-0 -z-10 bg-gray-500/10 backdrop-blur-xl" />
         <div className="flex items-center gap-1">
           <AccountMenuButton uuid={uuid} username={username} />
           {uuid && (
             <div className="relative">
-              <ChatBubbleRow />
+              <ChatButton />
               <ChatWindow myUuid={uuid} myUsername={username ?? ""} defaultMode={viewContext} />
             </div>
           )}
+          {/* Narrow window: the group chat column is hidden, it opens from here —
+              same button as Inicio's, next to the 1:1 chat. */}
+          {!wide && hasGroupChat && <InstanceGroupChat pack={pack} myUuid={uuid!} myUsername={username ?? ""} plainHeader card />}
         </div>
 
         <div className="flex items-center gap-1">
           {/* Narrow window: the side columns are hidden, they open from here. */}
           {!wide && (
             <>
-              <FooterPanelButton icon={Sparkles} label="Novedades">
+              <FooterPanelButton icon={Sparkles} label="Novedades" iconOnly>
                 {changelogPanel("min-h-0")}
               </FooterPanelButton>
-              <FooterPanelButton icon={Users} label="Participantes">
+              <FooterPanelButton icon={Users} label="Participantes" iconOnly>
                 {membersPanel("min-h-0")}
               </FooterPanelButton>
-              {hasGroupChat && <InstanceGroupChat pack={pack} myUuid={uuid!} myUsername={username ?? ""} plainHeader />}
             </>
           )}
           {/* Actividad, always at the far right. */}

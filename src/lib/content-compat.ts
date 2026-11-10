@@ -3,6 +3,7 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { listVersions, type ModrinthUpdate } from "@/services/modrinth";
 import type { ContentCategory } from "@/services/content-share";
+import { isLibraryProjectId, libraryVersionsFor } from "@/services/mod-library";
 
 export interface CompatibleInstance {
   pack: Modpack;
@@ -41,7 +42,10 @@ export async function findCompatibleInstances(
   const candidates = await listAllMyInstances();
   const results = await Promise.all(
     candidates.map(async (pack) => {
-      const versions = await listVersions(projectId, pack.loaderType, pack.minecraftVersion, modrinthCategory);
+      // "lib:" projects are the group's own mods, not on Modrinth's API.
+      const versions = isLibraryProjectId(projectId)
+        ? await libraryVersionsFor(projectId, pack.minecraftVersion, pack.loaderType)
+        : await listVersions(projectId, pack.loaderType, pack.minecraftVersion, modrinthCategory);
       return versions[0] ? { pack, resolvedVersion: versions[0] } : null;
     })
   );

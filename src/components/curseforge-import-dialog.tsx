@@ -1,8 +1,9 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useMemo, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
 import { AlertTriangle, Check, FolderOpen, Loader2, RefreshCw } from "lucide-react";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -123,7 +124,7 @@ export function CurseForgeImportDialog({ open, onOpenChange }: { open: boolean; 
     setQueue([]);
     await loadInstances();
     if (done.length > 0) {
-      toast.success(done.length === 1 ? `${done[0]} importada.` : `${done.length} instancias importadas.`);
+      notify.success(done.length === 1 ? `${done[0]} importada.` : `${done.length} instancias importadas.`);
     }
   };
 
@@ -132,7 +133,7 @@ export function CurseForgeImportDialog({ open, onOpenChange }: { open: boolean; 
 
   return (
     <Dialog open={open} onOpenChange={(v) => !busy && onOpenChange(v)}>
-      <DialogContent className="bg-card border-white/10 text-foreground max-w-3xl sm:max-w-3xl w-[92vw] h-[78vh] p-0 gap-0 flex flex-col overflow-hidden">
+      <DialogContent className="border-transparent bg-gray-500/15 backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.35)] sm:rounded-md text-foreground max-w-3xl sm:max-w-3xl w-[92vw] h-[78vh] p-0 gap-0 flex flex-col overflow-hidden">
         <DialogHeader className="px-5 pt-4 pb-3 border-b border-white/5 shrink-0">
           <DialogTitle className="text-white flex items-center gap-2">
             <CurseForgeLogo className="h-5 w-5 text-[#F16436]" />
@@ -146,9 +147,11 @@ export function CurseForgeImportDialog({ open, onOpenChange }: { open: boolean; 
             <p className="flex-1 min-w-0 truncate font-mono text-[11px] text-muted-foreground select-text" title={instancesDir}>
               {instancesDir || "…"}
             </p>
-            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={busy || scanning} onClick={scan} title="Volver a buscar">
-              <RefreshCw className={cn("h-3.5 w-3.5", scanning && "animate-spin")} />
-            </Button>
+            <Hint label="Volver a buscar">
+              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={busy || scanning} onClick={scan}>
+                <RefreshCw className={cn("h-3.5 w-3.5", scanning && "animate-spin")} />
+              </Button>
+            </Hint>
             <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs border-white/10" disabled={busy} onClick={chooseFolder}>
               <FolderOpen className="mr-1.5 h-3.5 w-3.5" /> Cambiar carpeta
             </Button>

@@ -23,7 +23,6 @@ export interface FrameDecoration {
 export const AVATAR_DECORATIONS: AvatarDecoration[] = [
   { id: "none", label: "Sin decoración", description: "El personaje sin efectos." },
   { id: "cherry-petals", label: "Pétalos de cerezo", description: "Pétalos rosas cayendo por detrás." },
-  { id: "soul-fire", label: "Fuego de alma", description: "Llamas azules alrededor del personaje." },
   { id: "fireflies", label: "Luciérnagas", description: "Luciérnagas de noche parpadeando alrededor." },
   // Overworld
   { id: "pale-garden", label: "Jardín pálido", description: "Hojas de roble pálido cayendo." },
@@ -59,16 +58,15 @@ export const ICON_DECORATIONS: FrameDecoration[] = [
   { id: "none", label: "Sin decoración", description: "Tu cabeza tal cual." },
   { id: "traced", label: "Trazo", description: "Una línea verde y naranja que dibuja el borde del icono." },
   { id: "vines", label: "Enredadera", description: "Una enredadera que crece rodeando tu cabeza." },
-  { id: "gold-stars", label: "Estrellas doradas", description: "Aro dorado con estrellas; tu cabeza se ve redonda dentro." },
+  { id: "orange-run", label: "Recorrido", description: "Dos trazos naranjas que rellenan el borde desde esquinas opuestas." },
+  { id: "flames", label: "Fuego", description: "Un marco en llamas." },
+  { id: "blue-hud", label: "Interfaz azul", description: "Aros azules de interfaz futurista; tu cabeza se ve redonda dentro." },
+  { id: "circuit", label: "Circuito", description: "Aros de circuitos alrededor; tu cabeza se ve redonda dentro." },
+  { id: "orange-ring", label: "Segmento", description: "Un trazo naranja que da la vuelta al icono hasta cerrarlo." },
   { id: "wings-1", label: "Alas I", description: "Aro dorado con alas y una estrella; tu cabeza se ve redonda dentro." },
   { id: "wings-2", label: "Alas II", description: "Aro dorado con alas y dos estrellas; tu cabeza se ve redonda dentro." },
   { id: "wings-3", label: "Alas III", description: "Aro dorado con alas y tres estrellas; tu cabeza se ve redonda dentro." },
-  { id: "orange-run", label: "Recorrido", description: "Dos trazos naranjas que rellenan el borde desde esquinas opuestas." },
-  { id: "flames", label: "Fuego", description: "Un marco en llamas." },
-  { id: "shapes", label: "Formas", description: "Un marco de formas de colores que se dibuja alrededor de tu cabeza." },
-  { id: "blue-hud", label: "Interfaz azul", description: "Aros azules de interfaz futurista; tu cabeza se ve redonda dentro." },
-  { id: "circuit", label: "Circuito", description: "Aros de circuitos alrededor; tu cabeza se ve redonda dentro." },
-  { id: "orange-ring", label: "Giro naranja", description: "Un trazo naranja que da la vuelta al icono hasta cerrarlo." },
+  { id: "gold-stars", label: "Alas doradas", description: "Aro dorado con estrellas; tu cabeza se ve redonda dentro." },
 ];
 
 /** Narrows a stored id to a known icon decoration ("none" otherwise). */

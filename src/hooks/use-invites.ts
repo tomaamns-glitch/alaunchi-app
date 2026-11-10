@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import { subscribeMyInvites, clearInvite, type Invite } from "@/services/invites";
 import { BannedFromInstanceError } from "@/services/access-codes";
 import { joinWithCode } from "@/lib/join-instance";
@@ -101,7 +101,7 @@ export const useInvites = create<InvitesState>((set, get) => ({
         toast.error("Esta invitación ya no es válida (el código de la instancia cambió). Pide que te inviten otra vez.");
         return;
       }
-      toast.success(`Te has unido a ${inv.modpackName}.`);
+      notify.success(`Te has unido a ${inv.modpackName}.`);
       useModpacks.getState().loadModpacks();
     } catch (e: any) {
       if (e instanceof BannedFromInstanceError) await clearInvite(key, myUuid).catch(() => {});

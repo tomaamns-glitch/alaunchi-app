@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { toast } from "sonner";
+import { toast, notify } from "@/lib/toast";
 import {
   AlertTriangle,
   Check,
@@ -127,7 +127,7 @@ export default function CrashDiagnosisDialog({ target }: { target: CrashDiagnosi
       }
       setApplied((s) => new Set(s).add(f.key));
       noteCrashFixApplied();
-      toast.success("Arreglo aplicado. Prueba a jugar otra vez.");
+      notify.success("Arreglo aplicado. Prueba a jugar otra vez.");
     } catch (e: any) {
       reportCaughtError(`crash-fix:${f.fix.kind}:${target.modpackId}`, e);
       toast.error(e?.message || "No se pudo aplicar el arreglo.");

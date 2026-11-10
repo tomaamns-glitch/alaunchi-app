@@ -142,7 +142,7 @@ function PlayerAvatar({
       </PlayerDecoratedIcon>
       {online && (
         <span
-          className={`absolute z-[2] -bottom-0.5 -right-0.5 rounded-full bg-green-400 border-card ${large ? "h-2.5 w-2.5 border-2" : "h-2 w-2 border"}`}
+          className={`absolute z-[4] -bottom-0.5 -right-0.5 rounded-full bg-green-400 border-card ${large ? "h-2.5 w-2.5 border-2" : "h-2 w-2 border"}`}
           aria-hidden
         />
       )}

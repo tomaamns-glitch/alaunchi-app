@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useMemo, useState } from "react";
 import { Braces, FileText, Loader2, Lock, RotateCcw, Search } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -215,9 +216,11 @@ function FieldRow({
         <div className="flex items-center gap-1.5">
           <p className="text-sm font-medium text-gray-100">{field.label}</p>
           {changed && (
-            <button type="button" onClick={onReset} title="Deshacer" className="text-muted-foreground hover:text-white">
-              <RotateCcw className="h-3 w-3" />
-            </button>
+            <Hint label="Deshacer">
+              <button type="button" onClick={onReset} className="text-muted-foreground hover:text-white">
+                <RotateCcw className="h-3 w-3" />
+              </button>
+            </Hint>
           )}
         </div>
         <p className="font-mono text-[10px] text-muted-foreground/80 select-text">{field.key}</p>

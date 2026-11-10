@@ -4,7 +4,7 @@ import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js"
 import { inferModelType, loadCapeToCanvas, loadImage, loadSkinToCanvas } from "skinview-utils";
 import classicModelUrl from "@/assets/models/classic-player.gltf?url";
 import slimModelUrl from "@/assets/models/slim-player.gltf?url";
-import { getCherryPetalFrames } from "@/services/electron";
+import { getCherryPetalFrames, getElytraTexture } from "@/services/electron";
 import { PARTICLE_EFFECTS, ParticleEffect, isParticleEffectId, type ParticleEffectId, type ParticleEffectDef } from "@/components/particle-effects";
 
 export type SkinEffect = "none" | "soul-fire" | "cherry-petals" | "fireflies" | ParticleEffectId;
@@ -31,6 +31,12 @@ interface SkinViewerAnimatedProps {
    * - any id in PARTICLE_EFFECTS (particle-effects.ts): vanilla-particle decorations.
    */
   effect?: SkinEffect;
+  /** Wearing an elytra: the character turns its back to show the wings (made of
+   *  the cape's own texture when it has one, else the game's elytra) and the cape
+   *  is hidden. Back to false: the wings go and it turns to face front again. */
+  elytra?: boolean;
+  /** Freezes the idle animation where it is. */
+  paused?: boolean;
 }
 
 interface SceneEffect {
@@ -139,6 +145,8 @@ class IdleScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastGesture = "";
   private disposed = false;
+  /** While true no gesture starts (the viewer is frozen). */
+  paused = false;
   private onFinished: (e: { action: THREE.AnimationAction }) => void;
 
   constructor(
@@ -174,7 +182,7 @@ class IdleScheduler {
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       const base = this.base;
-      if (this.disposed || !base || !base.isRunning()) return this.schedule();
+      if (this.disposed || !base || !base.isRunning() || this.paused) return this.schedule();
       const pool = GESTURE_CLIPS.filter((n) => n !== this.lastGesture && this.actions.has(n));
       const name = (pool.length ? pool : GESTURE_CLIPS)[Math.floor(Math.random() * (pool.length || GESTURE_CLIPS.length))];
       const gesture = this.actions.get(name);
@@ -195,7 +203,7 @@ class IdleScheduler {
   playInteract() {
     const interact = this.actions.get(INTERACT_CLIP);
     const base = this.base;
-    if (!interact || !base || !base.isRunning()) return;
+    if (this.paused || !interact || !base || !base.isRunning()) return;
     if (this.timer) clearTimeout(this.timer);
     base.fadeOut(CROSSFADE_S);
     interact.reset().setEffectiveWeight(1).fadeIn(CROSSFADE_S).play();
@@ -420,7 +428,7 @@ class Fireflies implements SceneEffect {
   private respawn(i: number, startFraction = 0) {
     const angle = Math.random() * Math.PI * 2;
     // not inside the body: keep a small gap around the vertical axis
-    const r = this.radius * (0.45 + 0.55 * Math.sqrt(Math.random()));
+    const r = this.radius * (0.6 + 0.4 * Math.sqrt(Math.random()));
     this.pos[i * 3] = Math.cos(angle) * r;
     this.pos[i * 3 + 1] = this.minY + Math.random() * (this.maxY - this.minY);
     this.pos[i * 3 + 2] = Math.sin(angle) * r;
@@ -454,8 +462,8 @@ class Fireflies implements SceneEffect {
       // soft walls: steer back toward the body when drifting too far out,
       // and away from it when too close
       const d = Math.hypot(x, z);
-      if (d > this.radius || d < this.radius * 0.4) {
-        const toward = Math.atan2(-z, -x) + (d < this.radius * 0.4 ? Math.PI : 0);
+      if (d > this.radius || d < this.radius * 0.55) {
+        const toward = Math.atan2(-z, -x) + (d < this.radius * 0.55 ? Math.PI : 0);
         this.heading[i] += Math.sin(toward - this.heading[i]) * 2.5 * dt;
       }
       if (y < this.minY || y > this.maxY) this.vel[i * 3 + 1] *= -1;
@@ -704,6 +712,169 @@ class CherryPetals implements SceneEffect {
   }
 }
 
+// ─── Elytra ──────────────────────────────────────────────────────────────────
+// Built like the game's ElytraModel, in the game's own units (1 px = 1/16 block,
+// y pointing DOWN from the shoulders, +z behind the body): two 10x20x2 wings
+// (grown by 1 px on every side) hinged at ±5 px, folded 15° back and out. The
+// group is turned half a revolution around z and scaled 1/16 to sit on the
+// model's Body bone (whose own frame is y-up, +x = the player's right), at the
+// shoulders and the back surface of the torso — where the cape hangs.
+
+const ELYTRA_TEX = { w: 64, h: 32 };
+
+/** One face of a Minecraft-style box, as (position, uv in texture px) corners. */
+type FaceCorner = [number, number, number, number, number];
+
+function mcBoxGeometry(
+  x: number, y: number, z: number, w: number, h: number, d: number, grow: number,
+  u: number, v: number, mirror: boolean
+): THREE.BufferGeometry {
+  const x0 = x - grow, x1 = x + w + grow;
+  const y0 = y - grow, y1 = y + h + grow;
+  const z0 = z - grow, z1 = z + d + grow;
+  // Texture regions of the box layout: [west][front][east][back] under [top][bottom].
+  const west = [u, u + d];
+  const front = [u + d, u + d + w];
+  const east = [u + d + w, u + 2 * d + w];
+  const back = [u + 2 * d + w, u + 2 * d + 2 * w];
+  const top = [u + d, u + d + w];
+  const bottom = [u + d + w, u + d + 2 * w];
+  const vTop = [v, v + d];
+  const vSide = [v + d, v + d + h];
+  // Mirrored (the right wing): every region is read right-to-left, and the two
+  // sides trade places.
+  const flip = (r: number[], lo: number, hi: number) => (mirror ? [lo + hi - r[0], lo + hi - r[1]] : r);
+  const uLo = u, uHi = u + 2 * d + 2 * w;
+  const wst = flip(mirror ? east : west, uLo, uHi);
+  const est = flip(mirror ? west : east, uLo, uHi);
+  const frt = flip(front, uLo, uHi);
+  const bck = flip(back, uLo, uHi);
+  const tp = flip(top, uLo, uHi);
+  const btm = flip(bottom, uLo, uHi);
+  const [wa, wb] = wst, [fa, fb] = frt, [ea, eb] = est, [ba, bb] = bck, [ta, tb] = tp, [ma, mb] = btm;
+  const [sv0, sv1] = vSide, [tv0, tv1] = vTop;
+
+  const faces: FaceCorner[][] = [
+    // back (+z), seen from behind: u runs against x
+    [[x0, y0, z1, bb, sv0], [x1, y0, z1, ba, sv0], [x1, y1, z1, ba, sv1], [x0, y1, z1, bb, sv1]],
+    // front (-z): u runs with x
+    [[x1, y0, z0, fb, sv0], [x0, y0, z0, fa, sv0], [x0, y1, z0, fa, sv1], [x1, y1, z0, fb, sv1]],
+    // +x side: front edge to back edge
+    [[x1, y0, z1, eb, sv0], [x1, y0, z0, ea, sv0], [x1, y1, z0, ea, sv1], [x1, y1, z1, eb, sv1]],
+    // -x side
+    [[x0, y0, z0, wb, sv0], [x0, y0, z1, wa, sv0], [x0, y1, z1, wa, sv1], [x0, y1, z0, wb, sv1]],
+    // top (y0)
+    [[x0, y0, z0, ta, tv1], [x1, y0, z0, tb, tv1], [x1, y0, z1, tb, tv0], [x0, y0, z1, ta, tv0]],
+    // bottom (y1)
+    [[x0, y1, z1, ma, tv1], [x1, y1, z1, mb, tv1], [x1, y1, z0, mb, tv0], [x0, y1, z0, ma, tv0]],
+  ];
+  const pos: number[] = [];
+  const uv: number[] = [];
+  const idx: number[] = [];
+  for (const f of faces) {
+    const base = pos.length / 3;
+    for (const [px, py, pz, pu, pv] of f) {
+      pos.push(px, py, pz);
+      uv.push(pu / ELYTRA_TEX.w, pv / ELYTRA_TEX.h);
+    }
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+function buildElytra(texture: THREE.Texture): THREE.Group {
+  const material = new THREE.MeshStandardMaterial({
+    map: texture,
+    metalness: 0,
+    roughness: 1,
+    flatShading: true,
+    toneMapped: false,
+    transparent: true,
+    alphaTest: 0.05,
+    side: THREE.DoubleSide,
+  });
+  const FOLD = 0.2617994; // 15°
+  const left = new THREE.Mesh(mcBoxGeometry(-10, 0, 0, 10, 20, 2, 1, 22, 0, false), material);
+  left.position.set(5, 0, 0);
+  left.rotation.order = "ZYX";
+  left.rotation.set(FOLD, 0, -FOLD);
+  const right = new THREE.Mesh(mcBoxGeometry(0, 0, 0, 10, 20, 2, 1, 22, 0, true), material);
+  right.position.set(-5, 0, 0);
+  right.rotation.order = "ZYX";
+  right.rotation.set(FOLD, 0, FOLD);
+
+  const group = new THREE.Group();
+  group.name = "Elytra";
+  group.add(left, right);
+  // Game units → the model's Body bone.
+  group.position.set(0, 0.75, 0.125);
+  group.rotation.z = Math.PI;
+  group.scale.setScalar(1 / 16);
+  return group;
+}
+
+/** Whether a cape canvas carries the elytra region (22,0)-(46,22): standard 64x32
+ *  Mojang capes do; small or Optifine-style ones leave it empty. */
+function capeHasElytra(canvas: HTMLCanvasElement): boolean {
+  const k = canvas.width / 64;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx || k < 1) return false;
+  const { data } = ctx.getImageData(Math.round(22 * k), 0, Math.round(24 * k), Math.round(22 * k));
+  let opaque = 0;
+  for (let i = 3; i < data.length; i += 4) if (data[i] > 128) opaque++;
+  return opaque > 60;
+}
+
+// The game's elytra texture (null when no client jar is cached → a plain grey one).
+let defaultElytraCanvas: Promise<HTMLCanvasElement> | null = null;
+function getDefaultElytraCanvas(): Promise<HTMLCanvasElement> {
+  if (!defaultElytraCanvas) {
+    defaultElytraCanvas = (async () => {
+      const canvas = document.createElement("canvas");
+      const src = await getElytraTexture();
+      if (src) {
+        try {
+          const img = await loadImage(src);
+          canvas.width = img.width;
+          canvas.height = img.height;
+          canvas.getContext("2d")!.drawImage(img, 0, 0);
+          return canvas;
+        } catch {
+          /* fall through to the drawn one */
+        }
+      }
+      // No client jar to read it from: a drawn stand-in with the elytra's shape —
+      // the wing's slanted silhouette in its (36..46, 2..22) back-face region,
+      // darker at the top, lighter and feathered towards the tip.
+      canvas.width = 64;
+      canvas.height = 32;
+      const g = canvas.getContext("2d")!;
+      for (let row = 0; row < 20; row++) {
+        const t = row / 19;
+        const left = 36 + Math.round(t * 3);
+        const right = 44 + Math.round(t * 2);
+        const l = 36 + Math.round(t * 28);
+        for (let x = left; x <= right; x++) {
+          const feather = (row + (x - left)) % 5 === 0 ? -9 : 0;
+          const edge = x === left || x === right ? -10 : 0;
+          g.fillStyle = `hsl(215 14% ${l + feather + edge}%)`;
+          g.fillRect(x, 2 + row, 1, 1);
+        }
+      }
+      // The thin plate on the wing's outer side.
+      g.fillStyle = "#7d8ea1";
+      g.fillRect(22, 11, 1, 11);
+      return canvas;
+    })();
+  }
+  return defaultElytraCanvas;
+}
+
 /** Frees the per-instance materials and skin/cape textures of a model clone.
  *  Geometry is deliberately left alone — it's shared with the cached source
  *  glTF (see {@link loadModel}) and outlives any single viewer. */
@@ -742,6 +913,8 @@ export function SkinViewerAnimated({
   className,
   effect = "none",
   extendTop = 0,
+  elytra = false,
+  paused = false,
 }: SkinViewerAnimatedProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -752,6 +925,15 @@ export function SkinViewerAnimated({
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const schedulerRef = useRef<IdleScheduler | null>(null);
   const yawRef = useRef(0);
+  // Elytra / pause live in refs: the render loop and the model builder read them.
+  const elytraRef = useRef(elytra);
+  elytraRef.current = elytra;
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
+  const elytraGroupRef = useRef<THREE.Group | null>(null);
+  const capeMaterialsRef = useRef<{ mats: THREE.Material[]; hasCape: boolean }>({ mats: [], hasCape: false });
+  // A turn the viewer is animating on its own (elytra on/off); a drag cancels it.
+  const turnRef = useRef<{ from: number; to: number; start: number; dur: number } | null>(null);
 
   // Renderer / scene / camera / render loop — recreated only on resize.
   useEffect(() => {
@@ -772,7 +954,9 @@ export function SkinViewerAnimated({
     // glow actually reads against the character.
     const night =
       effect === "fireflies" || (isParticleEffectId(effect) && !!(PARTICLE_EFFECTS[effect] as ParticleEffectDef).night);
-    scene.add(new THREE.AmbientLight(night ? 0xc4ccff : 0xffffff, night ? 1.45 : 2));
+    // Some decorations tint the ambient light with their mood (crimson, warped…).
+    const ambient = isParticleEffectId(effect) ? (PARTICLE_EFFECTS[effect] as ParticleEffectDef).ambient : undefined;
+    scene.add(new THREE.AmbientLight(night ? 0xc4ccff : ambient ?? 0xffffff, night ? 1.45 : 2));
     const key = new THREE.DirectionalLight(night ? 0xaebcff : 0xffffff, night ? 0.9 : 1.2);
     key.position.set(-3, 4, 2);
     scene.add(key);
@@ -828,8 +1012,17 @@ export function SkinViewerAnimated({
       // requestAnimationFrame already pauses when the window isn't visible;
       // clamp so the first frame after a long pause doesn't lurch the animation.
       const delta = Math.min(clock.getDelta(), 0.1);
-      mixerRef.current?.update(delta);
-      sceneEffect?.update(delta);
+      if (!pausedRef.current) {
+        mixerRef.current?.update(delta);
+        sceneEffect?.update(delta);
+      }
+      const turn = turnRef.current;
+      if (turn) {
+        const t = Math.min(1, (performance.now() - turn.start) / turn.dur);
+        const eased = 1 - Math.pow(1 - t, 3);
+        yawRef.current = turn.from + (turn.to - turn.from) * eased;
+        if (t >= 1) turnRef.current = null;
+      }
       pivot.rotation.y = yawRef.current;
       renderer.render(scene, camera);
     };
@@ -840,6 +1033,7 @@ export function SkinViewerAnimated({
     let lastX = 0;
     let moved = false;
     const onDown = (e: PointerEvent) => {
+      turnRef.current = null; // grabbing it stops any turn in progress
       dragging = true;
       moved = false;
       lastX = e.clientX;
@@ -929,6 +1123,29 @@ export function SkinViewerAnimated({
       pivot.add(root);
       modelRef.current = root;
 
+      // The cape's meshes, to hide while an elytra is worn; and the elytra itself.
+      const capeMats: THREE.Material[] = [];
+      root.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+          if (mat.name === "cape") capeMats.push(mat);
+        }
+      });
+      capeMaterialsRef.current = { mats: capeMats, hasCape: capeTex !== null };
+      elytraGroupRef.current = null;
+      const body = root.getObjectByName("Body");
+      if (body) {
+        // Her own cape's elytra pattern if it has one, else the game's.
+        const elytraCanvas = capeCanvas && capeHasElytra(capeCanvas) ? capeCanvas : await getDefaultElytraCanvas();
+        if (cancelled) return;
+        const group = buildElytra(makePixelTexture(elytraCanvas));
+        group.visible = elytraRef.current;
+        body.add(group);
+        elytraGroupRef.current = group;
+        for (const m of capeMats) m.visible = capeTex !== null && !elytraRef.current;
+      }
+
       // Frame the camera to the model's real bounds (differs a little between
       // slim/classic and with/without a cape).
       const camera = cameraRef.current;
@@ -950,6 +1167,7 @@ export function SkinViewerAnimated({
       const actions = new Map<string, THREE.AnimationAction>();
       for (const clip of gltf.animations) actions.set(clip.name, mixer.clipAction(clip));
       const scheduler = new IdleScheduler(mixer, actions);
+      scheduler.paused = pausedRef.current;
       scheduler.start();
       mixerRef.current = mixer;
       schedulerRef.current = scheduler;
@@ -963,6 +1181,24 @@ export function SkinViewerAnimated({
     // width/height/effect are here too: any of them rebuilds the scene in the
     // other effect, which leaves an empty pivot this effect has to repopulate.
   }, [skinUrl, capeUrl, variant, width, height, effect, extendTop]);
+
+  // Elytra on/off: show or hide the wings, hide or restore the cape, and turn
+  // the character to show its back / face front again.
+  useEffect(() => {
+    const group = elytraGroupRef.current;
+    if (group) group.visible = elytra;
+    const { mats, hasCape } = capeMaterialsRef.current;
+    for (const m of mats) m.visible = hasCape && !elytra;
+    const target = elytra ? Math.PI : 0;
+    const cur = yawRef.current;
+    // The nearest turn that ends facing the right way (a dragged model may be anywhere).
+    const to = target + Math.round((cur - target) / (2 * Math.PI)) * 2 * Math.PI;
+    if (Math.abs(to - cur) > 0.001) turnRef.current = { from: cur, to, start: performance.now(), dur: 750 };
+  }, [elytra]);
+
+  useEffect(() => {
+    if (schedulerRef.current) schedulerRef.current.paused = paused;
+  }, [paused]);
 
   return <canvas ref={canvasRef} className={className} />;
 }

@@ -1,3 +1,4 @@
+import { Hint } from "@/components/hint";
 import { useEffect, useState } from "react";
 import {
   ArrowUp,
@@ -8,6 +9,7 @@ import {
   Loader2,
   Lock,
   MoreVertical,
+  Package,
   Pencil,
   Plug,
   Plus,
@@ -17,7 +19,7 @@ import {
   Unplug,
   Upload,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   connectServer,
   createServerDirectory,
@@ -39,6 +41,7 @@ import {
   type ServerFileEntry,
 } from "@/services/servers";
 import { NewServerDialog } from "@/components/new-server-dialog";
+import { ServerModsDialog } from "@/components/server-mods-dialog";
 import { ConfigEditorDialog } from "@/components/config-editor-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -132,6 +135,7 @@ export default function Servers() {
   const [editingFileLoading, setEditingFileLoading] = useState(false);
   const [editingFileSaving, setEditingFileSaving] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
+  const [modsOpen, setModsOpen] = useState(false);
 
   const selectedServer = servers.find((s) => s.id === selectedId) ?? null;
 
@@ -311,18 +315,20 @@ export default function Servers() {
                 <ServerIcon className="h-4 w-4 text-accent" />
                 Servidores
               </h1>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7"
-                onClick={() => {
-                  setEditingServer(null);
-                  setDialogOpen(true);
-                }}
-                aria-label="Nuevo servidor"
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
+              <Hint label="Nuevo servidor">
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7"
+                  onClick={() => {
+                    setEditingServer(null);
+                    setDialogOpen(true);
+                  }}
+                  aria-label="Nuevo servidor"
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </Hint>
             </div>
 
             {servers.length === 0 ? (
@@ -359,15 +365,17 @@ export default function Servers() {
                         {server.protocol}
                       </Badge>
                       <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            type="button"
-                            onClick={(e) => e.stopPropagation()}
-                            className="h-5 w-5 shrink-0 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-opacity"
-                          >
-                            <MoreVertical className="h-3.5 w-3.5" />
-                          </button>
-                        </DropdownMenuTrigger>
+                        <Hint label="Opciones del servidor">
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-5 w-5 shrink-0 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-opacity"
+                            >
+                              <MoreVertical className="h-3.5 w-3.5" />
+                            </button>
+                          </DropdownMenuTrigger>
+                        </Hint>
                         <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
                           {isConnected ? (
                             <DropdownMenuItem onClick={() => handleDisconnect(server.id)}>
@@ -425,23 +433,31 @@ export default function Servers() {
             ) : (
               <>
                 <div className="flex items-center gap-1.5 px-3 py-2.5 border-b border-white/10 shrink-0">
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-7 w-7"
-                    disabled={currentPath === "/"}
-                    onClick={() => loadDirectory(connectedId, parentPath(currentPath))}
-                    aria-label="Subir un nivel"
-                  >
-                    <ArrowUp className="h-3.5 w-3.5" />
-                  </Button>
+                  <Hint label="Subir un nivel">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7"
+                      disabled={currentPath === "/"}
+                      onClick={() => loadDirectory(connectedId, parentPath(currentPath))}
+                      aria-label="Subir un nivel"
+                    >
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </Button>
+                  </Hint>
                   <code className="flex-1 min-w-0 truncate text-xs text-muted-foreground">{currentPath}</code>
-                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => loadDirectory(connectedId, currentPath)} aria-label="Refrescar">
-                    <RefreshCw className="h-3.5 w-3.5" />
-                  </Button>
+                  <Hint label="Refrescar">
+                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => loadDirectory(connectedId, currentPath)} aria-label="Refrescar">
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    </Button>
+                  </Hint>
                   <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs" onClick={() => setNewFolderOpen(true)}>
                     <FolderPlus className="mr-1.5 h-3.5 w-3.5" />
                     Carpeta
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs" onClick={() => setModsOpen(true)}>
+                    <Package className="mr-1.5 h-3.5 w-3.5" />
+                    Mods
                   </Button>
                   <Button size="sm" className="h-7 px-2.5 text-xs" onClick={handleUpload}>
                     <Upload className="mr-1.5 h-3.5 w-3.5" />
@@ -476,29 +492,33 @@ export default function Servers() {
                           <span className="text-[11px] text-muted-foreground shrink-0 w-20 text-right">{formatDate(entry.modifiedAt)}</span>
                           <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                             {entry.type === "file" && (
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="h-6 w-6"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDownload(entry);
-                                }}
-                                aria-label="Descargar"
-                              >
-                                <Download className="h-3.5 w-3.5" />
-                              </Button>
+                              <Hint label="Descargar">
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-6 w-6"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDownload(entry);
+                                  }}
+                                  aria-label="Descargar"
+                                >
+                                  <Download className="h-3.5 w-3.5" />
+                                </Button>
+                              </Hint>
                             )}
                             <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <button
-                                  type="button"
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="h-6 w-6 flex items-center justify-center rounded hover:bg-white/10"
-                                >
-                                  <MoreVertical className="h-3.5 w-3.5" />
-                                </button>
-                              </DropdownMenuTrigger>
+                              <Hint label="Opciones">
+                                <DropdownMenuTrigger asChild>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="h-6 w-6 flex items-center justify-center rounded hover:bg-white/10"
+                                  >
+                                    <MoreVertical className="h-3.5 w-3.5" />
+                                  </button>
+                                </DropdownMenuTrigger>
+                              </Hint>
                               <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
                                 <DropdownMenuItem onClick={() => setRenameTarget(entry)}>
                                   <Pencil className="mr-2 h-3.5 w-3.5" />
@@ -522,6 +542,16 @@ export default function Servers() {
         </div>
       </main>
 
+      {selectedServer && connectedId === selectedServer.id && (
+        <ServerModsDialog
+          open={modsOpen}
+          onOpenChange={setModsOpen}
+          serverId={selectedServer.id}
+          serverName={selectedServer.name}
+          rootPath={selectedServer.rootPath || "/"}
+          onChanged={() => loadDirectory(selectedServer.id, currentPath)}
+        />
+      )}
       <NewServerDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}

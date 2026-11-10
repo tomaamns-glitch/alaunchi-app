@@ -1,6 +1,6 @@
 import { requirePackSource, useModpacks } from "@/hooks/use-modpacks";
 import { fetchSnapshot, snapshotBaseUrl, type Modpack } from "@/services/github";
-import { installSnapshot } from "@/services/electron";
+import { installSnapshot, prepareInstanceInBackground } from "@/services/electron";
 import { reportCaughtError } from "@/services/error-reporter";
 import { askOptionalGroups } from "@/components/optional-groups-dialog";
 
@@ -34,6 +34,8 @@ export async function installOnlineInstance(pack: Modpack): Promise<boolean> {
       installedVersion: manifest.version,
       updateAvailable: false,
     });
+    // Minecraft, the modloader and Java download now, not at the first "Jugar".
+    prepareInstanceInBackground(pack);
     return true;
   } catch (e) {
     reportCaughtError(`modpack:installing:${pack.id}`, e);
