@@ -17,7 +17,7 @@ const ftp = require("basic-ftp");
 const SftpClient = require("ssh2-sftp-client");
 const { readNbt, writeNbt, NBT } = require("./nbt");
 const { createDiscordPresence } = require("./discord-rpc");
-const { detectCrash, diagnoseInstance } = require("./crash-diagnosis");
+const { detectCrash, diagnoseInstance, disableShaders, jarProvides } = require("./crash-diagnosis");
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(require("child_process").execFile);
@@ -2257,14 +2257,17 @@ async function recordSessionOutcome(modpackId, startedAt, info) {
     return;
   }
   const prev = meta.crashStats || {};
+  // F3 + C: closed on purpose — neither a crash nor proof the instance works.
+  if (outcome.manual) return;
   if (!outcome.crashed) {
-    if (!prev.consecutive) return;
-    meta.crashStats = { ...prev, consecutive: 0, streakStartedAt: null };
+    // lastCleanAt: the diagnosis lists what changed since the game last closed fine.
+    meta.crashStats = { ...prev, consecutive: 0, streakStartedAt: null, lastCleanAt: Date.now() };
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2)).catch(() => {});
     return;
   }
   const now = Date.now();
   const stats = {
+    lastCleanAt: prev.lastCleanAt || null,
     consecutive: (prev.consecutive || 0) + 1,
     streakStartedAt: prev.consecutive ? prev.streakStartedAt || now : now,
     lastCrashAt: now,
@@ -2321,6 +2324,8 @@ ipcMain.handle("crash:diagnose", async (event, { modpackId, canRepairFromSource,
       disabledSuffix: DISABLED_SUFFIX,
       execFile: execFileAsync,
       canRepairFromSource: !!canRepairFromSource,
+      // Locked online instances can't get new mods (enforceContentLock would delete them).
+      canInstallContent: !contentLocks.has(modpackId),
     },
     (label, progress) => win?.webContents.send("crash:diagnose-progress", { modpackId, label, progress })
   );
@@ -2369,7 +2374,7 @@ ipcMain.handle("crash:apply-fix", async (_event, { modpackId, fix }) => {
       return { success: true };
     case "reset-config": {
       const rel = String(fix.path || "");
-      if (!/^(config|defaultconfigs)\//.test(rel)) throw new Error("Solo archivos de configuración.");
+      if (!/^(config|defaultconfigs)\//.test(rel) && !/^(options|optionsof|optionsshaders)\.txt$/.test(rel)) throw new Error("Solo archivos de configuración.");
       const p = safeJoin(instanceDir, rel);
       const bak = `${p}.alaunchi-bak`;
       await fs.rm(bak, { force: true }).catch(() => {});
@@ -2384,6 +2389,65 @@ ipcMain.handle("crash:apply-fix", async (_event, { modpackId, fix }) => {
       meta.maxMemoryMb = mb;
       await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
       return { success: true };
+    }
+    case "disable-shaders":
+      return { success: true, done: await disableShaders(instanceDir) };
+    case "set-toml-option": {
+      // Only Forge/NeoForge's "delete the erroring entity instead of crashing" switches, per world.
+      const rel = String(fix.path || "");
+      const key = String(fix.key || "");
+      if (!/^saves\/[^/\\]+\/serverconfig\/(forge|neoforge)-server\.toml$/.test(rel)) throw new Error("Archivo no permitido.");
+      if (!["removeErroringEntities", "removeErroringBlockEntities", "removeErroringTileEntities"].includes(key)) throw new Error("Opción no permitida.");
+      const p = safeJoin(instanceDir, rel);
+      const text = await fs.readFile(p, "utf8");
+      const next = text.replace(new RegExp(`^(\\s*${key}\\s*=\\s*)false`, "m"), "$1true");
+      if (next === text) return { success: true, done: 0 };
+      await fs.copyFile(p, `${p}.alaunchi-bak`);
+      await fs.writeFile(p, next);
+      return { success: true, done: 1 };
+    }
+    case "restore-level-dat": {
+      const world = String(fix.world || "");
+      if (!world || /[\\/]|^\.\.?$/.test(world)) throw new Error("Mundo no válido.");
+      const worldDir = safeJoin(instanceDir, `saves/${world}`);
+      const cur = path.join(worldDir, "level.dat");
+      const old = path.join(worldDir, "level.dat_old");
+      if (!fsSync.existsSync(old)) throw new Error("No hay copia anterior de ese mundo.");
+      if (fsSync.existsSync(cur)) {
+        await fs.rm(`${cur}.alaunchi-bak`, { force: true });
+        await fs.rename(cur, `${cur}.alaunchi-bak`);
+      }
+      await fs.copyFile(old, cur);
+      return { success: true };
+    }
+    case "install-mod": {
+      // The renderer resolved the version on Modrinth; only its CDN, and only a jar that really is `modId`.
+      if (contentLocks.has(modpackId)) throw new Error("El creador ha bloqueado el contenido de esta instancia.");
+      const modId = String(fix.modId || "");
+      const filename = path.basename(String(fix.filename || ""));
+      let url;
+      try {
+        url = new URL(String(fix.url || ""));
+      } catch {
+        throw new Error("Descarga no válida.");
+      }
+      if (url.protocol !== "https:" || url.hostname !== "cdn.modrinth.com") throw new Error("Solo se instalan mods de Modrinth.");
+      if (!/^[\w.+-]+\.jar$/i.test(filename) || !/^[a-z0-9_.-]{1,64}$/i.test(modId)) throw new Error("Mod no válido.");
+      const modsDir = path.join(instanceDir, "mods");
+      await fs.mkdir(modsDir, { recursive: true });
+      const target = safeJoin(instanceDir, `mods/${filename}`);
+      const tmp = path.join(modsDir, `.alaunchi-${Date.now().toString(36)}.part`);
+      try {
+        await downloadFile(url.toString(), tmp, null);
+        if (fix.sha1 && (await hashFileSha1(tmp)) !== fix.sha1) throw new Error("El archivo descargado no coincide con el de Modrinth.");
+        const check = await jarProvides(tmp, modId);
+        if (!check.ok) throw new Error(`Lo que hay en Modrinth con ese nombre no es el mod "${modId}" que falta. Búscalo a mano en la pestaña Mods.`);
+        await fs.rename(tmp, target);
+      } catch (e) {
+        await fs.unlink(tmp).catch(() => {});
+        throw e;
+      }
+      return { success: true, path: `mods/${filename}` };
     }
     case "reinstall-java": {
       const major = Number(fix.major);
@@ -5796,6 +5860,27 @@ ipcMain.handle("ms:mc-profile", async (_, { mcToken }) => {
       });
     }).on("error", reject);
   });
+});
+
+// --- Firebase sign-in proof: the same "join" the game does when connecting to
+// a server. Mojang records that this account joined a random serverId; the
+// mintFirebaseToken Cloud Function then asks Mojang (hasJoined) and, if it
+// checks out, hands back a Firebase token for this uuid. The Minecraft token
+// only ever goes to Mojang, never to our backend. ---
+ipcMain.handle("mc:session-join", async (_, { mcToken, uuid }) => {
+  if (typeof mcToken !== "string" || !mcToken || typeof uuid !== "string") throw new Error("Falta la sesión de Minecraft.");
+  const selectedProfile = uuid.replace(/-/g, "").toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(selectedProfile)) throw new Error("UUID no válido.");
+  const serverId = crypto.randomBytes(20).toString("hex");
+  const res = await httpRequestJson("https://sessionserver.mojang.com/session/minecraft/join", {
+    method: "POST",
+    body: { accessToken: mcToken, selectedProfile, serverId },
+  });
+  // 204 No Content = joined.
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    throw new Error(res.body?.errorMessage || res.body?.error || `Mojang devolvió HTTP ${res.statusCode}`);
+  }
+  return { serverId };
 });
 
 // --- Skin manager: change skin/cape on the real Mojang account, plus a local

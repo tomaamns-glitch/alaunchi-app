@@ -1,0 +1,200 @@
+{
+  "rules": {
+    "presence": {
+      "$modpackId": {
+        ".read": true,
+        "$uuid": {
+          ".write": "auth != null && auth.uid === $uuid",
+          ".validate": "newData.hasChildren(['username', 'online'])"
+        }
+      }
+    },
+    "userActivity": {
+      ".read": true,
+      "$uuid": {
+        ".write": "auth != null && auth.uid === $uuid",
+        ".validate": "newData.hasChildren(['username', 'status', 'lastSeen'])"
+      }
+    },
+    "nicknames": {
+      ".read": true,
+      "$uuid": {
+        ".write": "auth != null && auth.uid === $uuid",
+        ".validate": "newData.isString() && newData.val().length <= 30"
+      }
+    },
+    "users": {
+      ".read": true,
+      "$uuid": {
+        ".write": "auth != null && auth.uid === $uuid"
+      }
+    },
+    "chatIndex": {
+      "$uuid": {
+        ".read": "auth != null && auth.uid === $uuid",
+        "$otherUuid": {
+          ".read": "auth != null && auth.uid === $otherUuid",
+          ".write": "auth != null && (auth.uid === $uuid || auth.uid === $otherUuid)"
+        }
+      }
+    },
+    "chats": {
+      "$conversationId": {
+        ".read": "auth != null && ($conversationId.beginsWith(auth.uid + '_') || $conversationId.endsWith('_' + auth.uid))",
+        "messages": {
+          "$messageId": {
+            ".write": "auth != null && ($conversationId.beginsWith(auth.uid + '_') || $conversationId.endsWith('_' + auth.uid)) && (data.exists() ? data.child('senderUuid').val() === auth.uid : (newData.child('senderUuid').val() === auth.uid && !root.child('blocks').child($conversationId.replace(auth.uid, '').replace('_', '')).child(auth.uid).exists() && !root.child('blocks').child(auth.uid).child($conversationId.replace(auth.uid, '').replace('_', '')).exists()))",
+            ".validate": "newData.hasChildren(['senderUuid', 'text'])"
+          }
+        }
+      }
+    },
+    "contentObjects": {
+      "$sha1": {
+        ".read": true,
+        ".write": "auth != null",
+        ".validate": "newData.hasChildren(['downloadUrl'])"
+      }
+    },
+    "modpackCodes": {
+      ".read": true,
+      "$modpackId": {
+        ".write": false
+      }
+    },
+    "modpackGrants": {
+      "$modpackId": {
+        ".read": true,
+        "$uuid": {
+          ".write": "auth != null && !newData.exists() && (auth.uid === $uuid || root.child('instanceOwners').child($modpackId).child(auth.uid).exists())"
+        }
+      }
+    },
+    "codeIndex": {
+      "$code": {
+        ".read": true,
+        ".write": false
+      }
+    },
+    "userAccess": {
+      "$uuid": {
+        ".read": "auth != null && auth.uid === $uuid",
+        "$modpackId": {
+          ".write": "auth != null && !newData.exists() && (auth.uid === $uuid || root.child('instanceOwners').child($modpackId).child(auth.uid).exists())"
+        }
+      }
+    },
+    "instanceOwners": {
+      "$grantKey": {
+        "$uuid": {
+          ".read": "auth != null && auth.uid === $uuid"
+        }
+      }
+    },
+    "friendRequests": {
+      "$toUuid": {
+        ".read": "auth != null",
+        "$fromUuid": {
+          ".write": "auth != null && (auth.uid === $fromUuid || (auth.uid === $toUuid && !newData.exists()))",
+          ".validate": "newData.hasChildren(['username', 'sentAt'])"
+        }
+      }
+    },
+    "sentFriendRequests": {
+      "$fromUuid": {
+        ".read": "auth != null",
+        "$toUuid": {
+          ".write": "auth != null && (auth.uid === $fromUuid || (auth.uid === $toUuid && !newData.exists()))",
+          ".validate": "newData.hasChildren(['username', 'sentAt'])"
+        }
+      }
+    },
+    "friends": {
+      "$uuid": {
+        ".read": "auth != null",
+        "$otherUuid": {
+          ".write": "auth != null && (auth.uid === $uuid || (auth.uid === $otherUuid && (!newData.exists() || data.exists() || root.child('friendRequests').child(auth.uid).child($uuid).exists())))",
+          ".validate": "newData.hasChildren(['username', 'since'])"
+        }
+      }
+    },
+    "profiles": {
+      "$uuid": {
+        ".read": true,
+        ".write": "auth != null && auth.uid === $uuid"
+      }
+    },
+    "modpackBans": {
+      "$grantKey": {
+        ".read": true,
+        "$uuid": {
+          ".write": "auth != null && root.child('instanceOwners').child($grantKey).child(auth.uid).exists()",
+          ".validate": "newData.hasChildren(['username', 'bannedAt'])"
+        }
+      }
+    },
+    "modpackInvites": {
+      "$grantKey": {
+        ".read": "auth != null",
+        "$uuid": {
+          ".write": "auth != null && (root.child('instanceOwners').child($grantKey).child(auth.uid).exists() || (auth.uid === $uuid && !newData.exists()))",
+          ".validate": "newData.hasChildren(['username', 'sentAt'])"
+        }
+      }
+    },
+    "invites": {
+      "$uuid": {
+        ".read": "auth != null && auth.uid === $uuid",
+        "$grantKey": {
+          ".write": "auth != null && (root.child('instanceOwners').child($grantKey).child(auth.uid).exists() || (auth.uid === $uuid && !newData.exists()))",
+          ".validate": "newData.hasChildren(['repoUrl', 'modpackId', 'modpackName', 'code', 'fromUuid', 'fromUsername', 'sentAt'])"
+        }
+      }
+    },
+    "modLibrary": {
+      ".read": true,
+      "$modId": {
+        ".write": "auth != null && auth.uid === '83c37634-cdea-4f40-8dd7-6c32ba6eb07d'",
+        ".validate": "newData.hasChild('name')",
+        "builds": {
+          "$buildKey": {
+            ".validate": "newData.hasChildren(['mcVersion', 'loader', 'fileName', 'sha1', 'downloadUrl'])"
+          }
+        }
+      }
+    },
+    "groupChats": {
+      "$groupKey": {
+        ".read": "auth != null && (root.child('userAccess').child(auth.uid).child($groupKey).val() === true || root.child('instanceOwners').child($groupKey).child(auth.uid).exists())",
+        "messages": {
+          "$messageId": {
+            ".write": "auth != null && (root.child('userAccess').child(auth.uid).child($groupKey).val() === true || root.child('instanceOwners').child($groupKey).child(auth.uid).exists()) && (data.exists() ? data.child('senderUuid').val() === auth.uid : newData.child('senderUuid').val() === auth.uid)",
+            ".validate": "newData.hasChildren(['senderUuid', 'senderUsername', 'text', 'timestamp'])"
+          }
+        }
+      }
+    },
+    "reports": {
+      ".indexOn": ["createdAt"]
+    },
+    "blocks": {
+      "$blockerUuid": {
+        ".read": "auth != null && auth.uid === $blockerUuid",
+        "$blockedUuid": {
+          ".read": "auth != null && auth.uid === $blockedUuid",
+          ".write": "auth != null && auth.uid === $blockerUuid",
+          ".validate": "newData.isBoolean() && newData.val() === true"
+        }
+      }
+    },
+    "blockedBy": {
+      "$blockedUuid": {
+        ".read": "auth != null && auth.uid === $blockedUuid",
+        "$blockerUuid": {
+          ".write": "auth != null && auth.uid === $blockerUuid",
+          ".validate": "newData.isBoolean() && newData.val() === true"
+        }
+      }
+    }
+  }
+}

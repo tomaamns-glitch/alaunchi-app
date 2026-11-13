@@ -22,7 +22,26 @@ import {
   Server as ServerIcon,
   Check,
   ImagePlus,
+  Bell,
+  BellOff,
+  Ban,
+  MoreVertical,
+  Flag,
 } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { useBlocks } from "@/hooks/use-blocks";
+import { BlockedChatError } from "@/services/blocks";
+import { ReportDialog } from "@/components/report-dialog";
 import { useLocation } from "wouter";
 import { LoaderIcon } from "@/components/loader-icon";
 import { installFromRecipe } from "@/lib/instance-recipe";
@@ -111,6 +130,15 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
   const chatIndex = useChatHeads((s) => s.chatIndex);
   const directory = useChatHeads((s) => s.directory);
   const minimizeChat = useChatHeads((s) => s.minimizeChat);
+  const mutedUuids = useChatHeads((s) => s.mutedUuids);
+  const toggleMute = useChatHeads((s) => s.toggleMute);
+  // Blocks (hooks/use-blocks.ts): either way, nothing can be sent and what was
+  // shared can't be installed; the history stays readable.
+  const blockedList = useBlocks((s) => s.blocked);
+  const blockedByList = useBlocks((s) => s.blockedBy);
+  const [confirmBlock, setConfirmBlock] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [blockBusy, setBlockBusy] = useState(false);
   const modpacks = useModpacks((s) => s.modpacks);
 
   // Sticky "who we're looking at" — openUuid itself flips to null the instant
@@ -343,8 +371,28 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
   const handleSend = () => {
     if (!draft.trim() || !displayUuid) return;
     const carouselInstanceId = mode.type === "carousel" ? mode.pack.id : undefined;
-    sendMessage(myUuid, myUsername, displayUuid, otherUsername, draft, carouselInstanceId).catch(() => {});
+    sendMessage(myUuid, myUsername, displayUuid, otherUsername, draft, carouselInstanceId).catch((e) => {
+      if (e instanceof BlockedChatError) toast.error(e.message);
+    });
     setDraft("");
+  };
+
+  const iBlocked = !!displayUuid && blockedList.has(displayUuid);
+  const theyBlocked = !!displayUuid && blockedByList.has(displayUuid);
+  const chatBlocked = iBlocked || theyBlocked;
+  const setBlocked = async (block: boolean) => {
+    if (!displayUuid) return;
+    setBlockBusy(true);
+    try {
+      if (block) await useBlocks.getState().block(displayUuid);
+      else await useBlocks.getState().unblock(displayUuid);
+      toast.success(block ? `Has bloqueado a ${alias || otherUsername}.` : `Has desbloqueado a ${alias || otherUsername}.`);
+    } catch {
+      toast.error(block ? "No se pudo bloquear. Inténtalo de nuevo." : "No se pudo desbloquear. Inténtalo de nuevo.");
+    } finally {
+      setBlockBusy(false);
+      setConfirmBlock(false);
+    }
   };
 
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -401,7 +449,11 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                   {alias || otherUsername}
                 </motion.button>
                 <p className="text-[11px] text-muted-foreground truncate">
-                  {activity?.status === "playing" ? (
+                  {activity?.away && activity.status !== "offline" ? (
+                    <span className="text-amber-300">
+                      ● Ausente{activity.status === "playing" && activity.instanceName ? ` · Jugando a ${activity.instanceName}` : ""}
+                    </span>
+                  ) : activity?.status === "playing" ? (
                     activity.instanceSource === "custom" ? (
                       <span>Jugando a {activity.instanceName} (Local)</span>
                     ) : (
@@ -418,6 +470,70 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                   )}
                 </p>
               </div>
+
+              {/* Mute this person: no sound or notice for their messages, their
+                  invitations or them opening a shared online instance (their
+                  messages in a group chat still ping — mute the group there). */}
+              {displayUuid && (
+                <Hint
+                  label={
+                    mutedUuids.has(displayUuid)
+                      ? "Silenciado: pulsa para volver a recibir sus avisos"
+                      : "Silenciar (sin avisos de sus mensajes ni de cuando entra en una instancia)"
+                  }
+                >
+                  <motion.button
+                    {...tapHover}
+                    type="button"
+                    onClick={() => toggleMute(displayUuid)}
+                    aria-pressed={mutedUuids.has(displayUuid)}
+                    aria-label={mutedUuids.has(displayUuid) ? "Activar avisos" : "Silenciar"}
+                    className={`h-6 w-6 shrink-0 flex items-center justify-center rounded hover:bg-white/10 transition-colors ${
+                      mutedUuids.has(displayUuid) ? "text-amber-300 hover:text-amber-200" : "text-gray-400 hover:text-gray-200"
+                    }`}
+                  >
+                    {mutedUuids.has(displayUuid) ? <BellOff className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
+                  </motion.button>
+                </Hint>
+              )}
+
+              {displayUuid && (
+                <DropdownMenu>
+                  <Hint label="Más opciones">
+                    <DropdownMenuTrigger asChild>
+                      <motion.button
+                        {...tapHover}
+                        type="button"
+                        aria-label="Más opciones"
+                        className="h-6 w-6 shrink-0 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors data-[state=open]:bg-white/10"
+                      >
+                        <MoreVertical className="h-3.5 w-3.5" />
+                      </motion.button>
+                    </DropdownMenuTrigger>
+                  </Hint>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => setReportOpen(true)}>
+                      <Flag className="mr-2 h-3.5 w-3.5" />
+                      Reportar
+                    </DropdownMenuItem>
+                    {iBlocked ? (
+                      <DropdownMenuItem disabled={blockBusy} onClick={() => void setBlocked(false)}>
+                        <Ban className="mr-2 h-3.5 w-3.5" />
+                        Desbloquear
+                      </DropdownMenuItem>
+                    ) : (
+                      <DropdownMenuItem
+                        disabled={blockBusy}
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => setConfirmBlock(true)}
+                      >
+                        <Ban className="mr-2 h-3.5 w-3.5" />
+                        Bloquear
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
 
               <Hint label="Cerrar">
                 <motion.button
@@ -471,10 +587,15 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                         {m.deleted ? (
                           <DeletedMessageBubble mine={isMe} />
                         ) : m.instance ? (
-                          <SharedInstanceCard instance={m.instance} fromMe={isMe} />
+                          <LockedContent locked={chatBlocked}>
+                            <SharedInstanceCard instance={m.instance} fromMe={isMe} />
+                          </LockedContent>
                         ) : m.server ? (
-                          <SharedServerCard server={m.server} />
+                          <LockedContent locked={chatBlocked}>
+                            <SharedServerCard server={m.server} />
+                          </LockedContent>
                         ) : m.content ? (
+                          <LockedContent locked={chatBlocked}>
                           <SharedContentCard
                             content={m.content}
                             carouselInstanceId={m.carouselInstanceId}
@@ -492,6 +613,7 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                                 : m.content!.modpackId && refreshInstalledHashes(m.content!.modpackId)
                             }
                           />
+                          </LockedContent>
                         ) : (
                           <div
                             className={cn(
@@ -538,6 +660,26 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
             </AnimatePresence>
             </div>
 
+            {chatBlocked ? (
+              <div className="p-3 border-t border-white/5 flex items-center gap-2 text-xs text-muted-foreground">
+                <Ban className="h-4 w-4 shrink-0 text-destructive/80" />
+                <span className="flex-1 min-w-0">
+                  {iBlocked
+                    ? `Has bloqueado a ${alias || otherUsername}: no podéis enviaros mensajes ni archivos.`
+                    : "No puedes enviar mensajes ni archivos a este jugador."}
+                </span>
+                {iBlocked && (
+                  <button
+                    type="button"
+                    disabled={blockBusy}
+                    onClick={() => void setBlocked(false)}
+                    className="shrink-0 rounded-md px-2.5 py-1.5 bg-white/[0.07] hover:bg-white/[0.14] text-gray-200 font-medium transition-colors disabled:opacity-50"
+                  >
+                    Desbloquear
+                  </button>
+                )}
+              </div>
+            ) : (
             <div className="p-3 border-t border-white/5 flex items-center gap-2">
               <div className="relative">
                 <Hint label="Enviar contenido">
@@ -621,6 +763,42 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
                 </motion.button>
               </Hint>
             </div>
+            )}
+
+            {displayUuid && (
+              <ReportDialog
+                open={reportOpen}
+                onOpenChange={setReportOpen}
+                targetUuid={displayUuid}
+                targetName={otherUsername}
+                source="chat"
+              />
+            )}
+
+            <AlertDialog open={confirmBlock} onOpenChange={(o) => !blockBusy && setConfirmBlock(o)}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>¿Bloquear a {alias || otherUsername}?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    No podréis enviaros mensajes ni archivos, lo que os habéis compartido ya no se podrá instalar ni
+                    guardar, y no podrá ver tu perfil. La conversación se conserva. Puedes desbloquearlo cuando quieras.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={blockBusy}>Cancelar</AlertDialogCancel>
+                  <AlertDialogAction
+                    disabled={blockBusy}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      void setBlocked(true);
+                    }}
+                  >
+                    Bloquear
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
           ) : (
             <div className="relative flex-1 min-w-0 flex flex-col items-center justify-center gap-2 p-6 text-center text-muted-foreground">
@@ -641,6 +819,22 @@ export function ChatWindow({ myUuid, myUsername, defaultMode }: ChatWindowProps)
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+/** Shared content in a conversation with a block (either way): still shown,
+ *  but nothing in it can be clicked — no installing, saving or opening. */
+function LockedContent({ locked, children }: { locked: boolean; children: React.ReactNode }) {
+  if (!locked) return <>{children}</>;
+  return (
+    <div className="flex max-w-full flex-col gap-1">
+      <div inert aria-disabled className="pointer-events-none select-none opacity-40 grayscale">
+        {children}
+      </div>
+      <span className="flex items-center gap-1 px-1 text-[10px] text-muted-foreground">
+        <Ban className="h-3 w-3" /> Bloqueado
+      </span>
+    </div>
   );
 }
 

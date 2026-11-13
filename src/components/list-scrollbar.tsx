@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { cn } from "@/lib/utils";
 
 interface Geo {
   top: number;
   height: number;
   right: number;
-  thumbTop: number;
   thumbH: number;
 }
+
+const sameGeo = (a: Geo | null, b: Geo | null) =>
+  a === b || (!!a && !!b && a.top === b.top && a.height === b.height && a.right === b.right && a.thumbH === b.thumbH);
 
 /**
  * A scrollbar of our own for a scroll container whose top part is covered by a
@@ -29,8 +31,15 @@ export function ListScrollbar({
   bandRefs: RefObject<HTMLElement | null>[];
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
-  const [geo, setGeo] = useState<Geo | null>(null);
+  const thumbRef = useRef<HTMLDivElement>(null);
+  const [geo, setGeoState] = useState<Geo | null>(null);
+  const geoRef = useRef<Geo | null>(null);
+  const setGeo = useCallback((next: Geo | null) => {
+    geoRef.current = next;
+    setGeoState((prev) => (sameGeo(prev, next) ? prev : next));
+  }, []);
   const frame = useRef(0);
+  const scrollFrame = useRef(0);
   // The caller passes a new array each render: read it through a ref so the
   // listeners below aren't torn down and re-attached on every parent render.
   const bands = useRef(bandRefs);
@@ -53,9 +62,27 @@ export function ListScrollbar({
     const height = elRect.bottom - 1 - hostRect.top - top;
     if (maxScroll <= 1 || height < 48) return setGeo(null);
     const thumbH = Math.max(28, Math.round((height * el.clientHeight) / el.scrollHeight));
-    const thumbTop = Math.round((Math.min(el.scrollTop, maxScroll) / maxScroll) * (height - thumbH));
     // right: flush against the card's border (inside its 1px).
-    setGeo({ top, height, right: hostRect.right - elRect.right + 1, thumbTop, thumbH });
+    setGeo({ top, height, right: hostRect.right - elRect.right + 1, thumbH });
+    placeThumb();
+  }, [scrollRef, setGeo]);
+
+  // Scrolling only moves the thumb, straight on the DOM (a transform): no
+  // layout reads, no React render per frame.
+  function placeThumb() {
+    const el = scrollRef.current;
+    const g = geoRef.current;
+    const thumb = thumbRef.current;
+    if (!el || !g || !thumb) return;
+    const maxScroll = el.scrollHeight - el.clientHeight;
+    if (maxScroll <= 0) return;
+    const y = Math.round((Math.min(el.scrollTop, maxScroll) / maxScroll) * (g.height - g.thumbH));
+    thumb.style.transform = `translateY(${y}px)`;
+  }
+  const onScroll = useCallback(() => {
+    cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = requestAnimationFrame(placeThumb);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollRef]);
 
   const schedule = useCallback(() => {
@@ -67,7 +94,7 @@ export function ListScrollbar({
     const el = scrollRef.current;
     if (!el) return;
     schedule();
-    el.addEventListener("scroll", schedule, { passive: true });
+    el.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("resize", schedule);
     // The container's size, and its content's (views switching, the band folding, lists loading).
     const ro = new ResizeObserver(schedule);
@@ -80,12 +107,19 @@ export function ListScrollbar({
     mo.observe(el, { childList: true });
     return () => {
       cancelAnimationFrame(frame.current);
-      el.removeEventListener("scroll", schedule);
+      cancelAnimationFrame(scrollFrame.current);
+      el.removeEventListener("scroll", onScroll);
       window.removeEventListener("resize", schedule);
       ro.disconnect();
       mo.disconnect();
     };
-  }, [scrollRef, schedule]);
+  }, [scrollRef, schedule, onScroll]);
+
+  // The thumb only exists once there's a geometry: place it as soon as it mounts or resizes.
+  useLayoutEffect(() => {
+    placeThumb();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geo]);
 
   const drag = useRef<{ startY: number; startScroll: number; id: number } | null>(null);
 
@@ -129,12 +163,13 @@ export function ListScrollbar({
     >
       {geo && (
         <div
+          ref={thumbRef}
           onPointerDown={onThumbDown}
           onPointerMove={onThumbMove}
           onPointerUp={onThumbUp}
           onPointerCancel={onThumbUp}
-          className="absolute right-0 w-1.5 bg-accent/40 transition-[background-color,width] group-hover:w-2 group-hover:bg-accent/60 active:bg-accent/80"
-          style={{ top: geo.thumbTop, height: geo.thumbH }}
+          className="absolute top-0 right-0 w-1.5 will-change-transform bg-accent/40 transition-[background-color,width] group-hover:w-2 group-hover:bg-accent/60 active:bg-accent/80"
+          style={{ height: geo.thumbH }}
         />
       )}
     </div>

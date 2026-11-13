@@ -2,6 +2,9 @@ import { create } from "zustand";
 import { subscribeChatIndex, type ChatIndexEntry } from "@/services/chat";
 import { subscribeAllActivity, type UserActivity } from "@/services/user-activity";
 import { getGroupLastRead, setGroupLastRead, subscribeGroupMessages, type GroupMessage } from "@/services/group-chat";
+import { isGroupMuted } from "@/lib/muted-groups";
+import { firebaseAuth } from "@/lib/firebase";
+import { useBlocks } from "@/hooks/use-blocks";
 
 const eAPI = (window as any).electronAPI;
 
@@ -108,10 +111,19 @@ export function initOverlayChat(): () => void {
   let cancelled = false;
   eAPI
     ?.readAuth()
+    // The launcher signed in to Firebase; the session is shared (same origin,
+    // IndexedDB). Wait for it to be restored: the rules refuse listeners
+    // started without it, and never retry them.
+    .then(async (auth: any) => {
+      await firebaseAuth.authStateReady().catch(() => {});
+      return auth;
+    })
     .then((auth: any) => {
       if (cancelled || !auth?.uuid || !auth?.username) return;
       const me = { uuid: auth.uuid as string, username: auth.username as string };
       useOverlayStore.setState({ me });
+      // Blocks (services/blocks.ts): a 1:1 chat across one is read-only here too.
+      useBlocks.getState().init(me.uuid);
       let previous: Record<string, ChatIndexEntry> | null = null;
       unsubs.push(
         subscribeChatIndex(me.uuid, (index) => {
@@ -161,6 +173,8 @@ export function watchOverlayGroup(groupKey: string, instanceName: string): () =>
       if (seen) {
         for (const m of messages) {
           if (seen.has(m.id) || m.senderUuid === me.uuid || m.deleted || m.timestamp < startedAt || viewing) continue;
+          // Muted in the launcher (lib/muted-groups.ts — same localStorage, same origin).
+          if (isGroupMuted(me.uuid, groupKey)) continue;
           eAPI?.overlayNotify({
             uuid: m.senderUuid,
             chat: GROUP_CHAT,

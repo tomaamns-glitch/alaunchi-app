@@ -12,12 +12,15 @@ import {
   MessageSquare,
   MoreVertical,
   UserMinus,
+  Flag,
   UserPlus,
 } from "lucide-react";
 import { toast, notify } from "@/lib/toast";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { usePlayerSkinUrl } from "@/hooks/use-player-head";
 import { useChatHeads } from "@/hooks/use-chat-heads";
+import { useBlocks } from "@/hooks/use-blocks";
+import { ReportDialog } from "@/components/report-dialog";
 import { CharacterCard } from "@/components/character-card";
 import { ProfileFrame } from "@/components/profile-frame";
 import { InstallFavoriteDialog } from "@/components/install-favorite-dialog";
@@ -74,6 +77,10 @@ export function UserProfileMenuView({ targetUuid, myUuid, myUsername, backButton
   const { modpacks, loadModpacks } = useModpacks();
   const openChat = useChatHeads((s) => s.openChat);
   const [profile, setProfile] = useState<PublicProfileSnapshot | null | undefined>(undefined);
+  // Blocked by them (services/blocks.ts): their profile stays closed to you —
+  // also if it was already open when they blocked you.
+  const blockedMe = useBlocks((s) => s.blockedBy.has(targetUuid));
+  const [reportOpen, setReportOpen] = useState(false);
   const [isFriend, setIsFriend] = useState(false);
   const [sentRequest, setSentRequest] = useState(false);
   const [sending, setSending] = useState(false);
@@ -120,6 +127,15 @@ export function UserProfileMenuView({ targetUuid, myUuid, myUsername, backButton
     }
   };
 
+  if (blockedMe) {
+    return (
+      <div className="flex h-[340px] w-[40rem] flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+        <p>Este jugador no está disponible.</p>
+        {backButton}
+      </div>
+    );
+  }
+
   return (
     <div className="flex gap-6">
       {/* Same card as your own character in the menu. Keyed by player so
@@ -158,6 +174,16 @@ export function UserProfileMenuView({ targetUuid, myUuid, myUsername, backButton
             onOpenChat={() => openChat(targetUuid)}
             onOpenFullPage={() => onNavigate(`/profile/${targetUuid}`)}
             onOpenOnline={(id) => onNavigate(`/modpack/${id}`)}
+            onReport={() => setReportOpen(true)}
+          />
+        )}
+        {profile && (
+          <ReportDialog
+            open={reportOpen}
+            onOpenChange={setReportOpen}
+            targetUuid={targetUuid}
+            targetName={profile.username}
+            source="profile"
           />
         )}
       </div>
@@ -176,6 +202,7 @@ function UserProfileBody({
   onOpenChat,
   onOpenFullPage,
   onOpenOnline,
+  onReport,
 }: {
   targetUuid: string;
   profile: PublicProfileSnapshot;
@@ -187,6 +214,7 @@ function UserProfileBody({
   onOpenChat: () => void;
   onOpenFullPage: () => void;
   onOpenOnline: (id: string) => void;
+  onReport: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("online");
   const [installFavorite, setInstallFavorite] = useState<FavoriteEntry | null>(null);
@@ -233,6 +261,10 @@ function UserProfileBody({
                 <DropdownMenuItem onClick={onOpenFullPage}>
                   <ExternalLink className="mr-2 h-4 w-4" />
                   Ver perfil completo
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={onReport}>
+                  <Flag className="mr-2 h-4 w-4" />
+                  Reportar
                 </DropdownMenuItem>
                 {friendState === "friends" && (
                   <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={onRemoveFriend}>

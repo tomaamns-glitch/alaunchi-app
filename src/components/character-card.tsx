@@ -17,6 +17,7 @@ export function CharacterCard({
   effect,
   badge,
   ready = true,
+  active = true,
   loading = false,
   frame,
   frameColor,
@@ -32,6 +33,9 @@ export function CharacterCard({
   badge?: React.ReactNode;
   /** The panel finished opening — only then is the viewer mounted. */
   ready?: boolean;
+  /** Shown on screen. False while the account panel is hidden (it stays mounted):
+   *  the viewer stops drawing and the glow stops breathing. */
+  active?: boolean;
   /** No skin yet but one is coming: a spinner on the platform. */
   loading?: boolean;
   /** The profile frame, drawn round this card too (Editar perfil → "Aplicar al personaje"). */
@@ -56,14 +60,21 @@ export function CharacterCard({
   // extendTop changes, so it's only mounted once the value is known (it used to
   // be built with 0 and rebuilt right away). Later changes (the profile card
   // filling in) are debounced so a burst of resizes costs one rebuild at most.
-  const [extendTop, setExtendTop] = useState<number | null>(null);
+  const [extend, setExtend] = useState<{ top: number; x: number } | null>(null);
   useLayoutEffect(() => {
     const box = boxRef.current;
     const panel = cardRef.current;
     if (!box || !panel) return;
     const measure = () => {
-      const gap = box.getBoundingClientRect().top - panel.getBoundingClientRect().top;
-      setExtendTop(Math.max(0, Math.round(gap / 8) * 8));
+      const b = box.getBoundingClientRect();
+      const r = panel.getBoundingClientRect();
+      // Hidden (display:none while the account panel is closed): keep the last
+      // value — a 0 here would rebuild the 3D scene on every opening.
+      if (r.width === 0 || r.height === 0) return;
+      const top = Math.max(0, Math.round((b.top - r.top) / 8) * 8);
+      // Up to the card's side margins (the narrower of the two sides).
+      const x = Math.max(0, Math.floor(Math.min(b.left - r.left, r.right - b.right)));
+      setExtend((prev) => (prev && prev.top === top && prev.x === x ? prev : { top, x }));
     };
     measure();
     let timer = 0;
@@ -111,7 +122,7 @@ export function CharacterCard({
         {!grid && (
           <motion.div
             aria-hidden
-            animate={reduceMotion ? undefined : { opacity: [0.7, 1, 0.7], scale: [0.97, 1.03, 0.97] }}
+            animate={reduceMotion || !active ? undefined : { opacity: [0.7, 1, 0.7], scale: [0.97, 1.03, 0.97] }}
             transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
             className="pointer-events-none absolute -left-[35px] -right-[35px] -top-[43px] -bottom-[43px] bg-[radial-gradient(ellipse_at_center,hsl(var(--accent)/0.32),transparent_70%)]"
           />
@@ -127,13 +138,14 @@ export function CharacterCard({
             <Loader2 className="h-5 w-5 animate-spin text-accent/60" />
           </div>
         )}
-        {skinUrl && ready && extendTop !== null && (
+        {skinUrl && ready && extend !== null && (
           // Fades in, so it doesn't pop in after the panel has opened.
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ duration: 0.25, ease: "easeOut" }}
             className="absolute inset-0"
+            style={{ left: effect === "none" ? 0 : -extend.x, right: effect === "none" ? 0 : -extend.x }}
           >
             <SkinViewerAnimated
               skinUrl={skinUrl}
@@ -141,12 +153,15 @@ export function CharacterCard({
               variant={variant}
               width={190}
               height={254}
-              extendTop={effect === "none" ? 0 : extendTop}
+              extendTop={effect === "none" ? 0 : extend.top}
+              extendX={effect === "none" ? 0 : extend.x}
               effect={effect}
               elytra={viewer?.elytra}
               paused={viewer?.paused}
+              active={active}
               // Anchored to the box's bottom, growing upward out of it (the
-              // extension is empty panel space above the column).
+              // extension is empty panel space above the column) and sideways
+              // to the card's margins.
               className="absolute bottom-0 left-0 cursor-grab active:cursor-grabbing"
             />
           </motion.div>

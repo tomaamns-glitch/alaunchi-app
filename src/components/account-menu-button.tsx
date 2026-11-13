@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
 import { Shirt, Settings, Users, Globe, Server, ChevronLeft, ChevronDown, ChevronRight, BookMarked, type LucideIcon } from "lucide-react";
@@ -19,6 +19,9 @@ import { useInvites } from "@/hooks/use-invites";
 import { UserProfileMenuView } from "@/components/user-profile-menu-panel";
 import { useAvatarDecoration } from "@/hooks/use-avatar-decoration";
 import { subscribeIncomingRequests } from "@/services/friends";
+import { isAwayStored, setAwayStatus } from "@/services/user-activity";
+import { Hint } from "@/components/hint";
+import { toast } from "@/lib/toast";
 import { useDevDecoOverride } from "@/lib/dev-deco-override";
 import { DecoratedIcon, useLiveIconColors, useLiveIconDecoration } from "@/components/icon-decoration";
 import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
@@ -35,16 +38,24 @@ interface AccountMenuButtonProps {
   username: string | null;
 }
 
-// The panel is revealed by a clip-path that starts as exactly the footer
-// button's own rectangle (anchored bottom-left, same as the button) and opens
-// up to the full panel — so it reads as the button itself growing, Windows
-// start-menu style, and swallowing the players button/chat bubbles beside it.
-// Same "calc(N% - Npx)" shape on both ends so framer-motion can interpolate it.
-const clipFromButton = (w: number, h: number) =>
-  `inset(calc(100% - ${h}px) calc(100% - ${w}px) calc(0% - 0px) calc(0% - 0px) round 6px)`;
-const CLIP_OPEN = "inset(calc(0% - 0px) calc(0% - 0px) calc(0% - 0px) calc(0% - 0px) round 6px)";
+// Opening/closing: a short fade with a small rise, transform + opacity only so
+// the compositor runs it on its own (no scale: it re-rasterises the text every
+// frame). The panel is NOT unmounted when closed — it stays mounted and gets
+// display:none at the end of the fade — so opening never has to build the whole
+// menu (character card, profile banner, 3D viewer) in the same frame the
+// animation starts, which is what made it stutter.
+const PANEL_VARIANTS = {
+  open: { display: "flex", opacity: 1, y: 0, transition: { duration: 0.2, ease: [0.22, 1, 0.36, 1] as const } },
+  closed: {
+    opacity: 0,
+    y: 8,
+    transition: { duration: 0.14, ease: [0.4, 0, 1, 1] as const },
+    transitionEnd: { display: "none" },
+  },
+};
 
-type ViewDir = "forward" | "back";
+/** "instant": the view changed while the panel was hidden or just opening — no slide. */
+type ViewDir = "forward" | "back" | "instant";
 
 /** How deep a view is: the menu, a section of it, someone's profile (opened
  *  from a section). Going to a shallower one is "back". */
@@ -56,20 +67,28 @@ function VIEW_DEPTH(view: string): number {
  *  Back (Volver): the old view slides out to the right, the new one fades in
  *  from a little to the left. */
 const VIEW_VARIANTS = {
-  enter: (dir: ViewDir) => ({ opacity: 0, x: dir === "back" ? -16 : 24 }),
-  center: { opacity: 1, x: 0, transition: { duration: 0.22, ease: [0.22, 1, 0.36, 1] as const } },
-  exit: (dir: ViewDir) => ({
-    opacity: 0,
-    x: dir === "back" ? 24 : 0,
-    transition: { duration: dir === "back" ? 0.16 : 0.12, ease: "easeIn" as const },
+  enter: (dir: ViewDir) => (dir === "instant" ? { opacity: 1, x: 0 } : { opacity: 0, x: dir === "back" ? -16 : 24 }),
+  center: (dir: ViewDir) => ({
+    opacity: 1,
+    x: 0,
+    transition: dir === "instant" ? { duration: 0 } : { duration: 0.22, ease: [0.22, 1, 0.36, 1] as const },
   }),
+  exit: (dir: ViewDir) =>
+    dir === "instant"
+      ? { opacity: 0, transition: { duration: 0 } }
+      : {
+          opacity: 0,
+          x: dir === "back" ? 24 : 0,
+          transition: { duration: dir === "back" ? 0.16 : 0.12, ease: "easeIn" as const },
+        },
 };
 
-/** The main menu's body: its character card is 340px tall (12 + 254 + 16 + 40 + 16
- *  + 2 border) plus the panel's 24px padding on each side. Personalizar uses the
- *  very same height, so going in and out never resizes the panel. */
-const MENU_BODY_MIN_H = "min-h-[388px]";
-const MENU_BODY_H = "h-[388px]";
+/** The main menu's body: its character card is 380px tall (12 + 254 + 16 +
+ *  Personalizar 40 + 8 + En línea 32 + 16 + 2 border) plus the panel's 24px
+ *  padding on each side. Personalizar uses the very same height, so going in
+ *  and out never resizes the panel. */
+const MENU_BODY_MIN_H = "min-h-[428px]";
+const MENU_BODY_H = "h-[428px]";
 
 /** The account button in the bottom bar — expands into the account panel
  *  (your character, Personalizar, Perfil/Amigos/Instancias online/Configuración), coordinated
@@ -98,14 +117,49 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
   const openUserProfile = useHeaderOverlay((s) => s.openUserProfile);
   const openChat = useChatHeads((s) => s.openChat);
   const [pendingRequests, setPendingRequests] = useState(0);
+  // "En línea" / "Ausente" (user-activity.ts): kept per account on this PC.
+  const [away, setAway] = useState(() => (uuid ? isAwayStored(uuid) : false));
+  const [savingAway, setSavingAway] = useState(false);
+  useEffect(() => {
+    setAway(uuid ? isAwayStored(uuid) : false);
+  }, [uuid]);
+  const toggleAway = async () => {
+    if (!uuid || savingAway) return;
+    const next = !away;
+    setSavingAway(true);
+    try {
+      await setAwayStatus(uuid, next);
+      setAway(next);
+    } catch {
+      toast.error("No se pudo cambiar tu estado. Inténtalo de nuevo.");
+    } finally {
+      setSavingAway(false);
+    }
+  };
   const inviteCount = useInvites((s) => Object.keys(s.invites).length);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
-  const [buttonSize, setButtonSize] = useState({ w: 160, h: 38 });
   const [previewSlot, setPreviewSlot] = useState<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  // Mounted the first time it's opened, or earlier when the app is idle, and
+  // then kept (hidden) — see PANEL_VARIANTS.
+  const [panelMounted, setPanelMounted] = useState(false);
+  useEffect(() => {
+    if (panelMounted || !uuid) return;
+    if (profileOpen) {
+      setPanelMounted(true);
+      return;
+    }
+    const ric = window.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 1500));
+    const cic = window.cancelIdleCallback ?? window.clearTimeout;
+    const id = ric(() => setPanelMounted(true), { timeout: 4000 });
+    return () => cic(id);
+  }, [panelMounted, profileOpen, uuid]);
   // The 3D character waits for the open animation to finish: creating its WebGL
   // context (+ shaders, glTF clone) mid-animation is what made opening stutter.
+  // panelSettled is per opening; the main menu's own character, once built,
+  // stays alive (paused) while the panel is hidden, so reopening doesn't rebuild it.
   const [panelSettled, setPanelSettled] = useState(false);
+  const [menuViewerReady, setMenuViewerReady] = useState(false);
   useEffect(() => {
     if (!profileOpen) setPanelSettled(false);
   }, [profileOpen]);
@@ -113,12 +167,22 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
   // Direction of the last view change: Volver (to the menu, or back from
   // someone's profile) slides the view out to the right; going into a section
   // slides the new one in from the right.
+  // Changes while the panel is hidden, or in the same render that opens it
+  // (openProfileView/openUserProfile from elsewhere), are instant: no slide
+  // under the opening fade.
   const prevViewRef = useRef(profileView);
+  const wasOpenRef = useRef(profileOpen);
   const viewDirRef = useRef<ViewDir>("forward");
   if (prevViewRef.current !== profileView) {
-    viewDirRef.current = VIEW_DEPTH(profileView) < VIEW_DEPTH(prevViewRef.current) ? "back" : "forward";
+    viewDirRef.current =
+      !profileOpen || !wasOpenRef.current
+        ? "instant"
+        : VIEW_DEPTH(profileView) < VIEW_DEPTH(prevViewRef.current)
+          ? "back"
+          : "forward";
     prevViewRef.current = profileView;
   }
+  wasOpenRef.current = profileOpen;
   const viewDir = viewDirRef.current;
 
   useEffect(() => {
@@ -129,18 +193,6 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
     if (!uuid) return;
     return subscribeIncomingRequests(uuid, (requests) => setPendingRequests(Object.keys(requests).length));
   }, [uuid]);
-
-  // Kept measured ahead of time (not only on click) since the panel can also
-  // be opened from elsewhere, and its expand animation starts from this rect.
-  useLayoutEffect(() => {
-    const el = buttonRef.current;
-    if (!el) return;
-    const measure = () => setButtonSize({ w: el.offsetWidth, h: el.offsetHeight });
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
 
   const setProfileOpen = (next: boolean | ((prev: boolean) => boolean)) => {
     const wasOpen = profileOpen;
@@ -154,7 +206,6 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
     setLocation(path);
   };
 
-  const collapsedClip = clipFromButton(buttonSize.w, buttonSize.h);
   useDismissOnOutsideClick([panelRef, buttonRef], () => setProfileOpen(false), profileOpen);
 
   return (
@@ -167,32 +218,35 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
           className="fixed inset-0 z-30 cursor-default"
         />
       )}
-      <AnimatePresence>
-        {profileOpen && uuid && (
+      {panelMounted && uuid && (
           <motion.div
             ref={panelRef}
-            initial={{ clipPath: collapsedClip, opacity: 0.4 }}
-            animate={{ clipPath: CLIP_OPEN, opacity: 1 }}
-            exit={{ clipPath: collapsedClip, opacity: 0 }}
-            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-            onAnimationComplete={() => {
-              if (useHeaderOverlay.getState().active === "profile") setPanelSettled(true);
+            initial="closed"
+            animate={profileOpen ? "open" : "closed"}
+            variants={PANEL_VARIANTS}
+            style={{ willChange: "opacity, transform" }}
+            inert={!profileOpen}
+            aria-hidden={!profileOpen}
+            onAnimationComplete={(def) => {
+              if (def === "open") {
+                if (useHeaderOverlay.getState().active === "profile") {
+                  setPanelSettled(true);
+                  setMenuViewerReady(true);
+                }
+              } else if (useHeaderOverlay.getState().active !== "profile") {
+                // Hidden now: go back to the menu out of sight, so the next
+                // opening shows it straight away instead of swapping views mid-fade.
+                setProfileView("menu");
+              }
             }}
             data-account-panel
-            className="absolute bottom-0 left-0 z-50 min-w-[32rem] rounded-md bg-background/60 backdrop-blur-xl border border-transparent shadow-[0_8px_24px_rgba(0,0,0,0.35)] flex flex-col"
+            className="absolute bottom-0 left-0 z-50 min-w-[32rem] rounded-md bg-background/60 backdrop-blur-xl border border-transparent shadow-[0_8px_24px_rgba(0,0,0,0.35)] flex-col"
           >
-            {/* A brief flash in the accent colour (the carousel instance's, see useDynamicAccent) along the menu's edge once it has opened, which
-                then settles into a faint rim that stays. Drawn inset: the
-                panel's clip-path would cut anything outside it. */}
-            {panelSettled && (
-              <motion.div
-                aria-hidden
-                initial={{ opacity: 0 }}
-                animate={{ opacity: [0, 1, 0.35] }}
-                transition={{ duration: 0.9, times: [0, 0.25, 1], ease: "easeOut" }}
-                className="pointer-events-none absolute inset-0 z-10 rounded-md shadow-[inset_0_0_0_1px_hsl(var(--accent)/0.9),inset_0_0_18px_hsl(var(--accent)/0.45)]"
-              />
-            )}
+            {/* Faint accent rim (the carousel instance's colour, see useDynamicAccent). */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 z-10 rounded-md shadow-[inset_0_0_0_1px_hsl(var(--accent)/0.35)]"
+            />
             <AnimatePresence mode="wait" initial={false} custom={viewDir}>
               {profileView === "menu" ? (
                 <motion.div
@@ -204,7 +258,14 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                   exit="exit"
                   className={`flex gap-6 p-6 ${MENU_BODY_MIN_H}`}
                 >
-                  <CharacterCard skinUrl={mySkinUrl} effect={decoration} ready={panelSettled} frame={characterFrame} frameColor={look?.frameColor}>
+                  <CharacterCard
+                    skinUrl={mySkinUrl}
+                    effect={decoration}
+                    ready={menuViewerReady}
+                    active={profileOpen}
+                    frame={characterFrame}
+                    frameColor={look?.frameColor}
+                  >
                     <button
                       type="button"
                       data-tour="account-customize"
@@ -214,6 +275,30 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                       <Shirt className="h-4 w-4" />
                       Personalizar
                     </button>
+                    <Hint
+                      label={
+                        away
+                          ? "Los demás te ven ausente. Pulsa para volver a estar en línea."
+                          : "Los demás ven que estás en línea. Pulsa para ponerte ausente."
+                      }
+                    >
+                      <button
+                        type="button"
+                        onClick={() => void toggleAway()}
+                        disabled={savingAway}
+                        aria-pressed={away}
+                        // -mt-2: 8px under Personalizar instead of the card's 16px gap.
+                        className="-mt-2 w-full h-8 flex items-center justify-center gap-2 rounded-md border border-white/10 bg-white/[0.05] text-xs font-semibold text-gray-200 hover:bg-white/[0.1] transition-colors disabled:opacity-60"
+                      >
+                        <span
+                          aria-hidden
+                          className={`h-2 w-2 rounded-full transition-colors ${
+                            away ? "bg-amber-400" : "bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.7)]"
+                          }`}
+                        />
+                        {away ? "Ausente" : "En línea"}
+                      </button>
+                    </Hint>
                   </CharacterCard>
 
                   <div className="flex-1 flex flex-col gap-4 w-[27rem]">
@@ -367,18 +452,11 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
               <button
                 type="button"
                 onClick={() => setProfileOpen(false)}
-                className="flex-1 min-w-0 flex items-center gap-3 px-6 py-3.5 text-left rounded-b-md"
-              >
-                <HeadAvatar headUrl={myHeadUrl} username={username} size={40} radius={6} decoration={iconDecoration} colors={iconColors}>
-                  <Avatar className="h-10 w-10 rounded-md border border-white/10">
-                    {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-md" />}
-                    <AvatarFallback className="rounded-md bg-accent/20 text-accent text-base font-bold">
-                      {username?.charAt(0)?.toUpperCase() ?? "?"}
-                    </AvatarFallback>
-                  </Avatar>
-                </HeadAvatar>
-                <span className="flex-1 text-base font-semibold text-white truncate">{username}</span>
-              </button>
+                aria-label="Cerrar menú"
+                // Open, the bar shows no name or head (the panel above already does):
+                // just the area that collapses it and the controls on the right.
+                className="flex-1 min-w-0 self-stretch min-h-12 rounded-b-md"
+              />
               <div className="flex items-center gap-2 mr-6 shrink-0">
                 {/* Personalizar portals its Aplicar/descartar buttons in here while previewing. */}
                 <div ref={setPreviewSlot} className="flex items-center empty:hidden" />
@@ -391,15 +469,18 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
               </div>
             </div>
           </motion.div>
-        )}
-      </AnimatePresence>
+      )}
       <button
         ref={buttonRef}
         type="button"
         data-tour="account-button"
         onClick={() => setProfileOpen((v) => !v)}
         // Accent-tinted, like Actividad: these two are yours, not the instance's.
-        className="relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-md bg-accent/15 backdrop-blur-md border border-transparent hover:bg-accent/25 transition-colors"
+        // Hidden under the open panel so it doesn't show through while it fades.
+        className={cn(
+          "relative z-40 flex items-center gap-2 px-3 py-1.5 rounded-md bg-accent/15 backdrop-blur-md border border-transparent hover:bg-accent/25 transition-[background-color,opacity] duration-150",
+          profileOpen && "opacity-0",
+        )}
       >
         <HeadAvatar headUrl={myHeadUrl} username={username} size={24} radius={6} decoration={iconDecoration} colors={iconColors}>
           <Avatar className="h-6 w-6 rounded-md border border-white/10">

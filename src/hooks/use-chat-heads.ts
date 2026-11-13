@@ -3,6 +3,7 @@ import { subscribeChatIndex, subscribeUserDirectory, markConversationRead, type 
 import { toast, notify } from "@/lib/toast";
 import { subscribeFriends, subscribeIncomingRequests, subscribeSentRequests, type FriendRequestEntry } from "@/services/friends";
 import { notifyUser, isAppVisible } from "@/lib/notify";
+import { useBlocks } from "@/hooks/use-blocks";
 
 /** Incoming chat message: sound, plus a Windows notification if the launcher
  *  is minimized/in the tray (see notifyUser). Nothing at all if that very
@@ -236,6 +237,11 @@ export const useHeaderOverlay = create<HeaderOverlayState>((set, get) => ({
   viewedUserUuid: null,
   userProfileFrom: "menu",
   openUserProfile: (uuid) => {
+    // Whoever blocked you keeps their profile closed to you.
+    if (useBlocks.getState().blockedBy.has(uuid)) {
+      toast.error("Este jugador no está disponible.");
+      return;
+    }
     const { active, profileView } = get();
     useChatHeads.getState().minimizeChat();
     set({

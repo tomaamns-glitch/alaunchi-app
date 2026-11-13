@@ -2,6 +2,7 @@ import { initializeApp } from "firebase/app";
 import { getDatabase } from "firebase/database";
 import { getStorage } from "firebase/storage";
 import { getFunctions } from "firebase/functions";
+import { getAuth } from "firebase/auth";
 
 // Public web config — Firebase's own model is that this is safe to ship in the
 // client (unlike the GitHub token). Real access control lives in the Realtime
@@ -21,3 +22,6 @@ export const rtdb = getDatabase(firebaseApp);
 export const storage = getStorage(firebaseApp);
 // Same region the Cloud Functions in functions/ are deployed to.
 export const functions = getFunctions(firebaseApp, "europe-west1");
+// Signed in as the Minecraft account by services/firebase-session.ts (custom
+// token from the mintFirebaseToken function); auth.uid is the player's uuid.
+export const firebaseAuth = getAuth(firebaseApp);

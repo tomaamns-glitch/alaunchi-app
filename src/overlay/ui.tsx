@@ -211,7 +211,7 @@ export function PlayerHead({
   uuid: string;
   name: string;
   size?: number;
-  status?: "online" | "playing" | "offline" | null;
+  status?: "online" | "playing" | "away" | "offline" | null;
   className?: string;
 }) {
   const url = usePlayerHeadUrl(uuid);
@@ -234,7 +234,7 @@ export function PlayerHead({
         <span
           className={cn(
             "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-[#121214]",
-            status === "playing" ? "bg-accent" : "bg-emerald-400",
+            status === "playing" ? "bg-accent" : status === "away" ? "bg-amber-400" : "bg-emerald-400",
           )}
         />
       )}

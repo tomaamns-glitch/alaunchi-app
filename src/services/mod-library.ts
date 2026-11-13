@@ -1,4 +1,5 @@
 import { ref as dbRef, get, onValue, push, remove, set, update } from "firebase/database";
+import { isModerator } from "@/lib/moderation";
 import { rtdb } from "@/lib/firebase";
 import { uploadSharedContent } from "@/services/content-share";
 import type { ModrinthMatch, ModrinthProjectDetail, ModrinthUpdate } from "@/services/modrinth";
@@ -12,13 +13,12 @@ import type { ModrinthMatch, ModrinthProjectDetail, ModrinthUpdate } from "@/ser
 // twice and no new Storage rule is needed. Icons are small data URLs stored in
 // the catalog itself, like instance icons in alaunchi-meta.json.
 //
-// Only MOD_LIBRARY_OWNER_EMAIL gets the editor. That check is client-side: there
-// is no Firebase Auth in the app, so the RTDB rules can't tell who is writing.
+// Only the group's moderator (lib/moderation.ts, by Minecraft uuid) gets the
+// editor — and only their Firebase Auth uid can write modLibrary: the database
+// rules enforce it, this check just decides what the app shows.
 
-export const MOD_LIBRARY_OWNER_EMAIL = "thereal_adriian@hotmail.com";
-
-export function isModLibraryOwner(email: string | null | undefined): boolean {
-  return !!email && email.trim().toLowerCase() === MOD_LIBRARY_OWNER_EMAIL;
+export function isModLibraryOwner(uuid: string | null | undefined): boolean {
+  return isModerator(uuid);
 }
 
 export type LibraryLoader = "fabric" | "forge" | "neoforge";

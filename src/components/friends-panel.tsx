@@ -373,8 +373,15 @@ export function FriendsPanel({ uuid, username, onOpenProfile, onChat }: FriendsP
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium truncate hover:text-accent transition-colors">{f.username}</div>
                         {tab === "online" ? (
-                          <div className="flex items-center gap-1 text-[10px] text-green-400 truncate">
-                            {a?.status === "playing" ? (
+                          <div className={`flex items-center gap-1 text-[10px] truncate ${a?.away ? "text-amber-300" : "text-green-400"}`}>
+                            {a?.away ? (
+                              <>
+                                <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
+                                <span className="truncate">
+                                  Ausente{a.status === "playing" ? ` · Jugando a ${a.instanceName || "Minecraft"}` : ""}
+                                </span>
+                              </>
+                            ) : a?.status === "playing" ? (
                               <>
                                 <Gamepad2 className="h-3 w-3 shrink-0" />
                                 <span className="truncate">Jugando a {a.instanceName || "Minecraft"}</span>

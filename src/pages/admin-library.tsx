@@ -24,8 +24,8 @@ function summarizeBuilds(builds: LibraryBuild[]): { mcVersion: string; loaders: 
 
 /** Admin → Biblioteca de mods: the group's own mods, only for the library owner. */
 export default function AdminLibrary() {
-  const { isAuthenticated, email, username } = useAuth();
-  const isOwner = isModLibraryOwner(email);
+  const { isAuthenticated, uuid, email, username } = useAuth();
+  const isOwner = isModLibraryOwner(uuid);
   const [, setLocation] = useLocation();
 
   const [mods, setMods] = useState<LibraryMod[] | null>(null);

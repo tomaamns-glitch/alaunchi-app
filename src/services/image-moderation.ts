@@ -1,6 +1,6 @@
 import { FirebaseError } from "firebase/app";
 import { httpsCallable } from "firebase/functions";
-import { functions } from "@/lib/firebase";
+import { firebaseAuth, functions } from "@/lib/firebase";
 
 // Every image other players get to see goes through the Cloud Functions in
 // functions/ (Cloud Vision SafeSearch: nudity and graphic violence) instead
@@ -39,8 +39,22 @@ const checkImageFn = httpsCallable<{ base64: string }, { allowed: true }>(functi
   timeout: 90_000,
 });
 
+/** The image functions check who calls them (functions/src/index.ts,
+ *  IMAGE_UPLOADS_REQUIRE_AUTH): wait for Firebase to restore the saved session
+ *  first, so a call right after startup — or from the game overlay, which
+ *  shares it — goes out signed in. Signing in itself is
+ *  services/firebase-session.ts (at login). */
+async function sessionReady(): Promise<void> {
+  try {
+    await firebaseAuth.authStateReady();
+  } catch {
+    /* the call says what went wrong */
+  }
+}
+
 /** Profile banner / modpack logo: moderated, then stored under banners/{uuid}/. */
 export async function uploadModeratedBanner(uuid: string, base64: string): Promise<string> {
+  await sessionReady();
   try {
     return (await uploadModeratedImageFn({ kind: "banner", base64, uuid })).data.url;
   } catch (e) {
@@ -50,6 +64,7 @@ export async function uploadModeratedBanner(uuid: string, base64: string): Promi
 
 /** Screenshot / skin shared by chat: moderated, then stored under content-objects/{sha1}. */
 export async function uploadModeratedSharedImage(base64: string, sha1: string): Promise<string> {
+  await sessionReady();
   try {
     return (await uploadModeratedImageFn({ kind: "shared", base64, sha1 })).data.url;
   } catch (e) {
@@ -60,6 +75,7 @@ export async function uploadModeratedSharedImage(base64: string, sha1: string): 
 /** Check-only, for images embedded in a chat message as a data URL. Throws
  *  the same user-facing errors as the uploads. */
 export async function assertImageAllowed(base64: string): Promise<void> {
+  await sessionReady();
   try {
     await checkImageFn({ base64 });
   } catch (e) {

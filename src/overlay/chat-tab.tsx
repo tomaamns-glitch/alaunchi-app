@@ -19,9 +19,10 @@ import { listInstanceFiles, type OverlayState } from "@/services/electron";
 import { subscribePresence, type PresenceEntry } from "@/services/presence";
 import { getNicknames } from "@/lib/nicknames";
 import { ChatDaySeparator, startsNewDay } from "@/components/chat-day-separator";
-import type { UserActivity } from "@/services/user-activity";
+import { shownStatus, type UserActivity } from "@/services/user-activity";
 import { useOverlayStore, groupUnread, GROUP_CHAT } from "./overlay-store";
 import { ContentCard, InstanceCard, ScreenshotCard, ServerCard, type RunningTarget } from "./chat-cards";
+import { useBlocks } from "@/hooks/use-blocks";
 import { EmptyState, Field, IconButton, InstanceAvatar, PlayerHead } from "./ui";
 import { cn } from "@/lib/utils";
 
@@ -41,11 +42,13 @@ function listTime(ts: number): string {
   return format(ts, "d MMM", { locale: es });
 }
 
-function statusOf(a: UserActivity | undefined): "online" | "playing" | "offline" {
-  return a?.status === "playing" ? "playing" : a?.status === "online" ? "online" : "offline";
+function statusOf(a: UserActivity | undefined): "online" | "playing" | "away" | "offline" {
+  return shownStatus(a);
 }
 
-function statusLine(a: UserActivity | undefined): { text: string; tone: "accent" | "online" | "muted" } {
+function statusLine(a: UserActivity | undefined): { text: string; tone: "accent" | "online" | "away" | "muted" } {
+  if (shownStatus(a) === "away")
+    return { text: a?.status === "playing" ? `Ausente · Jugando a ${a.instanceName || "Minecraft"}` : "Ausente", tone: "away" };
   if (a?.status === "playing") return { text: `Jugando a ${a.instanceName || "Minecraft"}`, tone: "accent" };
   if (a?.status === "online") return { text: "En línea", tone: "online" };
   if (a?.lastSeen) return { text: `Hace ${formatDistanceToNowStrict(a.lastSeen, { locale: es })}`, tone: "muted" };
@@ -243,6 +246,7 @@ export function ConversationView({
   onSendContent,
   target,
   group = false,
+  blocked = null,
   placeholder,
   emptyTitle,
 }: {
@@ -253,6 +257,9 @@ export function ConversationView({
   onSendContent: (content: SharedContent) => Promise<void>;
   target: RunningTarget | null;
   group?: boolean;
+  /** A block between the two (1:1 only): why nothing can be sent, and shared
+   *  content in the conversation can't be used. */
+  blocked?: string | null;
   placeholder: string;
   emptyTitle: string;
 }) {
@@ -330,6 +337,22 @@ export function ConversationView({
             const body = m.deleted ? (
               <div className="flex items-center gap-1.5 rounded-2xl border border-dashed border-white/10 px-3 py-1.5 text-[12px] italic text-gray-500">
                 <Trash2 className="h-3 w-3" /> Mensaje eliminado
+              </div>
+            ) : blocked && (m.instance || m.server || m.content) ? (
+              // Shared across a block: shown, but nothing in it works.
+              <div className="flex flex-col gap-1">
+                <div inert aria-disabled className="pointer-events-none select-none opacity-40 grayscale">
+                  {m.instance ? (
+                    <InstanceCard instance={m.instance} />
+                  ) : m.server ? (
+                    <ServerCard server={m.server} />
+                  ) : m.content?.category === "screenshots" ? (
+                    <ScreenshotCard content={m.content} senderUsername={m.senderUsername} onOpen={() => {}} />
+                  ) : (
+                    <ContentCard content={m.content!} target={null} />
+                  )}
+                </div>
+                <span className="px-1 text-[10px] text-gray-500">Bloqueado</span>
               </div>
             ) : m.instance ? (
               <InstanceCard instance={m.instance} />
@@ -414,6 +437,9 @@ export function ConversationView({
         )}
       </AnimatePresence>
 
+      {blocked ? (
+        <p className="border-t border-white/[0.06] p-3 text-center text-[12px] text-gray-400">{blocked}</p>
+      ) : (
       <form
         className="border-t border-white/[0.06] p-3"
         onSubmit={(e) => {
@@ -458,6 +484,7 @@ export function ConversationView({
           </Hint>
         </div>
       </form>
+      )}
 
       <Lightbox image={lightbox} onClose={() => setLightbox(null)} />
     </div>
@@ -493,11 +520,19 @@ function DirectConversation({ otherUuid, target }: { otherUuid: string; target: 
     [messages, entry?.deletedBefore],
   );
   const status = statusLine(activity);
+  const iBlocked = useBlocks((s) => s.blocked.has(otherUuid));
+  const theyBlocked = useBlocks((s) => s.blockedBy.has(otherUuid));
+  const blocked = iBlocked
+    ? `Has bloqueado a ${otherName}: no podéis enviaros mensajes ni archivos. Desbloquéalo desde el chat del launcher.`
+    : theyBlocked
+      ? "No puedes enviar mensajes ni archivos a este jugador."
+      : null;
 
   return (
     <ConversationView
       messages={visible}
       target={target}
+      blocked={blocked}
       placeholder={`Mensaje para ${otherName}`}
       emptyTitle={`Saluda a ${otherName}`}
       onSend={(text) => sendMessage(me.uuid, me.username, otherUuid, username, text)}
@@ -511,7 +546,13 @@ function DirectConversation({ otherUuid, target }: { otherUuid: string; target: 
             <p
               className={cn(
                 "truncate text-[10px] font-medium",
-                status.tone === "accent" ? "text-accent" : status.tone === "online" ? "text-emerald-400" : "text-gray-500",
+                status.tone === "accent"
+                  ? "text-accent"
+                  : status.tone === "online"
+                    ? "text-emerald-400"
+                    : status.tone === "away"
+                      ? "text-amber-300"
+                      : "text-gray-500",
               )}
             >
               {status.text}

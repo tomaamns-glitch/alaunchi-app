@@ -40,12 +40,13 @@ export function PresenceList({ players, emptyMessage, banners = false }: Presenc
       {players.map(([uuid, entry]) => {
         const nickname = nicknames[uuid];
         const label = nickname || entry.username;
+        const playingText = entry.playing ? (entry.playingName ? `Jugando a ${entry.playingName}` : "Jugando") : null;
         const statusText = entry.online
-          ? entry.playing
-            ? entry.playingName
-              ? `Jugando a ${entry.playingName}`
-              : "Jugando"
-            : "En línea"
+          ? entry.away
+            ? playingText
+              ? `Ausente · ${playingText}`
+              : "Ausente"
+            : playingText ?? "En línea"
           : entry.lastSeen
             ? `Visto hace ${formatCompactAgo(entry.lastSeen)}`
             : "Desconectado";
@@ -65,7 +66,7 @@ export function PresenceList({ players, emptyMessage, banners = false }: Presenc
 
         return (
           <div key={uuid} className="flex items-center gap-2 text-sm min-h-[26px]">
-            <PlayerAvatar uuid={uuid} username={entry.username} online={entry.online} />
+            <PlayerAvatar uuid={uuid} username={entry.username} online={entry.online} away={entry.away} />
 
             {/* Name with its activity status right under it. */}
             <div className="min-w-0 flex flex-col leading-tight">
@@ -86,8 +87,9 @@ export function PresenceList({ players, emptyMessage, banners = false }: Presenc
   );
 }
 
-/** Green while playing / online, muted when offline (lighter over a banner). */
+/** Green while playing / online, amber when away, muted when offline (lighter over a banner). */
 function statusClass(entry: PresenceEntry, onBanner = false) {
+  if (entry.online && entry.away) return "text-amber-300";
   if (entry.online) return entry.playing ? "text-green-400" : "text-green-300/80";
   return onBanner ? "text-gray-300" : "text-muted-foreground";
 }
@@ -108,7 +110,7 @@ function BannerRow({
 }) {
   return (
     <ProfileBannerRow uuid={uuid} onClick={onOpenChat} ariaLabel={`Chat con ${label}`} className="h-12">
-      <PlayerAvatar uuid={uuid} username={entry.username} online={entry.online} large />
+      <PlayerAvatar uuid={uuid} username={entry.username} online={entry.online} away={entry.away} large />
       <span className="min-w-0 flex flex-col leading-tight">
         <span className="text-sm font-medium text-white truncate drop-shadow">{label}</span>
         <span className={`text-[11px] truncate drop-shadow ${statusClass(entry, true)}`}>{statusText}</span>
@@ -121,11 +123,13 @@ function PlayerAvatar({
   uuid,
   username,
   online,
+  away = false,
   large = false,
 }: {
   uuid: string;
   username: string;
   online: boolean;
+  away?: boolean;
   /** Banner rows: bigger head and dot. */
   large?: boolean;
 }) {
@@ -142,7 +146,7 @@ function PlayerAvatar({
       </PlayerDecoratedIcon>
       {online && (
         <span
-          className={`absolute z-[4] -bottom-0.5 -right-0.5 rounded-full bg-green-400 border-card ${large ? "h-2.5 w-2.5 border-2" : "h-2 w-2 border"}`}
+          className={`absolute z-[4] -bottom-0.5 -right-0.5 rounded-full ${away ? "bg-amber-400" : "bg-green-400"} border-card ${large ? "h-2.5 w-2.5 border-2" : "h-2 w-2 border"}`}
           aria-hidden
         />
       )}

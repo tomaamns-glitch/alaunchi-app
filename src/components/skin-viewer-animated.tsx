@@ -1,10 +1,8 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { inferModelType, loadCapeToCanvas, loadImage, loadSkinToCanvas } from "skinview-utils";
-import classicModelUrl from "@/assets/models/classic-player.gltf?url";
-import slimModelUrl from "@/assets/models/slim-player.gltf?url";
 import { getCherryPetalFrames, getElytraTexture } from "@/services/electron";
+import { getPlayerRig } from "@/lib/player-rig";
 import { PARTICLE_EFFECTS, ParticleEffect, isParticleEffectId, type ParticleEffectId, type ParticleEffectDef } from "@/components/particle-effects";
 
 export type SkinEffect = "none" | "soul-fire" | "cherry-petals" | "fireflies" | ParticleEffectId;
@@ -24,6 +22,12 @@ interface SkinViewerAnimatedProps {
    */
   extendTop?: number;
   /**
+   * Draw this many px more on EACH side of the box (the canvas grows sideways,
+   * the character keeps its size and place), so particles reach the container's
+   * margins instead of being cut at the box's edges.
+   */
+  extendX?: number;
+  /**
    * Cosmetic backdrop:
    * - "soul-fire": blue flames rising around the character.
    * - "cherry-petals": pink petals drifting down behind the character.
@@ -37,6 +41,9 @@ interface SkinViewerAnimatedProps {
   elytra?: boolean;
   /** Freezes the idle animation where it is. */
   paused?: boolean;
+  /** False while the viewer is hidden but kept alive (the account panel when
+   *  closed): nothing is updated or drawn, and idle gestures aren't started. */
+  active?: boolean;
 }
 
 interface SceneEffect {
@@ -44,31 +51,25 @@ interface SceneEffect {
   dispose(): void;
 }
 
-// The rigged player models (classic-player.gltf / slim-player.gltf) and their
-// baked animation clips come from Modrinth's launcher (github.com/modrinth/code,
-// packages/assets), which is GPL-3.0-only. See src/assets/models/NOTICE.md.
-// The clips: "idle" loops forever; "idle_sub_1..3" are one-shot gestures (look
-// around, shift weight, stretch); "interact" fires on click. The scheduler
-// below (base loop + a random gesture every few seconds, cross-faded) is a
-// re-implementation of the same idea as Modrinth's use-skin-preview-animation.
+// The player model and its clips are our own, built in code: lib/player-rig.ts
+// (the rig) and lib/player-animations.ts (the clips). "idle" loops forever;
+// "idle_sub_N" are one-shot gestures (look around, stretch, shift weight…);
+// "interact" fires on click. The scheduler below keeps the base loop running
+// and cross-fades into a random gesture every few seconds.
 const BASE_CLIP = "idle";
-const GESTURE_CLIPS = ["idle_sub_1", "idle_sub_2", "idle_sub_3"];
+/** Gestures: every "idle_sub_N" clip the model has. */
+const isGestureClip = (name: string) => name.startsWith("idle_sub_");
 const INTERACT_CLIP = "interact";
-const GESTURE_INTERVAL_MS = 8000;
-const CROSSFADE_S = 0.25;
+/** A gesture every 6–10 s, so they don't tick like a metronome. */
+const GESTURE_INTERVAL_MS: [number, number] = [6000, 10000];
+const CROSSFADE_S = 0.35;
 
-// GLTFLoader parses the whole model + embedded animation buffer on every call;
-// cache the parsed result per URL so remounting (or slim<->classic swaps) is
-// just a cheap scene clone. Clips are immutable data and safe to share across
-// clones — the AnimationMixer binds them to each cloned scene by node name.
-const modelCache = new Map<string, Promise<GLTF>>();
-function loadModel(url: string): Promise<GLTF> {
-  let p = modelCache.get(url);
-  if (!p) {
-    p = new Promise<GLTF>((resolve, reject) => new GLTFLoader().load(url, resolve, undefined, reject));
-    modelCache.set(url, p);
-  }
-  return p;
+// DEV: every live scheduler, so the rig lab can fire a given clip (window.__playClip).
+const devSchedulers = new Set<IdleScheduler>();
+if (import.meta.env.DEV) {
+  (window as unknown as { __playClip?: (name: string) => void }).__playClip = (name) => {
+    for (const s of devSchedulers) s.play(name);
+  };
 }
 
 function makePixelTexture(canvas: HTMLCanvasElement): THREE.CanvasTexture {
@@ -76,17 +77,16 @@ function makePixelTexture(canvas: HTMLCanvasElement): THREE.CanvasTexture {
   tex.magFilter = THREE.NearestFilter;
   tex.minFilter = THREE.NearestFilter;
   tex.colorSpace = THREE.SRGBColorSpace;
-  // glTF UV convention (the models were exported for it) — matches what
-  // GLTFLoader itself does for embedded textures.
+  // The rig's UVs count v down from the top of the skin image (like glTF).
   tex.flipY = false;
   tex.needsUpdate = true;
   return tex;
 }
 
-/** Clones the shared glTF materials so each mesh (and each viewer instance) owns
- *  its own — the source model points every body part at ONE "Mat" material, so
- *  without this the per-mesh tweaks below (and the skin texture itself) would
- *  leak across every part and every mounted viewer. */
+/** Clones the materials of a rig clone so each mesh of each viewer owns its
+ *  own — `clone(true)` shares them with the cached source rig (and so with
+ *  every other mounted viewer), so without this the skin texture and the
+ *  per-mesh tweaks below would leak across all of them. */
 function isolateMaterials(root: THREE.Object3D) {
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
@@ -167,6 +167,7 @@ class IdleScheduler {
       this.schedule();
     };
     this.mixer.addEventListener("finished", this.onFinished as never);
+    if (import.meta.env.DEV) devSchedulers.add(this);
   }
 
   private get base() {
@@ -183,14 +184,27 @@ class IdleScheduler {
     this.timer = setTimeout(() => {
       const base = this.base;
       if (this.disposed || !base || !base.isRunning() || this.paused) return this.schedule();
-      const pool = GESTURE_CLIPS.filter((n) => n !== this.lastGesture && this.actions.has(n));
-      const name = (pool.length ? pool : GESTURE_CLIPS)[Math.floor(Math.random() * (pool.length || GESTURE_CLIPS.length))];
+      const available = [...this.actions.keys()].filter(isGestureClip);
+      const pool = available.length > 1 ? available.filter((n) => n !== this.lastGesture) : available;
+      if (!pool.length) return this.schedule();
+      const name = pool[Math.floor(Math.random() * pool.length)];
       const gesture = this.actions.get(name);
       if (!gesture) return this.schedule();
       this.lastGesture = name;
       base.fadeOut(CROSSFADE_S);
       gesture.reset().setEffectiveWeight(1).fadeIn(CROSSFADE_S).play();
-    }, GESTURE_INTERVAL_MS);
+    }, GESTURE_INTERVAL_MS[0] + Math.random() * (GESTURE_INTERVAL_MS[1] - GESTURE_INTERVAL_MS[0]));
+  }
+
+  /** DEV: plays one clip now (from the base idle), like a scheduled gesture. */
+  play(name: string) {
+    const clip = this.actions.get(name);
+    const base = this.base;
+    if (!clip || !base) return;
+    if (this.timer) clearTimeout(this.timer);
+    for (const a of this.actions.values()) if (a !== base && a.isRunning()) a.fadeOut(CROSSFADE_S);
+    base.fadeOut(CROSSFADE_S);
+    clip.reset().setEffectiveWeight(1).fadeIn(CROSSFADE_S).play();
   }
 
   private returnToBase(from: THREE.AnimationAction) {
@@ -211,6 +225,7 @@ class IdleScheduler {
 
   dispose() {
     this.disposed = true;
+    devSchedulers.delete(this);
     if (this.timer) clearTimeout(this.timer);
     this.mixer.removeEventListener("finished", this.onFinished as never);
     this.mixer.stopAllAction();
@@ -741,16 +756,17 @@ function mcBoxGeometry(
   const bottom = [u + d + w, u + d + 2 * w];
   const vTop = [v, v + d];
   const vSide = [v + d, v + d + h];
-  // Mirrored (the right wing): every region is read right-to-left, and the two
-  // sides trade places.
-  const flip = (r: number[], lo: number, hi: number) => (mirror ? [lo + hi - r[0], lo + hi - r[1]] : r);
-  const uLo = u, uHi = u + 2 * d + 2 * w;
-  const wst = flip(mirror ? east : west, uLo, uHi);
-  const est = flip(mirror ? west : east, uLo, uHi);
-  const frt = flip(front, uLo, uHi);
-  const bck = flip(back, uLo, uHi);
-  const tp = flip(top, uLo, uHi);
-  const btm = flip(bottom, uLo, uHi);
+  // Mirrored (the right wing): the box is the plain one reflected in x — each
+  // face keeps ITS OWN region read right-to-left, and the two sides trade
+  // places. (Flipping across the whole layout instead would put the front
+  // region on the back face: the wing showed its inner side from behind.)
+  const flip = (r: number[]) => (mirror ? [r[1], r[0]] : r);
+  const wst = flip(mirror ? east : west);
+  const est = flip(mirror ? west : east);
+  const frt = flip(front);
+  const bck = flip(back);
+  const tp = flip(top);
+  const btm = flip(bottom);
   const [wa, wb] = wst, [fa, fb] = frt, [ea, eb] = est, [ba, bb] = bck, [ta, tb] = tp, [ma, mb] = btm;
   const [sv0, sv1] = vSide, [tv0, tv1] = vTop;
 
@@ -877,7 +893,7 @@ function getDefaultElytraCanvas(): Promise<HTMLCanvasElement> {
 
 /** Frees the per-instance materials and skin/cape textures of a model clone.
  *  Geometry is deliberately left alone — it's shared with the cached source
- *  glTF (see {@link loadModel}) and outlives any single viewer. */
+ *  rig (see getPlayerRig) and outlives any single viewer. */
 function disposeModel(root: THREE.Object3D) {
   const seen = new Set<THREE.Texture | THREE.Material>();
   root.traverse((obj) => {
@@ -900,8 +916,8 @@ function disposeModel(root: THREE.Object3D) {
 /**
  * A live 3D render of a Minecraft skin that idles like a real player — subtle
  * breathing plus an occasional gesture — instead of walking in place forever.
- * Drag to spin, click to poke it. Heavier than {@link SkinViewer3D} (loads a
- * rigged glTF + runs an AnimationMixer), so use it for the one prominent
+ * Drag to spin, click to poke it. Heavier than {@link SkinViewer3D} (a rigged
+ * model + an AnimationMixer), so use it for the one prominent
  * viewer, not for grids of thumbnails.
  */
 export function SkinViewerAnimated({
@@ -913,8 +929,10 @@ export function SkinViewerAnimated({
   className,
   effect = "none",
   extendTop = 0,
+  extendX = 0,
   elytra = false,
   paused = false,
+  active = true,
 }: SkinViewerAnimatedProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -930,6 +948,8 @@ export function SkinViewerAnimated({
   elytraRef.current = elytra;
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const elytraGroupRef = useRef<THREE.Group | null>(null);
   const capeMaterialsRef = useRef<{ mats: THREE.Material[]; hasCape: boolean }>({ mats: [], hasCape: false });
   // A turn the viewer is animating on its own (elytra on/off); a drag cancels it.
@@ -944,7 +964,7 @@ export function SkinViewerAnimated({
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     // updateStyle:true so the canvas' CSS size stays width x height even when
     // the device pixel ratio inflates the drawing buffer.
-    renderer.setSize(width, height + extendTop, true);
+    renderer.setSize(width + extendX * 2, height + extendTop, true);
     renderer.setClearColor(0x000000, 0);
     renderer.toneMapping = THREE.NoToneMapping;
     rendererRef.current = renderer;
@@ -967,7 +987,9 @@ export function SkinViewerAnimated({
     camera.lookAt(0, 1, 0);
     // Taller canvas: render the same framing (a width×height view) plus
     // `extendTop` px above it, so the character doesn't move or shrink.
-    if (extendTop > 0) camera.setViewOffset(width, height, 0, -extendTop, width, height + extendTop);
+    if (extendTop > 0 || extendX > 0) {
+      camera.setViewOffset(width, height, -extendX, -extendTop, width + extendX * 2, height + extendTop);
+    }
     cameraRef.current = camera;
     // World height the extension adds at the character (the model fills ~88%
     // of `height` and is ~2 units tall), + a margin so spawns stay out of view.
@@ -989,8 +1011,10 @@ export function SkinViewerAnimated({
       sceneEffect = fire;
     } else if (effect === "cherry-petals") {
       // topY / bottomY sit well outside the framed area at every viewer size;
-      // spread is a narrow column ~the character's width so nothing hits the edge.
-      const petals = new CherryPetals(3.5 + lift, -0.7, 0.4);
+      // spread covers the whole drawn width (the box plus its side margins);
+      // ~109px per world unit at the usual 254px box.
+      const halfWorld = (width / 2 + extendX) / ((0.88 * height) / 2.05);
+      const petals = new CherryPetals(3.5 + lift, -0.7, Math.max(0.4, halfWorld - 0.1));
       scene.add(petals.mesh);
       sceneEffect = petals;
     } else if (effect === "fireflies") {
@@ -1012,6 +1036,7 @@ export function SkinViewerAnimated({
       // requestAnimationFrame already pauses when the window isn't visible;
       // clamp so the first frame after a long pause doesn't lurch the animation.
       const delta = Math.min(clock.getDelta(), 0.1);
+      if (!activeRef.current) return;
       if (!pausedRef.current) {
         mixerRef.current?.update(delta);
         sceneEffect?.update(delta);
@@ -1072,7 +1097,7 @@ export function SkinViewerAnimated({
       cameraRef.current = null;
       pivotRef.current = null;
     };
-  }, [width, height, effect, extendTop]);
+  }, [width, height, effect, extendTop, extendX]);
 
   // Load / swap the model + textures whenever the skin, cape or variant change.
   useEffect(() => {
@@ -1099,8 +1124,7 @@ export function SkinViewerAnimated({
         }
       }
 
-      const gltf = await loadModel(model === "slim" ? slimModelUrl : classicModelUrl);
-      if (cancelled) return;
+      const rig = getPlayerRig(model);
 
       const pivot = pivotRef.current;
       if (!pivot) return;
@@ -1115,7 +1139,7 @@ export function SkinViewerAnimated({
         modelRef.current = null;
       }
 
-      const root = gltf.scene.clone(true);
+      const root = rig.scene.clone(true);
       isolateMaterials(root);
       const skinTex = makePixelTexture(skinCanvas);
       const capeTex = capeCanvas ? makePixelTexture(capeCanvas) : null;
@@ -1165,9 +1189,9 @@ export function SkinViewerAnimated({
 
       const mixer = new THREE.AnimationMixer(root);
       const actions = new Map<string, THREE.AnimationAction>();
-      for (const clip of gltf.animations) actions.set(clip.name, mixer.clipAction(clip));
+      for (const clip of rig.animations) actions.set(clip.name, mixer.clipAction(clip));
       const scheduler = new IdleScheduler(mixer, actions);
-      scheduler.paused = pausedRef.current;
+      scheduler.paused = pausedRef.current || !activeRef.current;
       scheduler.start();
       mixerRef.current = mixer;
       schedulerRef.current = scheduler;
@@ -1180,7 +1204,7 @@ export function SkinViewerAnimated({
     };
     // width/height/effect are here too: any of them rebuilds the scene in the
     // other effect, which leaves an empty pivot this effect has to repopulate.
-  }, [skinUrl, capeUrl, variant, width, height, effect, extendTop]);
+  }, [skinUrl, capeUrl, variant, width, height, effect, extendTop, extendX]);
 
   // Elytra on/off: show or hide the wings, hide or restore the cape, and turn
   // the character to show its back / face front again.
@@ -1197,8 +1221,8 @@ export function SkinViewerAnimated({
   }, [elytra]);
 
   useEffect(() => {
-    if (schedulerRef.current) schedulerRef.current.paused = paused;
-  }, [paused]);
+    if (schedulerRef.current) schedulerRef.current.paused = paused || !active;
+  }, [paused, active]);
 
   return <canvas ref={canvasRef} className={className} />;
 }

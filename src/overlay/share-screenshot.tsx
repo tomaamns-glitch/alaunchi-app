@@ -5,6 +5,7 @@ import { subscribeFriends, type FriendEntry } from "@/services/friends";
 import { sendSharedContent } from "@/services/chat";
 import { uploadSharedContent, type SharedContent } from "@/services/content-share";
 import { readInstanceFile } from "@/services/electron";
+import { shownStatus } from "@/services/user-activity";
 import { getNicknames } from "@/lib/nicknames";
 import { useOverlayStore, type ShareableShot } from "./overlay-store";
 import { shotLabel } from "./screenshots-tab";
@@ -127,11 +128,13 @@ export function ShareScreenshot({ shot }: { shot: ShareableShot }) {
                   uuid={p.uuid}
                   name={p.name}
                   size={34}
-                  status={a?.status === "playing" ? "playing" : a?.status === "online" ? "online" : "offline"}
+                  status={shownStatus(a)}
                 />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[13px] font-medium text-gray-100">{p.name}</p>
-                  {a?.status === "playing" ? (
+                  {shownStatus(a) === "away" ? (
+                    <p className="truncate text-[10px] text-amber-300">Ausente</p>
+                  ) : a?.status === "playing" ? (
                     <p className="truncate text-[10px] text-accent">Jugando a {a.instanceName || "Minecraft"}</p>
                   ) : a?.status === "online" ? (
                     <p className="text-[10px] text-emerald-400">En línea</p>

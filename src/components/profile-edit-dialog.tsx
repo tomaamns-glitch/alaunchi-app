@@ -331,7 +331,10 @@ export function ProfileEditDialog({
     <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className={customize ? "w-auto max-w-none border-0 bg-transparent p-0 shadow-none sm:rounded-none" : "max-w-lg"}
+        // w-fit, not w-auto: DialogContent centres with inset-0 + m-auto, and an
+        // auto width with left/right 0 stretches to the whole window (the
+        // margins then have nothing to centre and it sat at the left edge).
+        className={customize ? "w-fit max-w-none border-0 bg-transparent p-0 shadow-none sm:rounded-none" : "max-w-lg"}
       >
         {!customize && (
           <DialogHeader>

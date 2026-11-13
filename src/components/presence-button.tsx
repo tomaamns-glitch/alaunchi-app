@@ -109,8 +109,13 @@ export function PresenceButton({ context, open, onOpenChange }: PresenceButtonPr
   }, [instancePack?.id]);
 
   // Excludes ourselves — this panel never lists the current user.
-  const instancePlayers = instancePack
-    ? sortAndFilterPresence(instanceEntries).filter(([uuid]) => uuid !== myUuid)
+  const instancePlayers: [string, PresenceEntry][] = instancePack
+    ? sortAndFilterPresence(instanceEntries)
+        .filter(([uuid]) => uuid !== myUuid)
+        .map(([uuid, e]) => {
+          const a = activity[uuid];
+          return [uuid, { ...e, away: e.online && !!a && a.status !== "offline" && !!a.away }];
+        })
     : [];
   const onlineOthers = instancePlayers.filter(([, e]) => e.online);
   const instancePlayerUuids = new Set(instancePlayers.map(([uuid]) => uuid));

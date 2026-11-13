@@ -606,3 +606,45 @@ export async function listModpackVersions(projectId: string): Promise<ModpackVer
     return [];
   }
 }
+
+/**
+ * A mod a crash diagnosis says is missing (by mod id, plus the slug it guessed):
+ * the newest version on Modrinth for this loader + Minecraft. Tries the known
+ * slugs first, then a search whose hit looks like the same mod. main.js still
+ * checks the downloaded jar really declares `modId` before installing it.
+ */
+export async function findModForMissingId(
+  modId: string,
+  slugs: string[],
+  loader: string,
+  gameVersion: string
+): Promise<{ projectId: string; title: string; version: ModrinthUpdate } | null> {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const pick = (versions: ModrinthUpdate[]) => versions.find((v) => v.versionType === "release") ?? versions[0] ?? null;
+  const tried = new Set<string>();
+  for (const slug of [...slugs, modId, modId.replace(/_/g, "-")]) {
+    if (!slug || tried.has(slug)) continue;
+    tried.add(slug);
+    try {
+      const res = await fetch(`${API}/project/${encodeURIComponent(slug)}`);
+      if (!res.ok) continue;
+      const p: { id: string; title: string; project_type: string } = await res.json();
+      if (p.project_type !== "mod") continue;
+      tried.add(p.id);
+      const version = pick(await listVersions(p.id, loader, gameVersion));
+      if (version) return { projectId: p.id, title: p.title, version };
+    } catch {}
+  }
+  try {
+    const facets = JSON.stringify([["project_type:mod"], [`categories:${loader}`], [`versions:${gameVersion}`]]);
+    const res = await fetch(`${API}/search?${new URLSearchParams({ query: modId, facets, limit: "5" })}`);
+    const hits: Array<{ project_id: string; slug: string; title: string }> = res.ok ? (await res.json()).hits ?? [] : [];
+    for (const h of hits) {
+      if (tried.has(h.project_id)) continue;
+      if (norm(h.slug) !== norm(modId) && norm(h.title) !== norm(modId) && !norm(h.slug).startsWith(norm(modId))) continue;
+      const version = pick(await listVersions(h.project_id, loader, gameVersion));
+      if (version) return { projectId: h.project_id, title: h.title, version };
+    }
+  } catch {}
+  return null;
+}

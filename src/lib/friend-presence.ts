@@ -22,6 +22,7 @@ export function toPresenceEntries(
       lastSeen: a?.lastSeen ?? friend.since,
       playing: a?.status === "playing",
       playingName: a?.status === "playing" ? a.instanceName : undefined,
+      away: !!a && a.status !== "offline" && !!a.away,
     };
   }
   return out;

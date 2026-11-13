@@ -110,6 +110,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Skin manager
   getSkinProfile: (args) => ipcRenderer.invoke("mc:get-skin-profile", args),
+  mcSessionJoin: (args) => ipcRenderer.invoke("mc:session-join", args),
   changeSkin: (args) => ipcRenderer.invoke("mc:change-skin", args),
   setCape: (args) => ipcRenderer.invoke("mc:set-cape", args),
   skinLibraryList: () => ipcRenderer.invoke("mc:skin-library-list"),

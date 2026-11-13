@@ -17,8 +17,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast, notify } from "@/lib/toast";
-import { ChevronRight, Library, Package, Plus, Server, Trash, Loader2 } from "lucide-react";
+import { ChevronRight, Flag, Library, Package, Plus, Server, Trash, Loader2 } from "lucide-react";
 import { isModLibraryOwner } from "@/services/mod-library";
+import { isModerator } from "@/lib/moderation";
 import { createModpack, deleteModpack, type NewModpackData } from "@/services/github";
 import { getMySource, uniqueModpackId } from "@/lib/sources";
 import { useIsAdmin } from "@/hooks/use-is-admin";
@@ -128,9 +129,14 @@ export default function Admin() {
               <Button variant="outline" className="shrink-0" onClick={() => setLocation("/servers")}>
                 <Server className="mr-2 h-4 w-4" /> Servers
               </Button>
-              {isModLibraryOwner(email) && (
+              {isModLibraryOwner(uuid) && (
                 <Button variant="outline" className="shrink-0" onClick={() => setLocation("/admin/library")}>
                   <Library className="mr-2 h-4 w-4" /> Biblioteca de mods
+                </Button>
+              )}
+              {isModerator(uuid) && (
+                <Button variant="outline" className="shrink-0" onClick={() => setLocation("/admin/reports")}>
+                  <Flag className="mr-2 h-4 w-4" /> Reportes
                 </Button>
               )}
               <Button

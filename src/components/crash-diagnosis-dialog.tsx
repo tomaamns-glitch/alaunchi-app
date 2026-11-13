@@ -6,6 +6,8 @@ import {
   ClipboardCopy,
   Cpu,
   FileWarning,
+  Globe,
+  HardDrive,
   Info,
   Loader2,
   MemoryStick,
@@ -25,7 +27,9 @@ import {
   onCrashDiagnoseProgress,
   type CrashDiagnosis,
   type CrashFinding,
+  type CrashFix,
 } from "@/services/electron";
+import { findModForMissingId } from "@/services/modrinth";
 import { fetchSnapshot, snapshotBaseUrl } from "@/services/github";
 import { findPackSource, useModpacks } from "@/hooks/use-modpacks";
 import { closeCrashDiagnosis, noteCrashFixApplied, type CrashDiagnosisTarget } from "@/lib/crash-diagnosis";
@@ -47,6 +51,8 @@ const CATEGORY_ICON: Record<CrashFinding["category"], typeof Package> = {
   loader: Wrench,
   config: Settings2,
   graphics: Cpu,
+  world: Globe,
+  system: HardDrive,
   other: AlertTriangle,
 };
 
@@ -106,11 +112,24 @@ export default function CrashDiagnosisDialog({ target }: { target: CrashDiagnosi
     return off;
   }, [run, target.modpackId]);
 
-  const apply = async (f: CrashFinding) => {
-    if (!f.fix) return;
-    setApplying(f.key);
+  const apply = async (f: CrashFinding, fix: CrashFix) => {
+    setApplying(`${f.key}|${fix.kind}`);
     try {
-      if (f.fix.kind === "repair-files") {
+      if (fix.kind === "install-mod") {
+        const found = await findModForMissingId(fix.modId, [fix.slug], fix.loader, fix.mcVersion);
+        if (!found) throw new Error(`No se encontró ${fix.name} en Modrinth para Minecraft ${fix.mcVersion} (${fix.loader}). Búscalo a mano en la pestaña Mods.`);
+        await applyCrashFix(target.modpackId, {
+          ...fix,
+          url: found.version.url,
+          filename: found.version.filename,
+          sha1: found.version.sha1,
+        });
+        setApplied((s) => new Set(s).add(f.key));
+        noteCrashFixApplied();
+        notify.success(`${found.title} instalado. Vuelve a analizar por si a su vez necesita otra cosa.`);
+        return;
+      }
+      if (fix.kind === "repair-files") {
         if (!pack || !source) throw new Error("No se encuentra el repositorio de esta instancia.");
         const manifest = await fetchSnapshot(source.repoUrl, pack.id, source.token || undefined);
         if (!manifest) throw new Error("No hay manifiesto publicado para este modpack.");
@@ -123,13 +142,13 @@ export default function CrashDiagnosisDialog({ target }: { target: CrashDiagnosi
         );
         useModpacks.getState().updateModpackStatus(pack.id, { installed: true, installedVersion: manifest.version, updateAvailable: false });
       } else {
-        await applyCrashFix(target.modpackId, f.fix);
+        await applyCrashFix(target.modpackId, fix);
       }
       setApplied((s) => new Set(s).add(f.key));
       noteCrashFixApplied();
       notify.success("Arreglo aplicado. Prueba a jugar otra vez.");
     } catch (e: any) {
-      reportCaughtError(`crash-fix:${f.fix.kind}:${target.modpackId}`, e);
+      reportCaughtError(`crash-fix:${fix.kind}:${target.modpackId}`, e);
       toast.error(e?.message || "No se pudo aplicar el arreglo.");
     } finally {
       setApplying(null);
@@ -148,6 +167,7 @@ export default function CrashDiagnosisDialog({ target }: { target: CrashDiagnosi
 
   const findings = result?.findings ?? [];
   const sure = findings.filter((f) => f.severity === "critical").length;
+  const usable = (fix: CrashFix | null | undefined): fix is CrashFix => !!fix && (fix.kind !== "repair-files" || !!source);
 
   return (
     <Dialog open onOpenChange={(open) => !open && !applying && closeCrashDiagnosis()}>
@@ -188,6 +208,7 @@ export default function CrashDiagnosisDialog({ target }: { target: CrashDiagnosi
               {result.description && (
                 <p className="text-xs text-muted-foreground">
                   Último error: <span className="text-foreground">{result.description}</span>
+                  {(result.repeats ?? 0) > 1 && <span> · se ha repetido en los últimos {result.repeats} crasheos</span>}
                 </p>
               )}
               {findings.length === 0 && (
@@ -213,23 +234,36 @@ export default function CrashDiagnosisDialog({ target }: { target: CrashDiagnosi
                         </span>
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground break-words">{f.detail}</p>
-                      {f.fix && (f.fix.kind !== "repair-files" || source) && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="mt-2 h-7 text-xs bg-accent/15 text-accent hover:bg-accent/25 hover:text-accent border-transparent"
-                          disabled={done || !!applying}
-                          onClick={() => apply(f)}
-                        >
-                          {done ? (
-                            <Check className="mr-1.5 h-3.5 w-3.5" />
-                          ) : applying === f.key ? (
-                            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Wrench className="mr-1.5 h-3.5 w-3.5" />
-                          )}
-                          {done ? "Hecho" : f.fix.label}
-                        </Button>
+                      {(usable(f.fix) || usable(f.altFix)) && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {[f.fix, f.altFix].filter(usable).map((fix, i) => {
+                            const id = `${f.key}|${fix.kind}`;
+                            return (
+                              <Button
+                                key={id}
+                                size="sm"
+                                variant="ghost"
+                                className={cn(
+                                  "h-7 text-xs border-transparent",
+                                  i === 0
+                                    ? "bg-accent/15 text-accent hover:bg-accent/25 hover:text-accent"
+                                    : "bg-white/[0.06] text-muted-foreground hover:bg-white/10 hover:text-foreground"
+                                )}
+                                disabled={done || !!applying}
+                                onClick={() => apply(f, fix)}
+                              >
+                                {done && i === 0 ? (
+                                  <Check className="mr-1.5 h-3.5 w-3.5" />
+                                ) : applying === id ? (
+                                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Wrench className="mr-1.5 h-3.5 w-3.5" />
+                                )}
+                                {done && i === 0 ? "Hecho" : fix.label}
+                              </Button>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
                   </div>

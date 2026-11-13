@@ -14,6 +14,7 @@ import {
   writeOnlineHistory,
 } from "../lib/online-history";
 import { useAuth } from "./use-auth";
+import { claimMyInstances } from "../services/instance-ownership";
 
 const eAPI = (window as any).electronAPI;
 const isElectron = !!eAPI;
@@ -69,6 +70,21 @@ function sweepXrayContent(modpacks: Modpack[]) {
  *  (installed, lockContent on, and not their own — a creator is never locked
  *  out of their own pack). Runs on every load, like the xray sweep, so turning
  *  the option on or off reaches players with the next catalog read. */
+/** Creator: tells the backend which instances of their repo are theirs
+ *  (instanceOwners, via services/instance-ownership.ts) so the access-code
+ *  functions and the database rules let them manage codes, bans and invites.
+ *  Once per session per instance; the repo owner file is only written the
+ *  first time. Silent: retried on the next load. */
+function claimOwnInstances(modpacks: Modpack[], uuid: string | null) {
+  const mine = getMySource();
+  if (!mine || !uuid) return;
+  const ids = modpacks.filter((mp) => sameRepo(mp.repoUrl, mine.repoUrl)).map((mp) => mp.id);
+  if (ids.length === 0) return;
+  claimMyInstances({ repoUrl: mine.repoUrl, adminToken: mine.adminToken, readToken: mine.readToken, uuid, modpackIds: ids }).catch((e) =>
+    console.warn("[instance-ownership] No se pudieron registrar tus instancias:", e)
+  );
+}
+
 function applyContentLocks(modpacks: Modpack[]) {
   const myRepo = getMySource()?.repoUrl;
   const locked = modpacks.filter((mp) => mp.installed && mp.lockContent && !sameRepo(mp.repoUrl, myRepo));
@@ -313,6 +329,7 @@ export const useModpacks = create<ModpackState>((set, get) => ({
       });
       sweepXrayContent(visible);
       applyContentLocks(visible);
+      claimOwnInstances(visible, uuid);
     } catch (e: any) {
       set({ loaded: true, loading: false, error: e?.message ?? "Error al cargar modpacks" });
     }

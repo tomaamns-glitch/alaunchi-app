@@ -87,6 +87,7 @@ export function InstanceMembersPanel({
             const name = nicknames[uuid] || e.username;
             const status = activity[uuid]?.status;
             const connected = e.online || (!!status && status !== "offline");
+            const away = connected && !!activity[uuid]?.away;
             const ago = e.lastSeen > 0 ? formatCompactAgo(e.lastSeen) : null;
             return (
               // Their banner behind the row, without their profile frame.
@@ -94,9 +95,9 @@ export function InstanceMembersPanel({
                 <div className="relative shrink-0">
                   <Head uuid={uuid} username={e.username} className="h-8 w-8 border border-white/10" />
                   <span
-                    title={connected ? "Conectado" : "Desconectado"}
+                    title={away ? "Ausente" : connected ? "Conectado" : "Desconectado"}
                     className={`absolute z-[4] -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-card ${
-                      connected ? "bg-green-500" : "bg-gray-500"
+                      away ? "bg-amber-400" : connected ? "bg-green-500" : "bg-gray-500"
                     }`}
                   />
                 </div>

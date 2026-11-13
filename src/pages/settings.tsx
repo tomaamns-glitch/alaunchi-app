@@ -46,7 +46,7 @@ import {
   playNotificationSound,
   type NotificationSoundId,
 } from "@/lib/notification-sound";
-import { AdaptiveColorPanel, AnimatedBackgroundPanel, GlassPanel, NotificationSoundPanel, Panel, ThemePanel } from "@/components/launcher-appearance";
+import { Panel } from "@/components/launcher-appearance";
 import { cn } from "@/lib/utils";
 
 type SectionId = "storage" | "personalization" | "developer" | "account";
@@ -241,14 +241,9 @@ function StorageSection() {
 function PersonalizationSection() {
   return (
     <>
-    <ThemePanel />
-    <GlassPanel />
-    <AdaptiveColorPanel />
-    <AnimatedBackgroundPanel />
     <BackgroundPanel />
     <DiscordPanel />
     <IngameOverlayPanel />
-    <NotificationSoundPanel />
     <TourPanel />
     </>
   );

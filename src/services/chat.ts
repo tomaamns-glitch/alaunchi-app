@@ -2,6 +2,7 @@ import { ref, set, update, push, remove, onValue, runTransaction, serverTimestam
 import { rtdb } from "@/lib/firebase";
 import type { SharedContent } from "./content-share";
 import type { RecipeEntry } from "./public-profile";
+import { BlockedChatError, isBlockedBetween } from "./blocks";
 
 export interface ChatMessage {
   /** RTDB push key — set by subscribeMessages. */
@@ -127,6 +128,11 @@ async function pushMessageAndUpdateIndex(
   body: { text: string; content?: SharedContent; server?: SharedServer; instance?: SharedInstance; carouselInstanceId?: string },
   indexPreview: string
 ): Promise<void> {
+  // Every kind of message (text, files, servers, instances — from the chat,
+  // the overlay or "Enviar a un amigo") goes through here: one check covers
+  // them all. Read fresh, not from the live lists, so a block made a moment
+  // ago on the other PC already counts.
+  if (await isBlockedBetween(myUuid, otherUuid)) throw new BlockedChatError();
   const conversationId = getConversationId(myUuid, otherUuid);
   const timestamp = Date.now();
 

@@ -4,6 +4,8 @@ import { subscribeMyInvites, clearInvite, type Invite } from "@/services/invites
 import { BannedFromInstanceError } from "@/services/access-codes";
 import { joinWithCode } from "@/lib/join-instance";
 import { notifyUser } from "@/lib/notify";
+import { useChatHeads } from "@/hooks/use-chat-heads";
+import { isBlockedEitherWay } from "@/hooks/use-blocks";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -61,7 +63,13 @@ export const useInvites = create<InvitesState>((set, get) => ({
       if (!first) {
         for (const inv of Object.values(invites)) {
           const prev = before[inv.key];
-          if (!prev || prev.sentAt !== inv.sentAt) {
+          // A muted person's invitation still arrives (bubble, Instancias
+          // online) — just without the sound and notification.
+          if (
+            (!prev || prev.sentAt !== inv.sentAt) &&
+            !useChatHeads.getState().mutedUuids.has(inv.fromUuid) &&
+            !isBlockedEitherWay(inv.fromUuid)
+          ) {
             notifyUser({
               title: "Invitación a una instancia",
               body: `${inv.fromUsername} te ha invitado a ${inv.modpackName}`,

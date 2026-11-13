@@ -631,22 +631,42 @@ export type CrashFix =
   | { kind: "clear-fabric-cache"; label: string }
   | { kind: "reset-config"; label: string; path: string }
   | { kind: "set-ram"; label: string; mb: number }
-  | { kind: "reinstall-java"; label: string; major: number };
+  | { kind: "reinstall-java"; label: string; major: number }
+  | { kind: "disable-shaders"; label: string }
+  | { kind: "set-toml-option"; label: string; path: string; key: string; value: boolean }
+  | { kind: "restore-level-dat"; label: string; world: string }
+  /** Diagnosis sends modId/slug; the renderer resolves the Modrinth file (url/filename/sha1) before applying. */
+  | {
+      kind: "install-mod";
+      label: string;
+      modId: string;
+      name: string;
+      slug: string;
+      mcVersion: string;
+      loader: string;
+      url?: string;
+      filename?: string;
+      sha1?: string;
+    };
 
 export interface CrashFinding {
   key: string;
   /** critical = seguro que rompe el juego · likely / possible = sospecha · info */
   severity: "critical" | "likely" | "possible" | "info";
-  category: "files" | "mods" | "memory" | "java" | "loader" | "config" | "graphics" | "other";
+  category: "files" | "mods" | "memory" | "java" | "loader" | "config" | "graphics" | "world" | "system" | "other";
   title: string;
   detail: string;
   fix: CrashFix | null;
+  /** A second way out (e.g. fix = install the missing library, altFix = turn off the mod that needs it). */
+  altFix?: CrashFix | null;
   /** A missing dependency: what to look for on Modrinth. */
   searchQuery?: string;
 }
 
 export interface CrashDiagnosis {
   findings: CrashFinding[];
+  /** Crash reports in a row (newest first) with the same description. */
+  repeats?: number;
   lastCrashAt: number | null;
   crashReport: string | null;
   /** The crash report's "Description:" line. */

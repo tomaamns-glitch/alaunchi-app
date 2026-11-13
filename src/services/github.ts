@@ -1137,3 +1137,38 @@ export async function verifyCreatorRepo(
     warnings,
   };
 }
+
+/** The file that proves who owns a repo for ALaunchi's backend (phase 2 of the
+ *  Firebase Auth migration — see functions/src/access.ts claimInstances): the
+ *  Minecraft uuids of its creators. Only someone with write access can add
+ *  theirs, so it's proof without the admin token ever leaving this PC. */
+export const REPO_OWNER_FILE = "alaunchi-owner.json";
+
+/** Adds `uuid` to the repo's owner file (creating it), unless it's already there. */
+export async function ensureRepoOwnerFile(repoUrl: string, adminToken: string, uuid: string): Promise<void> {
+  const parsed = parseRepo(repoUrl);
+  if (!parsed) throw new Error("Repositorio no válido.");
+  const { owner, repo } = parsed;
+  const current = await getFileContents(owner, repo, REPO_OWNER_FILE, adminToken);
+  let owners: string[] = [];
+  if (current) {
+    try {
+      const json = JSON.parse(current.content) as { owners?: unknown };
+      if (Array.isArray(json.owners)) owners = json.owners.filter((o): o is string => typeof o === "string");
+    } catch {
+      /* unreadable: rewritten below */
+    }
+  }
+  const norm = (u: string) => u.replace(/-/g, "").toLowerCase();
+  if (owners.some((o) => norm(o) === norm(uuid))) return;
+  owners.push(uuid);
+  await putFileContents(
+    owner,
+    repo,
+    REPO_OWNER_FILE,
+    JSON.stringify({ owners }, null, 2) + "\n",
+    "ALaunchi: confirmar propietario del repositorio",
+    adminToken,
+    current?.sha
+  );
+}

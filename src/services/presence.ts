@@ -17,6 +17,8 @@ export interface PresenceEntry {
   playing?: boolean;
   /** Same entries: the instance they're playing, when `playing`. */
   playingName?: string;
+  /** Online but set themselves "Ausente" (user-activity.ts). */
+  away?: boolean;
 }
 
 /** Marks a player online for a modpack, and arms a server-side fallback (via

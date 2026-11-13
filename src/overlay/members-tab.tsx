@@ -28,7 +28,12 @@ function MemberRow({ uuid, entry, name, isMe }: { uuid: string; entry: PresenceE
 
   return (
     <ProfileBannerRow uuid={uuid} className="h-14" onClick={isMe ? undefined : () => openChat(uuid, entry.username)} ariaLabel={`Hablar con ${name}`}>
-      <PlayerHead uuid={uuid} name={name} size={32} status={entry.online ? "playing" : appOpen ? "online" : "offline"} />
+      <PlayerHead
+        uuid={uuid}
+        name={name}
+        size={32}
+        status={appOpen && activity?.away ? "away" : entry.online ? "playing" : appOpen ? "online" : "offline"}
+      />
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13px] font-semibold text-white drop-shadow">
           {name}

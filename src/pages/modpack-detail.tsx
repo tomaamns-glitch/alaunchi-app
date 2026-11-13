@@ -385,10 +385,9 @@ function MissingDepsWarning({
 /** One row of the installed-content list. Memoized (with stable callbacks from
  *  the page) so a 200-mod list doesn't re-render on every unrelated state change
  *  of the page. The icon/title only become framer-motion `layoutId` elements
- *  while hovered (or when `sharedLayout`): with every row carrying them, framer
- *  measured hundreds of nodes on each mount/update and switching tabs froze the
- *  UI for seconds. Hover is enough for the open-panel shared transition, since
- *  the row is always hovered when clicked. */
+ *  once the row is pressed (or when `sharedLayout`): with every row carrying
+ *  them, framer measured hundreds of nodes on each mount/update and switching
+ *  tabs froze the UI for seconds. Not on hover either — see `armed`. */
 const SCHEMATIC_EXT = /\.(litematic|schematic|schem|nbt)$/i;
 
 const SCHEMATIC_TYPE: Record<string, string> = {
@@ -494,24 +493,31 @@ const InstalledContentRow = memo(function InstalledContentRow({
   selecting,
   onMarkToggle,
 }: InstalledContentRowProps) {
-  const [hovered, setHovered] = useState(false);
-  const shared = sharedLayout || hovered;
-  const showCheck = hovered || marked || selecting;
+  // Shared-layout ids only from the moment the row is pressed (the click that
+  // opens the mod panel always starts with a press). It used to be on hover,
+  // but scrolling the list with the wheel moves rows under a still cursor:
+  // every row crossing it re-rendered, mounted framer layout nodes (layout
+  // reads + a projection pass) and sometimes flew its icon in from where it
+  // was before the scroll — that was the jank while scrolling long lists.
+  const [armed, setArmed] = useState(false);
+  const shared = sharedLayout || armed;
+  // The mark check shows on hover through CSS (group-hover), no state.
+  const showCheck = marked || selecting;
   const CategoryIcon = CATEGORY_META[category].icon;
   const isDependency = !!dependentTitles?.length;
   return (
     <ContentContextMenu onSave={() => onSave(category, path)} onShare={() => onShare(category, path)}>
     <div
       data-flip-key={path}
-      onPointerEnter={() => setHovered(true)}
-      onPointerLeave={() => setHovered(false)}
-      className="flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full [content-visibility:auto] [contain-intrinsic-size:auto_66px] relative border border-accent/15 hover:border-accent/35 transition-colors before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:content-[''] before:bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.55),transparent)]"
+      onPointerDown={() => setArmed(true)}
+      onPointerLeave={armed ? () => setArmed(false) : undefined}
+      className="group/row flex items-center gap-3 px-3 py-2.5 text-xs bg-card/50 rounded-md w-full [content-visibility:auto] [contain-intrinsic-size:auto_66px] relative border border-accent/15 hover:border-accent/35 transition-colors before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:content-[''] before:bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.55),transparent)]"
     >
       {/* The mark check: no width while hidden (the -mr cancels the row's gap),
           so on hover the icon and name slide right to make room for it. */}
       <div
         className={`shrink-0 flex items-center overflow-hidden transition-[width,margin,opacity] duration-200 ease-out ${
-          showCheck ? "w-4 opacity-100" : "w-0 -mr-3 opacity-0"
+          showCheck ? "w-4 opacity-100" : "w-0 -mr-3 opacity-0 group-hover/row:w-4 group-hover/row:mr-0 group-hover/row:opacity-100"
         }`}
       >
         <Checkbox
@@ -899,6 +905,11 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   // the card's top). Scrolled down in it → Contenido/Capturas fold away and the
   // tabs band gets shorter; back at the very top they come back.
   const [contentScrolled, setContentScrolled] = useState(false);
+  // Mirrors of the two states read on every scroll / pointer move: setState is
+  // only called when the value actually flips, so scrolling doesn't queue a
+  // render of this (huge) component per event.
+  const contentScrolledRef = useRef(false);
+  const pointerNearBandRef = useRef(false);
   // …and 2 s after that, the sort/filter row folds away too (back at the top it returns).
   const [sortRowHidden, setSortRowHidden] = useState(false);
   // The cursor over the band or just under it (24px) brings the folded row back.
@@ -3329,7 +3340,8 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
           <AnimatePresence>
             {contentScrolled && (
               <Hint label="Volver arriba" key="back-to-top">
-                <motion.button
+                <motion.button
+
                   type="button"
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -3348,14 +3360,29 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
             ref={cardScrollRef}
             className="bg-gray-500/10 border border-accent/15 rounded-md flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
             onPointerMove={(e) => {
+              // Only matters while the sort row is folded away.
+              if (!sortRowHidden && !pointerNearBandRef.current) return;
               const band = tabsElRef.current?.getBoundingClientRect();
-              setPointerNearBand(!!band && e.clientY >= band.top && e.clientY <= band.bottom + 24);
+              const near = !!band && e.clientY >= band.top && e.clientY <= band.bottom + 24;
+              if (near !== pointerNearBandRef.current) {
+                pointerNearBandRef.current = near;
+                setPointerNearBand(near);
+              }
             }}
-            onPointerLeave={() => setPointerNearBand(false)}
+            onPointerLeave={() => {
+              if (!pointerNearBandRef.current) return;
+              pointerNearBandRef.current = false;
+              setPointerNearBand(false);
+            }}
             // Hides past 16px, shows again only at the very top (no flicker around one threshold).
             onScroll={(e) => {
               const top = e.currentTarget.scrollTop;
-              setContentScrolled((was) => (was ? top > 0 : top > 16));
+              const was = contentScrolledRef.current;
+              const next = was ? top > 0 : top > 16;
+              if (next !== was) {
+                contentScrolledRef.current = next;
+                setContentScrolled(next);
+              }
             }}
           >
             {/* Thin accent line along the top, like the emote viewer dialog. Sticky
@@ -4032,13 +4059,13 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                             const busy = busyPaths.has(busyKey);
                             const actionable = !locked && !upToDate;
                             return (
-                              <div key={hit.projectId} className="flex items-center gap-4 p-4 bg-card/50 rounded-md w-full relative border border-accent/15 hover:border-accent/35 transition-colors before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:content-[''] before:bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.55),transparent)]">
+                              <div key={hit.projectId} className="flex items-center gap-4 p-4 bg-card/50 rounded-md w-full [content-visibility:auto] [contain-intrinsic-size:auto_96px] relative border border-accent/15 hover:border-accent/35 transition-colors before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:content-[''] before:bg-[linear-gradient(to_right,transparent,hsl(var(--accent)/0.55),transparent)]">
                                 <div
                                   onClick={() => openModFromSearch(hit, installed)}
                                   className="flex items-center gap-4 min-w-0 flex-1 cursor-pointer"
                                 >
                                   {hit.iconUrl ? (
-                                    <img src={hit.iconUrl} alt="" className="h-14 w-14 rounded shrink-0 object-cover bg-black/30" />
+                                    <img src={hit.iconUrl} alt="" loading="lazy" decoding="async" className="h-14 w-14 rounded shrink-0 object-cover bg-black/30" />
                                   ) : (
                                     <div className="h-14 w-14 rounded shrink-0 bg-black/30 flex items-center justify-center">
                                       <CategoryIcon className="h-6 w-6 text-muted-foreground" />
@@ -4137,7 +4164,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                         <button
                           type="button"
                           onClick={() => setSelectedEmote(emote)}
-                          className="group relative overflow-hidden flex flex-col items-center gap-2 p-3 rounded-md bg-gray-500/10 border border-accent/15 hover:bg-accent/10 hover:border-accent/40 transition-colors text-left"
+                          className="group relative overflow-hidden flex flex-col items-center gap-2 p-3 rounded-md [content-visibility:auto] [contain-intrinsic-height:auto_130px] bg-gray-500/10 border border-accent/15 hover:bg-accent/10 hover:border-accent/40 transition-colors text-left"
                         >
                           {/* Thin accent line along the top, like the emote viewer dialog. */}
                           <span
@@ -4299,7 +4326,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                   ) : (
                     <div className="grid grid-cols-4 gap-3">
                       {screenshots.map((shot) => (
-                        <div key={shot.fileName} className="group relative">
+                        <div key={shot.fileName} className="group relative [content-visibility:auto] [contain-intrinsic-height:auto_160px]">
                         <DropdownMenu>
                           <Hint label="Opciones de la captura">
                             <DropdownMenuTrigger asChild>

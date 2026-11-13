@@ -146,6 +146,53 @@ export async function renderHeadIcon(skinDataUrl: string, size = 64): Promise<st
   return canvas.toDataURL("image/png");
 }
 
+const bodyIconCache = new Map<string, Promise<string>>();
+let bodyIconQueue: Promise<unknown> = Promise.resolve();
+
+/** A small full-body figure of a skin (slightly turned, standing), rendered once
+ *  with skinview3d on an offscreen canvas and returned as a PNG data URL.
+ *  Renders run one at a time and the viewer is disposed right after, so a grid of
+ *  saved skins never holds more than one WebGL context. Cached per skin+variant. */
+export function renderBodyIcon(
+  skinDataUrl: string,
+  variant: "slim" | "classic" | "auto-detect" = "auto-detect",
+  width = 72,
+  height = 108
+): Promise<string> {
+  const key = `${variant}|${width}x${height}|${skinDataUrl}`;
+  let p = bodyIconCache.get(key);
+  if (!p) {
+    p = bodyIconQueue.then(async () => {
+      const { SkinViewer } = await import("skinview3d");
+      // Double resolution for crisp edges when the img is shown at 1x.
+      const canvas = document.createElement("canvas");
+      const viewer = new SkinViewer({
+        canvas,
+        width: width * 2,
+        height: height * 2,
+        preserveDrawingBuffer: true,
+        renderPaused: true,
+      });
+      try {
+        // skinview3d calls the non-slim model "default" where the app says "classic".
+        await viewer.loadSkin(skinDataUrl, { model: variant === "classic" ? "default" : variant });
+        viewer.animation = null;
+        viewer.autoRotate = false;
+        viewer.zoom = 0.95;
+        viewer.playerObject.rotation.y = 0.5;
+        viewer.render();
+        return canvas.toDataURL("image/png");
+      } finally {
+        viewer.dispose();
+      }
+    });
+    bodyIconQueue = p.catch(() => {});
+    p.catch(() => bodyIconCache.delete(key));
+    bodyIconCache.set(key, p);
+  }
+  return p;
+}
+
 /** Crops the outer (back-facing, the one with the design) 10×16 face out of a
  *  cape texture. Cape textures are 64×32 or an HD multiple of it, so the crop
  *  is scaled by width/64; `scale` is output pixels per texture pixel. */

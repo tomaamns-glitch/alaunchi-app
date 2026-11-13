@@ -1,6 +1,9 @@
-import { ref, get, set, update, remove, serverTimestamp, onValue, type Unsubscribe } from "firebase/database";
-import { rtdb } from "@/lib/firebase";
-import { canonicalRepoUrl, repoKey } from "@/lib/sources";
+import { ref, get, set, remove, serverTimestamp, onValue, type Unsubscribe } from "firebase/database";
+import { httpsCallable } from "firebase/functions";
+import { rtdb, functions } from "@/lib/firebase";
+import { canonicalRepoUrl, getMySource, repoKey, sameRepo } from "@/lib/sources";
+import { claimMyInstances } from "@/services/instance-ownership";
+import { ensureFirebaseSession } from "@/services/firebase-session";
 
 // Access codes (v2) — how a player reaches ONE online instance in someone
 // else's repo. There's no default repo: a code is the only way in, so it has
@@ -159,20 +162,40 @@ async function resolveEntry(code: string, raw: unknown): Promise<RedeemedAccess 
 }
 
 // --- creator side -------------------------------------------------------------
+// Codes are written by the publishAccessCode Cloud Function (functions/src/
+// access.ts), which only accepts the instance's creator — recorded by
+// claimInstances (services/instance-ownership.ts) from the repo's owner file.
 
-/** Creates this instance's code. `readToken` only for a private repo. */
+/** Makes sure Firebase knows this player created these instances of their repo. */
+async function ensureCreatorClaim(repoUrl: string, modpackIds: string[], creatorUuid: string): Promise<void> {
+  const mine = getMySource();
+  if (!mine || !sameRepo(mine.repoUrl, repoUrl)) throw new Error("Solo el creador del repositorio puede gestionar sus códigos.");
+  await claimMyInstances({
+    repoUrl: mine.repoUrl,
+    adminToken: mine.adminToken,
+    readToken: mine.readToken,
+    uuid: creatorUuid,
+    modpackIds,
+  });
+}
+
+async function publishCode(code: string, entry: CodeEntry): Promise<void> {
+  const publish = httpsCallable<{ code: string; entry: string }, { ok: boolean }>(functions, "publishAccessCode");
+  await publish({ code, entry: JSON.stringify(entry) });
+}
+
+/** Creates this instance's code (replacing — and invalidating — any previous
+ *  one). `readToken` only for a private repo. */
 export async function createAccessCode(
   repoUrl: string,
   modpackId: string,
   creatorUuid: string,
   readToken?: string
 ): Promise<string> {
+  await ensureCreatorClaim(repoUrl, [modpackId], creatorUuid);
   const code = generateCode();
   const entry = await buildEntry(code, repoUrl, modpackId, creatorUuid, readToken);
-  await Promise.all([
-    set(ref(rtdb, `codeIndex/${code}`), JSON.stringify(entry)),
-    set(ref(rtdb, `modpackCodes/${grantKey(repoUrl, modpackId)}`), code),
-  ]);
+  await publishCode(code, entry);
   return code;
 }
 
@@ -185,11 +208,8 @@ export async function regenerateAccessCode(
   creatorUuid: string,
   readToken?: string
 ): Promise<string> {
-  const key = grantKey(repoUrl, modpackId);
-  const oldCode = (await get(ref(rtdb, `modpackCodes/${key}`))).val() as string | null;
-  const newCode = await createAccessCode(repoUrl, modpackId, creatorUuid, readToken);
-  if (oldCode && oldCode !== newCode) await remove(ref(rtdb, `codeIndex/${oldCode}`));
-  return newCode;
+  // publishAccessCode drops the old code from codeIndex itself.
+  return createAccessCode(repoUrl, modpackId, creatorUuid, readToken);
 }
 
 export async function getAccessCode(repoUrl: string, modpackId: string): Promise<string | null> {
@@ -205,13 +225,15 @@ export async function reencryptAccessCodes(
   creatorUuid: string,
   readToken?: string
 ): Promise<void> {
+  const withCodes = (
+    await Promise.all(modpackIds.map(async (modpackId) => ({ modpackId, code: await getAccessCode(repoUrl, modpackId) })))
+  ).filter((x): x is { modpackId: string; code: string } => !!x.code);
+  if (withCodes.length === 0) return;
+  await ensureCreatorClaim(repoUrl, withCodes.map((x) => x.modpackId), creatorUuid);
   await Promise.all(
-    modpackIds.map(async (modpackId) => {
-      const code = await getAccessCode(repoUrl, modpackId);
-      if (!code) return;
-      const entry = await buildEntry(code, repoUrl, modpackId, creatorUuid, readToken);
-      await set(ref(rtdb, `codeIndex/${code}`), JSON.stringify(entry));
-    })
+    withCodes.map(async ({ modpackId, code }) =>
+      publishCode(code, await buildEntry(code, repoUrl, modpackId, creatorUuid, readToken))
+    )
   );
 }
 
@@ -235,19 +257,30 @@ export function subscribeAccessGrants(
 
 /** Resolves a code and records the grant. Returns null (not a throw) for an
  *  unknown code — the dialog shows that inline. */
-export async function redeemAccessCode(code: string, uuid: string, username: string): Promise<RedeemedAccess | null> {
+export async function redeemAccessCode(code: string, _uuid: string, username: string): Promise<RedeemedAccess | null> {
   const normalized = normalizeCode(code);
   if (!normalized) return null;
-  const raw = (await get(ref(rtdb, `codeIndex/${normalized}`))).val();
-  const access = await resolveEntry(normalized, raw);
-  if (!access) return null;
-  const key = grantKey(access.repoUrl, access.modpackId);
-  if ((await get(ref(rtdb, `modpackBans/${key}/${uuid}`))).exists()) throw new BannedFromInstanceError();
-  await update(ref(rtdb), {
-    [`modpackGrants/${key}/${uuid}`]: { username, grantedAt: serverTimestamp() },
-    [`userAccess/${uuid}/${key}`]: true,
-  });
-  return access;
+  // The redeemAccessCode Cloud Function checks the code and bans and records
+  // the grant (clients won't be able to write userAccess themselves); the read
+  // token is decrypted here, with the code.
+  await ensureFirebaseSession();
+  const redeem = httpsCallable<{ code: string; username: string }, { found: boolean; legacy?: boolean; entry?: string }>(
+    functions,
+    "redeemAccessCode"
+  );
+  let data: { found: boolean; legacy?: boolean; entry?: string };
+  try {
+    data = (await redeem({ code: normalized, username })).data;
+  } catch (e: any) {
+    if (e?.details?.banned) throw new BannedFromInstanceError();
+    if (e?.code === "functions/unauthenticated") {
+      throw new Error("No se pudo iniciar sesión en el servidor de ALaunchi. Inténtalo de nuevo en un momento.");
+    }
+    throw e;
+  }
+  if (!data.found) return null;
+  if (data.legacy) throw new Error("Este código es del sistema antiguo. Pide al creador un código nuevo.");
+  return resolveEntry(normalized, data.entry);
 }
 
 /** Re-reads a code already redeemed, for when its repo's read token stopped

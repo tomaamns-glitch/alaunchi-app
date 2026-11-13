@@ -233,6 +233,7 @@ export function ChatContactRail({
               uuid={uuid}
               username={entry.otherUsername}
               online={!!activity[uuid] && activity[uuid].status !== "offline"}
+              away={!!activity[uuid]?.away}
               size={28}
               active={uuid === selectedUuid}
               muted={mutedUuids.has(uuid)}
@@ -371,6 +372,7 @@ function ContactHead({
   uuid,
   username,
   online,
+  away = false,
   size,
   active = false,
   muted = false,
@@ -378,6 +380,8 @@ function ContactHead({
   uuid: string;
   username: string;
   online?: boolean;
+  /** Online but "Ausente": amber dot. */
+  away?: boolean;
   size: number;
   /** The open conversation — becoming it replays the icon decoration. */
   active?: boolean;
@@ -399,7 +403,7 @@ function ContactHead({
         </Avatar>
       </PlayerDecoratedIcon>
       {online && (
-        <span className="absolute z-[4] -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-400 border border-card" />
+        <span className={`absolute z-[4] -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ${away ? "bg-amber-400" : "bg-green-400"} border border-card`} />
       )}
       {muted && (
         <span className="absolute z-[4] -bottom-1 -left-1 h-3.5 w-3.5 flex items-center justify-center rounded-full bg-card border border-white/10 text-muted-foreground">

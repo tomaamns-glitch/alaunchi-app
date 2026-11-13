@@ -16,6 +16,7 @@ import { subscribeProfile, visibleOnlineInstances, type PublicProfileSnapshot, t
 import { DEFAULT_PROFILE_BANNER } from "@/services/banner";
 import { removeFriend, sendFriendRequest, subscribeFriends, subscribeSentRequests } from "@/services/friends";
 import { useChatHeads } from "@/hooks/use-chat-heads";
+import { useBlocks } from "@/hooks/use-blocks";
 import { InstallFavoriteDialog } from "@/components/install-favorite-dialog";
 import { installOnlineInstance } from "@/lib/install-online-instance";
 import { installFromRecipe, type RecipeInstallResult } from "@/lib/instance-recipe";
@@ -220,6 +221,8 @@ function PrivateInstanceCard({ instance }: { instance: PublicInstanceSummary }) 
 export default function PublicProfile() {
   const params = useParams<{ uuid: string }>();
   const targetUuid = params.uuid;
+  // Blocked by them (services/blocks.ts): no access to their profile.
+  const blockedMe = useBlocks((s) => !!targetUuid && s.blockedBy.has(targetUuid));
   const { isAuthenticated, uuid: myUuid, username: myUsername } = useAuth();
   const [, setLocation] = useLocation();
   const { modpacks, loadModpacks } = useModpacks();
@@ -258,6 +261,14 @@ export default function PublicProfile() {
   }, [myUuid, targetUuid]);
 
   if (!isAuthenticated || !targetUuid || !myUuid || !myUsername) return null;
+
+  if (blockedMe) {
+    return (
+      <div className="min-h-full flex items-center justify-center">
+        <p className="text-sm text-muted-foreground">Este jugador no está disponible.</p>
+      </div>
+    );
+  }
 
   if (profile === undefined) {
     return (

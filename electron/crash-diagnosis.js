@@ -453,6 +453,20 @@ async function newestFile(dir, re, sinceMs) {
   return best;
 }
 
+/** Files in `dir` matching `re`, newest first. */
+async function listFiles(dir, re) {
+  const out = [];
+  try {
+    for (const name of await fs.readdir(dir)) {
+      if (!re.test(name)) continue;
+      const full = path.join(dir, name);
+      const st = await fs.stat(full).catch(() => null);
+      if (st?.isFile()) out.push({ path: full, mtimeMs: st.mtimeMs });
+    }
+  } catch {}
+  return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
 /** Did the session that started at `startedAt` end in a crash? */
 async function detectCrash({ instanceDir, startedAt }) {
   const since = (startedAt || 0) - 2000;
@@ -460,6 +474,8 @@ async function detectCrash({ instanceDir, startedAt }) {
   if (report) {
     const text = await readTail(report.path, 64 * 1024);
     const description = /^Description:\s*(.+)$/m.exec(text)?.[1]?.trim() || null;
+    // F3 + C held down: the player closed it on purpose. Not a crash, not a clean exit either.
+    if (/Manually triggered debug crash/i.test(description || "")) return { crashed: false, manual: true };
     return { crashed: true, reason: "Minecraft generó un informe de error", description, file: report.path };
   }
   const jvm = await newestFile(instanceDir, /^hs_err_pid\d+\.log$/i, since);
@@ -482,6 +498,97 @@ const IGNORED_FRAME_PREFIXES = [
   "org.lwjgl.", "io.netty.", "com.google.", "org.apache.", "it.unimi.", "oshi.", "org.slf4j.",
   "org.objectweb.", "com.llamalad7.mixinextras.", "org.joml.", "com.electronwill.", "org.openjdk.",
   "kotlin.", "kotlinx.", "scala.", "MC-BOOTSTRAP", "knot//", "TRANSFORMER/", "SECURE-BOOTSTRAP/",
+];
+
+// Libraries other mods lean on, by the packages their classes live in. When a
+// class from one of these is missing, the error names the class, not the mod:
+// this turns "NoClassDefFoundError: dev/architectury/..." into "falta Architectury"
+// and gives the Modrinth slug to install it. `forgeSlug` = the port Forge/NeoForge use.
+const KNOWN_LIBS = [
+  { prefixes: ["dev/architectury/"], id: "architectury", name: "Architectury API", slug: "architectury-api" },
+  { prefixes: ["me/shedaniel/clothconfig2/", "me/shedaniel/autoconfig/", "me/shedaniel/cloth/"], id: "cloth-config", name: "Cloth Config API", slug: "cloth-config" },
+  { prefixes: ["software/bernie/geckolib"], id: "geckolib", name: "GeckoLib", slug: "geckolib" },
+  { prefixes: ["net/fabricmc/fabric/"], id: "fabric-api", name: "Fabric API", slug: "fabric-api", forgeSlug: "forgified-fabric-api" },
+  { prefixes: ["net/fabricmc/language/kotlin/"], id: "fabric-language-kotlin", name: "Fabric Language Kotlin", slug: "fabric-language-kotlin" },
+  { prefixes: ["kotlin/", "kotlinx/"], id: "kotlin", name: "Kotlin", slug: "fabric-language-kotlin", forgeSlug: "kotlin-for-forge", modId: { fabric: "fabric-language-kotlin", quilt: "fabric-language-kotlin", forge: "kotlinforforge", neoforge: "kotlinforforge" } },
+  { prefixes: ["thedarkcolour/kotlinforforge/"], id: "kotlinforforge", name: "Kotlin for Forge", slug: "kotlin-for-forge" },
+  { prefixes: ["top/theillusivec4/curios/"], id: "curios", name: "Curios API", slug: "curios" },
+  { prefixes: ["dev/emi/trinkets/"], id: "trinkets", name: "Trinkets", slug: "trinkets" },
+  { prefixes: ["net/blay09/mods/balm/"], id: "balm", name: "Balm", slug: "balm" },
+  { prefixes: ["fuzs/puzzleslib/"], id: "puzzleslib", name: "Puzzles Lib", slug: "puzzles-lib" },
+  { prefixes: ["fuzs/forgeconfigapiport/", "net/minecraftforge/fml/config/"], id: "forgeconfigapiport", name: "Forge Config API Port", slug: "forge-config-api-port", onlyFabric: true },
+  { prefixes: ["vazkii/patchouli/"], id: "patchouli", name: "Patchouli", slug: "patchouli" },
+  { prefixes: ["io/wispforest/owo/"], id: "owo", name: "oωo", slug: "owo-lib" },
+  { prefixes: ["dev/isxander/yacl3/", "dev/isxander/yacl/"], id: "yet_another_config_lib_v3", name: "YetAnotherConfigLib", slug: "yacl" },
+  { prefixes: ["com/teamresourceful/resourcefullib/"], id: "resourcefullib", name: "Resourceful Lib", slug: "resourceful-lib" },
+  { prefixes: ["com/teamresourceful/resourcefulconfig/"], id: "resourcefulconfig", name: "Resourceful Config", slug: "resourceful-config" },
+  { prefixes: ["com/github/alexthe666/citadel/"], id: "citadel", name: "Citadel", slug: "citadel" },
+  { prefixes: ["terrablender/"], id: "terrablender", name: "TerraBlender", slug: "terrablender" },
+  { prefixes: ["mezz/jei/"], id: "jei", name: "Just Enough Items", slug: "jei" },
+  { prefixes: ["com/terraformersmc/modmenu/"], id: "modmenu", name: "Mod Menu", slug: "modmenu" },
+  { prefixes: ["dev/kosmx/playeranim/", "dev/kosmx/playerAnim/"], id: "playeranimator", name: "playerAnimator", slug: "playeranimator" },
+  { prefixes: ["com/mrcrayfish/framework/"], id: "framework", name: "Framework", slug: null },
+  { prefixes: ["net/mehvahdjukaar/moonlight/"], id: "moonlight", name: "Moonlight Lib", slug: "moonlight" },
+  { prefixes: ["dev/onyxstudios/cca/", "org/ladysnake/cca/"], id: "cardinal-components", name: "Cardinal Components API", slug: "cardinal-components-api" },
+  { prefixes: ["com/llamalad7/mixinextras/"], id: "mixinextras", name: "MixinExtras", slug: null },
+  { prefixes: ["net/darkhax/bookshelf/"], id: "bookshelf", name: "Bookshelf", slug: "bookshelf-lib" },
+  { prefixes: ["com/blamejared/crafttweaker/"], id: "crafttweaker", name: "CraftTweaker", slug: "crafttweaker" },
+  { prefixes: ["snownee/kiwi/"], id: "kiwi", name: "Kiwi", slug: "kiwi" },
+  { prefixes: ["me/fzzyhmstrs/fzzy_config/"], id: "fzzy_config", name: "Fzzy Config", slug: "fzzy-config" },
+  { prefixes: ["eu/midnightdust/lib/"], id: "midnightlib", name: "MidnightLib", slug: "midnightlib" },
+  { prefixes: ["com/natamus/collective/"], id: "collective", name: "Collective", slug: "collective" },
+  { prefixes: ["dev/latvian/mods/kubejs/"], id: "kubejs", name: "KubeJS", slug: "kubejs" },
+  { prefixes: ["dev/latvian/mods/rhino/"], id: "rhino", name: "Rhino", slug: "rhino" },
+  { prefixes: ["mod/azure/azurelib/"], id: "azurelib", name: "AzureLib", slug: "azurelib" },
+  { prefixes: ["team/lodestar/lodestone/"], id: "lodestone", name: "Lodestone", slug: "lodestone" },
+  { prefixes: ["me/lucko/fabric/api/permissions/"], id: "fabric-permissions-api-v0", name: "fabric-permissions-api", slug: "fabric-permissions-api" },
+  { prefixes: ["com/simibubi/create/"], id: "create", name: "Create", slug: "create" },
+  { prefixes: ["net/caffeinemc/mods/sodium/", "me/jellysquid/mods/sodium/"], id: "sodium", name: "Sodium", slug: "sodium" },
+  { prefixes: ["net/irisshaders/iris/", "net/coderbot/iris/"], id: "iris", name: "Iris", slug: "iris" },
+  { prefixes: ["org/embeddedt/embeddium/"], id: "embeddium", name: "Embeddium", slug: "embeddium" },
+];
+
+/** Known Modrinth slug for a mod id that isn't its own slug (deps declared in mods.toml / fabric.mod.json). */
+const SLUG_FOR_ID = {
+  architectury: "architectury-api",
+  "cloth-config": "cloth-config",
+  "cloth-config2": "cloth-config",
+  "fabric-api": "fabric-api",
+  fabric: "fabric-api",
+  puzzleslib: "puzzles-lib",
+  forgeconfigapiport: "forge-config-api-port",
+  owo: "owo-lib",
+  yet_another_config_lib_v3: "yacl",
+  yet_another_config_lib: "yacl",
+  resourcefullib: "resourceful-lib",
+  resourcefulconfig: "resourceful-config",
+  bookshelf: "bookshelf-lib",
+  kotlinforforge: "kotlin-for-forge",
+  "cardinal-components": "cardinal-components-api",
+  "cardinal-components-base": "cardinal-components-api",
+  supermartijn642corelib: "supermartijn642s-core-lib",
+  supermartijn642configlib: "supermartijn642s-config-lib",
+  fusion: "fusion-connected-textures",
+  sophisticatedcore: "sophisticated-core",
+  "fabric-language-kotlin": "fabric-language-kotlin",
+  "fabric-permissions-api-v0": "fabric-permissions-api",
+  prism: "prism-lib",
+  zeta: "zeta",
+  creativecore: "creativecore",
+  placebo: "placebo",
+  geckolib3: "geckolib",
+};
+
+/** Mods that are known not to work together. `drop` = the one we suggest turning off. */
+const KNOWN_CONFLICTS = [
+  { a: ["optifine", "optifabric"], b: ["sodium", "embeddium", "rubidium", "magnesium"], drop: "a", why: "OptiFine reescribe el mismo motor de render que {b}: juntos el juego se cierra al arrancar o al entrar al mundo. Quita OptiFine (con {b} + Iris/Oculus tienes shaders igual)." },
+  { a: ["optifine", "optifabric"], b: ["iris", "oculus"], drop: "a", why: "OptiFine y {b} cargan shaders cada uno a su manera y chocan. Usa solo {b}." },
+  { a: ["rubidium"], b: ["embeddium"], drop: "a", why: "Rubidium y Embeddium son el mismo mod (Embeddium es su continuación). Deja solo Embeddium." },
+  { a: ["magnesium"], b: ["embeddium", "rubidium"], drop: "a", why: "Magnesium es una versión antigua de {b}. Deja solo {b}." },
+  { a: ["phosphor"], b: ["starlight"], drop: "a", why: "Phosphor y Starlight reescriben el mismo motor de luz. Deja solo Starlight." },
+  { a: ["starlight"], b: ["moonrise"], drop: "a", why: "Moonrise ya incluye Starlight. Quita Starlight." },
+  { a: ["betterfps"], b: ["optifine", "sodium", "embeddium"], drop: "a", why: "BetterFPS es antiguo y choca con {b}." },
+  { a: ["oculus"], b: ["iris"], drop: "a", why: "Oculus es Iris para Forge: no hacen falta los dos. Deja el que corresponda a tu loader." },
 ];
 
 /** Takes every secret out of text meant to be copied/shared (hs_err files hold the whole command line). */
@@ -516,15 +623,34 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
 
   // 1) What the crash says ─────────────────────────────────────────────────
   onProgress("Leyendo el informe del error", 0.02);
-  const report = await newestFile(path.join(instanceDir, "crash-reports"), /^crash-.*\.txt$/i, 0);
+  // Recent crash reports, newest first, each with its "Description:" (near the top).
+  // F3 + C reports ("Manually triggered debug crash") are skipped: they say nothing.
+  const recentReports = [];
+  let manualCrash = false;
+  for (const r of (await listFiles(path.join(instanceDir, "crash-reports"), /^crash-.*\.txt$/i)).slice(0, 8)) {
+    const head = await readHead(r.path, 8192);
+    const description = /^Description:\s*(.+)$/m.exec(head)?.[1]?.trim() || "";
+    if (/Manually triggered debug crash/i.test(description)) {
+      if (!recentReports.length) manualCrash = true;
+      continue;
+    }
+    recentReports.push({ ...r, description });
+  }
+  const report = recentReports[0] || null;
   const jvm = await newestFile(instanceDir, /^hs_err_pid\d+\.log$/i, 0);
-  const reportText = report ? await readTail(report.path, 256 * 1024) : "";
+  // Forge/NeoForge write their messages with § colour codes; they'd break every pattern below.
+  const noColors = (t) => t.replace(/§[0-9a-fk-or]/gi, "");
+  const reportText = report ? noColors(await readTail(report.path, 256 * 1024)) : "";
   // hs_err files put what matters (reason, problematic frame, command line) at the top.
   const jvmText = jvm ? await readHead(jvm.path, 128 * 1024) : "";
-  const launchLog = await readTail(path.join(instanceDir, "launch.log"), 1024 * 1024);
-  const latestLog = await readTail(path.join(instanceDir, "logs", "latest.log"), 1024 * 1024);
+  const launchLog = noColors(await readTail(path.join(instanceDir, "launch.log"), 1024 * 1024));
+  const latestLog = noColors(await readTail(path.join(instanceDir, "logs", "latest.log"), 1024 * 1024));
   const logs = `${launchLog}\n${latestLog}`;
   const allText = `${reportText}\n${jvmText}\n${logs}`;
+  // The error itself: the crash report, or the logs from the first fatal line on. Mods log
+  // harmless ClassNotFoundExceptions while probing optional integrations — those don't count.
+  const fatalIdx = logs.search(/Exception in thread "main"|\/FATAL\]|Mod loading has failed|Failed to create mod instance|Could not execute entrypoint|Unreported exception thrown|#@!@# Game crashed|Exception in server tick loop|Encountered an unexpected exception/);
+  const errorText = `${reportText}\n${jvmText}\n${!reportText && fatalIdx >= 0 ? logs.slice(fatalIdx) : ""}`;
   const lastCrashAt = Math.max(report?.mtimeMs || 0, jvm?.mtimeMs || 0) || null;
 
   // 2) Mods: metadata, classes, mixin configs ───────────────────────────────
@@ -538,12 +664,14 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
     const file = path.join(modsDir, jars[i]);
     const rel = `mods/${jars[i]}`;
     const st = await fs.stat(file).catch(() => null);
+    // A copied file keeps its old mtime on Windows; its creation time is when it got here.
+    const changedAt = Math.max(st?.mtimeMs || 0, st?.birthtimeMs || 0);
     let zip = null;
     try {
       zip = await openZipFile(file);
-      mods.push({ file, rel, info: await readJarInfo(zip), mtimeMs: st?.mtimeMs || 0 });
+      mods.push({ file, rel, info: await readJarInfo(zip), mtimeMs: st?.mtimeMs || 0, changedAt });
     } catch (e) {
-      mods.push({ file, rel, info: null, mtimeMs: st?.mtimeMs || 0, damaged: e.message });
+      mods.push({ file, rel, info: null, mtimeMs: st?.mtimeMs || 0, changedAt, damaged: e.message });
     } finally {
       await zip?.close().catch(() => {});
     }
@@ -566,6 +694,15 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
     label: label || (list.length === 1 ? `Desactivar ${nameOf(list[0])}` : `Desactivar ${list.length} mods`),
     paths: list.map((m) => m.rel),
   });
+  // Download a missing mod from Modrinth (resolved by the renderer for this MC + loader;
+  // main checks the jar really is `modId` before putting it in mods/).
+  const canInstall = !!ctx.canInstallContent && !!mc && loader !== "vanilla";
+  const installFix = (modId, name, slug) =>
+    canInstall && modId && !LOADER_BUILTIN_IDS.has(modId)
+      ? { kind: "install-mod", label: `Instalar ${name || modId}`, modId, name: name || modId, slug: slug || SLUG_FOR_ID[modId] || modId, mcVersion: mc, loader }
+      : null;
+  /** Primary fix + the other one as altFix (install the missing piece, or turn off who asks for it). */
+  const withInstall = (install, disable) => (install ? { fix: install, altFix: disable } : { fix: disable });
 
   // Damaged jars.
   for (const m of mods.filter((x) => x.damaged)) {
@@ -653,8 +790,8 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
           severity: "critical",
           category: "mods",
           title: `${mi.name} necesita ${dep.id}, que no está instalado`,
-          detail: `Instala "${dep.id}" desde la pestaña Mods${dep.range && dep.range !== "*" ? ` (versión ${Array.isArray(dep.range) ? dep.range.join(" o ") : dep.range})` : ""} o desactiva ${mi.name}.`,
-          fix: disableFix([m], `Desactivar ${mi.name}`),
+          detail: `Instala "${dep.id}"${dep.range && dep.range !== "*" ? ` (versión ${Array.isArray(dep.range) ? dep.range.join(" o ") : dep.range})` : ""} o desactiva ${mi.name}.`,
+          ...withInstall(installFix(dep.id), disableFix([m], `Desactivar ${mi.name}`)),
           searchQuery: dep.id,
         });
       }
@@ -757,6 +894,41 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
     if (verb === "recommends") continue;
     const self = modForId(id);
     const missing = /which is missing/i.test(rest);
+    const selfFix = self ? disableFix([self], `Desactivar ${name}`) : null;
+    // The loader, Minecraft or Java themselves: there's nothing to install, the mod is for another setup.
+    if (verb === "requires" && (depId === "fabricloader" || depId === "quilt_loader")) {
+      add({
+        key: `loaderver:${id}`,
+        severity: "critical",
+        category: "loader",
+        title: `${name} necesita una versión más nueva de ${loader === "quilt" ? "Quilt" : "Fabric"} Loader`,
+        detail: `Pide ${what}. ${rest.replace(/!$/, "")}. Actualiza el loader de la instancia o usa una versión anterior de ${name}.`.replace(/\.\s*\./g, "."),
+        fix: selfFix,
+      });
+      continue;
+    }
+    if (verb === "requires" && depId === "minecraft") {
+      add({
+        key: self ? `mcver:${self.rel}` : `mcver:${id}`,
+        severity: "critical",
+        category: "mods",
+        title: `${name} no es para Minecraft ${mc}`,
+        detail: `Pide ${what} de Minecraft. Descarga la versión del mod para ${mc} o desactívalo.`,
+        fix: selfFix,
+      });
+      continue;
+    }
+    if (verb === "requires" && depId === "java") {
+      add({
+        key: `javamod:${id}`,
+        severity: "critical",
+        category: "java",
+        title: `${name} necesita otra versión de Java`,
+        detail: `Pide ${what} de Java. ${rest.replace(/!$/, "")}. Casi siempre significa que el mod es para una versión más nueva de Minecraft.`,
+        fix: selfFix,
+      });
+      continue;
+    }
     add({
       key: missing ? `missing:${id}:${depId}` : `fabric:${id}:${depId}`,
       severity: "critical",
@@ -767,7 +939,7 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
           ? `${name} necesita otra versión de ${depName}`
           : `${name} es incompatible con ${depName}`,
       detail: `Fabric: ${name} ${verb === "requires" ? "pide" : "no admite"} ${what} de ${depName}. ${rest.replace(/!$/, "")}`.trim(),
-      fix: self ? disableFix([self], `Desactivar ${name}`) : null,
+      ...(missing ? withInstall(installFix(depId, depName), selfFix) : { fix: verb === "requires" || !modForId(depId) ? selfFix : disableFix([modForId(depId)], `Desactivar ${depName}`), altFix: verb === "requires" ? undefined : selfFix }),
       searchQuery: missing ? depId : undefined,
     });
   }
@@ -777,6 +949,21 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
     const [, depId, by, range, actual] = fm;
     const self = modForId(by);
     const missing = /MISSING/i.test(actual);
+    if (depId === "forge" || depId === "neoforge" || depId === "minecraft") {
+      add({
+        key: depId === "minecraft" && self ? `mcver:${self.rel}` : `loaderver:${by}`,
+        severity: "critical",
+        category: depId === "minecraft" ? "mods" : "loader",
+        title: depId === "minecraft"
+          ? `${self ? nameOf(self) : by} no es para Minecraft ${mc}`
+          : `${self ? nameOf(self) : by} necesita otra versión de ${depId === "neoforge" ? "NeoForge" : "Forge"}`,
+        detail: depId === "minecraft"
+          ? `Pide Minecraft ${range}. Descarga la versión del mod para ${mc}.`
+          : `Pide ${depId === "neoforge" ? "NeoForge" : "Forge"} ${range} y la instancia tiene ${actual}. Actualiza el loader o usa otra versión del mod.`,
+        fix: self ? disableFix([self], `Desactivar ${nameOf(self)}`) : null,
+      });
+      continue;
+    }
     add({
       key: missing ? `missing:${by}:${depId}` : `forgever:${by}:${depId}`,
       severity: "critical",
@@ -785,13 +972,292 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
         ? `${self ? nameOf(self) : by} necesita ${depId}, que no está instalado`
         : `${self ? nameOf(self) : by} necesita otra versión de ${depId}`,
       detail: `Pide ${depId} ${range}${missing ? "" : ` y tienes la ${actual}`}.`,
-      fix: self ? disableFix([self], `Desactivar ${nameOf(self)}`) : null,
+      ...(missing ? withInstall(installFix(depId), self ? disableFix([self], `Desactivar ${nameOf(self)}`) : null) : { fix: self ? disableFix([self], `Desactivar ${nameOf(self)}`) : null }),
       searchQuery: missing ? depId : undefined,
     });
   }
 
+  // Forge's readable form of the same ("Mod X requires Y 1.2 or above / Currently, Y is not installed").
+  for (const fm of logs.concat("\n", reportText).matchAll(/Mod ([\w-]+) requires ([\w-]+) ([^\n]*?)\s*\n\s*Currently, \2 is ([^\n]+)/g)) {
+    const [, by, depId, range, current] = fm;
+    if (findings.some((f) => f.key === `missing:${by}:${depId}` || f.key === `forgever:${by}:${depId}` || f.key === `loaderver:${by}`)) continue;
+    const self = modForId(by);
+    const missing = /not installed|no está instalado/i.test(current);
+    if (LOADER_BUILTIN_IDS.has(depId)) continue; // already covered by the "Mod ID:" form when it's the loader
+    add({
+      key: missing ? `missing:${by}:${depId}` : `forgever:${by}:${depId}`,
+      severity: "critical",
+      category: "mods",
+      title: missing ? `${self ? nameOf(self) : by} necesita ${depId}, que no está instalado` : `${self ? nameOf(self) : by} necesita otra versión de ${depId}`,
+      detail: `Pide ${depId} ${range.trim()}${missing ? "" : ` y tienes ${current.trim()}`}.`,
+      ...(missing ? withInstall(installFix(depId), self ? disableFix([self]) : null) : { fix: self ? disableFix([self]) : null }),
+      searchQuery: missing ? depId : undefined,
+    });
+  }
+
+  // The first mod frame of the stack trace that starts at `idx` (who called the thing that failed).
+  const callerAt = (text, idx) => {
+    let chunk = text.slice(idx, idx + 12000);
+    const end = chunk.slice(1).search(/\n\s*\n|\nCaused by:/);
+    if (end > 0) chunk = chunk.slice(0, end + 1);
+    for (const f of chunk.matchAll(/^\s*at (?:[\w.-]+(?:@[\w.-]+)?\/{1,2})?([\w$.]+)\.[\w$<>]+\(/gm)) {
+      if (IGNORED_FRAME_PREFIXES.some((p) => f[1].startsWith(p))) continue;
+      const m = modForClass(f[1]);
+      if (m) return m;
+    }
+    // Code a Mixin merged into Minecraft's classes is named "$abc000$modid$method".
+    const mm = /\$[a-z]{3}\d{3}\$([a-z][a-z0-9_]{1,63})\$/.exec(chunk);
+    return mm ? modForId(mm[1]) : null;
+  };
+  const shortClass = (cls) => cls.replace(/\//g, ".").split(".").pop();
+  const isGameClass = (cls) => /^(net[./]minecraft|com[./]mojang)[./]/.test(cls);
+  const loaderName = loader === "neoforge" ? "NeoForge" : loader === "forge" ? "Forge" : loader === "quilt" ? "Quilt" : "Fabric";
+  const mcVersionFinding = (caller, what) =>
+    add({
+      key: `mcver:${caller.rel}`,
+      severity: "likely",
+      category: "mods",
+      title: `${nameOf(caller)} no es para Minecraft ${mc}`,
+      detail: `Usa ${what} de Minecraft que no existe en la ${mc}: el mod está hecho para otra versión. Busca la versión del mod para ${mc}.`,
+      fix: disableFix([caller]),
+    });
+
+  // A class that isn't there: a missing library, or a mod for another version of something.
+  let gameClassMissing = false;
+  const seenClasses = new Set();
+  for (const cm of errorText.matchAll(/(?:NoClassDefFoundError|ClassNotFoundException)(?::\s*|\s+)([\w$]+(?:[./][\w$]+)+)/g)) {
+    const cls = cm[1].replace(/\./g, "/");
+    if (seenClasses.has(cls) || /^(java|javax|jdk|sun)\//.test(cls)) continue;
+    seenClasses.add(cls);
+    const caller = callerAt(errorText, cm.index);
+    if (isGameClass(cls)) {
+      if (caller) mcVersionFinding(caller, `una parte (${shortClass(cls)})`);
+      else gameClassMissing = true;
+      continue;
+    }
+    const lib = KNOWN_LIBS.find((l) => l.prefixes.some((p) => cls.startsWith(p)) && (!l.onlyFabric || isFabricLike));
+    const libId = lib ? lib.modId?.[loader] || lib.id : null;
+    const owner = modForClass(cls) || (libId ? modForId(libId) : null);
+    if (lib && !owner && !(libId && provided.has(libId))) {
+      // slug null = not on Modrinth (CurseForge only, or always bundled inside other mods): no install button.
+      const slug = isForgeLike && lib.forgeSlug ? lib.forgeSlug : lib.slug;
+      add({
+        key: `missing:${caller?.info?.mods[0]?.id || "?"}:${libId}`,
+        severity: "critical",
+        category: "mods",
+        title: `${caller ? nameOf(caller) : "Un mod"} necesita ${lib.name}, que no está instalado`,
+        detail: `El juego buscó ${shortClass(cls)}, que es parte de ${lib.name}, y no está. Instálalo${caller ? ` o desactiva ${nameOf(caller)}` : ""}.`,
+        ...withInstall(slug ? installFix(libId, lib.name, slug) : null, caller ? disableFix([caller]) : null),
+        searchQuery: slug,
+      });
+    } else if (owner && caller && owner !== caller) {
+      add({
+        key: `apiver:${caller.rel}:${owner.rel}`,
+        severity: "likely",
+        category: "mods",
+        title: `${nameOf(caller)} necesita otra versión de ${nameOf(owner)}`,
+        detail: `Busca ${shortClass(cls)}, que tu versión de ${nameOf(owner)} no tiene. Actualiza ${nameOf(owner)} o usa una versión de ${nameOf(caller)} hecha para la que tienes.`,
+        fix: disableFix([caller]),
+      });
+    } else if (!owner && caller) {
+      add({
+        key: `missingcls:${caller.rel}`,
+        severity: "possible",
+        category: "mods",
+        title: `A ${nameOf(caller)} le falta algo para funcionar`,
+        detail: `Busca ${cls.replace(/\//g, ".")}, que no está en ningún mod instalado. Suele ser una librería que se instala aparte (mira la página del mod) o que el mod es para otra versión.`,
+        fix: disableFix([caller]),
+      });
+    }
+  }
+
+  // A method/field that isn't there: two pieces built against different versions of each other.
+  for (const em of errorText.matchAll(/java\.lang\.(NoSuchMethodError|NoSuchFieldError|AbstractMethodError|IncompatibleClassChangeError)(?::\s*([^\n]*))?/g)) {
+    const [, kind, msg = ""] = em;
+    let ownerCls = null;
+    let caller = null;
+    if (kind === "NoSuchMethodError") ownerCls = /'(?:[^' ]+ )?([\w$.]+)\.[\w$<>]+\(/.exec(msg)?.[1] || /^([\w$./]+)\.[\w$<>]+\(/.exec(msg.trim())?.[1];
+    else if (kind === "NoSuchFieldError") ownerCls = /Class ([\w$.]+) does not have member field/.exec(msg)?.[1];
+    else if (kind === "AbstractMethodError") {
+      ownerCls = /of (?:interface|abstract class|class) ([\w$.]+)/.exec(msg)?.[1];
+      const receiver = /Receiver class ([\w$.]+)/.exec(msg)?.[1];
+      if (receiver) caller = modForClass(receiver);
+    } else ownerCls = /(?:Found (?:interface|class)|class) ([\w$.]+)/.exec(msg)?.[1];
+    caller = caller || callerAt(errorText, em.index);
+    if (!ownerCls || !caller) continue;
+    ownerCls = ownerCls.replace(/\//g, ".");
+    if (isGameClass(ownerCls)) {
+      mcVersionFinding(caller, `una función (${shortClass(ownerCls)})`);
+      continue;
+    }
+    if (/^(net\.fabricmc\.loader|net\.minecraftforge\.(fml|common|eventbus)|net\.neoforged\.(fml|neoforge|bus))\./.test(ownerCls)) {
+      add({
+        key: `loaderver:${caller.rel}`,
+        severity: "likely",
+        category: "loader",
+        title: `${nameOf(caller)} necesita otra versión de ${loaderName}`,
+        detail: `Usa una función de ${loaderName} (${shortClass(ownerCls)}) que tu versión no tiene. Actualiza el loader de la instancia o usa otra versión del mod.`,
+        fix: disableFix([caller]),
+      });
+      continue;
+    }
+    const owner = modForClass(ownerCls);
+    if (!owner || owner === caller) continue;
+    add({
+      key: `apiver:${caller.rel}:${owner.rel}`,
+      severity: "likely",
+      category: "mods",
+      title: `${nameOf(caller)} necesita otra versión de ${nameOf(owner)}`,
+      detail: `${nameOf(caller)} usa una función de ${nameOf(owner)} (${shortClass(ownerCls)}) que tu versión no tiene: uno de los dos está desactualizado. Actualiza ${nameOf(owner)} o usa una versión de ${nameOf(caller)} hecha para la que tienes.`,
+      fix: disableFix([caller]),
+    });
+  }
+
+  // Mods known not to work together (whatever the crash says).
+  const optifineMod = mods.find((m) => /optifine/i.test(path.basename(m.rel)) || [...(m.info?.packages || [])].some((p) => p.startsWith("net/optifine")));
+  const findAny = (ids) => {
+    for (const id of ids) {
+      const m = id === "optifine" ? optifineMod : modForId(id);
+      if (m && !findings.some((f) => f.key === `loader:${m.rel}`)) return m;
+    }
+    return null;
+  };
+  for (const c of KNOWN_CONFLICTS) {
+    const ma = findAny(c.a);
+    const mb = findAny(c.b);
+    if (!ma || !mb || ma === mb) continue;
+    const drop = c.drop === "a" ? ma : mb;
+    add({
+      key: `conflict:${[ma.rel, mb.rel].sort().join(":")}`,
+      severity: "likely",
+      category: "mods",
+      title: `${nameOf(ma)} y ${nameOf(mb)} no funcionan juntos`,
+      detail: c.why.replace(/\{a\}/g, nameOf(ma)).replace(/\{b\}/g, nameOf(mb)),
+      fix: disableFix([drop], `Desactivar ${nameOf(drop)}`),
+    });
+  }
+
+  // Plain-text errors with one clear meaning.
+  const TEXT_PATTERNS = [
+    {
+      re: /No space left on device|There is not enough space on the disk|no hay espacio suficiente en el disco/i,
+      anyLog: true,
+      key: "disk-full", severity: "critical", category: "system",
+      title: "El disco está lleno",
+      detail: "El juego no pudo escribir un archivo porque no queda espacio. Libera espacio en el disco y vuelve a jugar.",
+    },
+    {
+      re: /session\.lock[^\n]*(?:already locked|locked by)|AlreadyLockedException|Failed to check session lock/i,
+      anyLog: true,
+      key: "session-lock", severity: "likely", category: "world",
+      title: "El mundo está abierto en otra parte",
+      detail: "Otra ventana de Minecraft (o un servidor) tiene abierto este mundo. Ciérrala —o reinicia el equipo si no ves ninguna— y vuelve a entrar.",
+    },
+    {
+      re: /AccessDeniedException|IOException: Access is denied|being used by another process|Acceso denegado/i,
+      key: "access-denied", severity: "likely", category: "system",
+      title: "Windows no dejó usar un archivo del juego",
+      detail: "Un antivirus, OneDrive u otro programa lo tenía bloqueado. Añade la carpeta .alaunchi a las exclusiones del antivirus o cierra el programa que lo usa, y vuelve a jugar.",
+    },
+    {
+      re: /A single server tick took [\d.]+ seconds|ServerHangWatchdog|Considering it to be crashed, server will forcibly shutdown/,
+      anyLog: true,
+      key: "watchdog", severity: "likely", category: "world",
+      title: "El mundo se quedó congelado y el juego lo cerró",
+      detail: "El servidor interno estuvo más de un minuto sin responder. Suele ser generación de mundo muy pesada, poca memoria o un mod atascado en un bucle (si abajo sale un causante, empieza por él).",
+    },
+    {
+      re: /java\.lang\.StackOverflowError/,
+      key: "stackoverflow", severity: "possible", category: "mods",
+      title: "Algo entró en un bucle infinito",
+      detail: "Un mod se llamó a sí mismo sin parar (StackOverflowError). Si abajo sale un causante, empieza por él; si no, suele ser un choque entre dos mods que tocan lo mismo.",
+    },
+    {
+      re: /ClassLoaders\$AppClassLoader cannot be cast to (?:class )?java\.net\.URLClassLoader/,
+      key: "java-too-new", severity: "critical", category: "java",
+      title: `Esta versión de ${loaderName} necesita Java 8`,
+      detail: "El juego se abrió con una Java más nueva y los Forge antiguos (1.16 o anterior) no arrancan con ella.",
+    },
+    {
+      re: /Failed to open OpenAL device|Failed to initialize OpenAL|OpenAL initialization failed|ALC_INVALID_DEVICE/i,
+      onlyReport: true,
+      key: "audio", severity: "likely", category: "other",
+      title: "El sonido no pudo arrancar",
+      detail: "Minecraft no encontró una salida de audio que funcione. Conecta unos auriculares o altavoces, o cambia la salida de audio predeterminada de Windows, y vuelve a abrir el juego.",
+    },
+    {
+      re: /Couldn't load chunk|Chunk file at \[[^\]]+\] is in the wrong location|Failed to (?:read|load) chunk|Exception reading [^\n]*\.mca/i,
+      key: "world-chunks", severity: "possible", category: "world",
+      title: "Hay partes del mundo dañadas",
+      detail: "Algunos chunks no se pudieron leer, normalmente por cerrar el juego de golpe o por un mod quitado que tenía bloques en el mundo. Si solo falla en un mundo, usa una copia de seguridad o prueba en un mundo nuevo.",
+    },
+  ];
+  for (const p of TEXT_PATTERNS) {
+    if (!p.re.test(p.onlyReport ? reportText : p.anyLog ? allText : errorText)) continue;
+    const { re, onlyReport, anyLog, ...f } = p;
+    add({ ...f, fix: null });
+  }
+
+  // Unsupported class file major version (ASM can't read a class): a mod built for a newer Java.
+  const major = /Unsupported class file major version (\d+)/.exec(errorText);
+  if (major && !findings.some((f) => f.key === "java-version")) {
+    const caller = callerAt(errorText, major.index);
+    add({
+      key: "java-version",
+      severity: "critical",
+      category: "java",
+      title: caller ? `${nameOf(caller)} está hecho para Java ${Number(major[1]) - 44}` : `Un mod está hecho para Java ${Number(major[1]) - 44}`,
+      detail: `El loader de Minecraft ${mc} no entiende código de Java ${Number(major[1]) - 44}: casi siempre es un mod para una versión más nueva de Minecraft.${caller ? "" : " Mira los mods añadidos o actualizados hace poco."}`,
+      fix: caller ? disableFix([caller]) : null,
+    });
+  }
+
+  // _JAVA_OPTIONS / JAVA_TOOL_OPTIONS: a Windows environment variable that overrides the launcher's Java settings.
+  const javaEnv = /Picked up (_JAVA_OPTIONS|JAVA_TOOL_OPTIONS):\s*([^\n]*)/.exec(allText);
+  if (javaEnv) {
+    const limitsRam = /-Xmx|-Xms|-XX:MaxHeap/i.test(javaEnv[2]);
+    add({
+      key: "java-env",
+      severity: limitsRam ? "likely" : "possible",
+      category: "java",
+      title: `Windows tiene ${javaEnv[1]}, que cambia cómo arranca Java`,
+      detail: `Esa variable de entorno (${redact(javaEnv[2]).slice(0, 120)}) se aplica a toda la Java del equipo${limitsRam ? " y aquí cambia la memoria que tiene Minecraft" : ""}. Quítala en Windows → "Editar las variables de entorno del sistema" → Variables de entorno, y reinicia ALaunchi.`,
+      fix: null,
+    });
+  }
+
+  // options.txt that Minecraft can't read.
+  if (/Failed to load options|Failed to parse options/i.test(allText) && fsSync.existsSync(path.join(instanceDir, "options.txt"))) {
+    add({
+      key: "config:options.txt",
+      severity: "likely",
+      category: "config",
+      title: "Las opciones del juego (options.txt) están rotas",
+      detail: "Minecraft no pudo leer options.txt. Restablecerlo guarda una copia (.alaunchi-bak) y el juego crea uno nuevo con las opciones por defecto (se pierden teclas, vídeo y sonido personalizados).",
+      fix: { kind: "reset-config", label: "Restablecer opciones", path: "options.txt" },
+    });
+  }
+
+  // A world whose level.dat can't be read: Minecraft keeps the previous one as level.dat_old.
+  for (const wm of errorText.matchAll(/(?:Exception|Failed|Error|Couldn't)[^\n]*?saves[\\/]([^\\/\n"'<>|]+)[\\/]level\.dat\b/gi)) {
+    const world = wm[1];
+    const worldDir = path.join(instanceDir, "saves", world);
+    if (!fsSync.existsSync(worldDir)) continue;
+    const hasOld = fsSync.existsSync(path.join(worldDir, "level.dat_old"));
+    add({
+      key: `world-level:${world}`,
+      severity: "critical",
+      category: "world",
+      title: `El mundo "${world}" está dañado`,
+      detail: hasOld
+        ? "No se puede leer su level.dat (los datos principales del mundo). Minecraft guarda la versión anterior: restaurarla puede perder lo último que hiciste en ese mundo. El archivo dañado se conserva como level.dat.alaunchi-bak."
+        : "No se puede leer su level.dat (los datos principales del mundo) y no hay copia anterior. Si tienes una copia de seguridad del mundo, úsala.",
+      fix: hasOld ? { kind: "restore-level-dat", label: "Restaurar la copia anterior", world } : null,
+    });
+  }
+
   // Broken loader install / damaged game files reported by the JVM.
-  if (/Mod ID 'minecraft'.{0,40}MISSING|NoClassDefFoundError: net\/minecraft\/|ClassNotFoundException: net\.minecraft\.|Could not find or load main class/i.test(allText)) {
+  if (gameClassMissing || /Mod ID 'minecraft'.{0,40}MISSING|Could not find or load main class/i.test(allText)) {
     add({
       key: "loader-broken",
       severity: "critical",
@@ -866,6 +1332,7 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
   }
 
   // The mod(s) the crash points at: "Suspected mods", mixins in the stack trace, frames.
+  let culprits = [];
   if (reportText || /Exception|Error/.test(logs)) {
     const scores = new Map();
     const bump = (m, n, why) => {
@@ -884,6 +1351,22 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
       bump(mm[1] ? modForId(mm[1]) : null, 3, "uno de sus Mixin falló");
       bump(mixinIndex.get(mm[2]), 3, "uno de sus Mixin falló");
     }
+    // The loader saying outright whose code blew up.
+    for (const mm of source.matchAll(/Could not execute entrypoint stage '\w+' due to errors, provided by '([\w-]+)'/g)) bump(modForId(mm[1]), 6, "falló al arrancar (su punto de entrada)");
+    for (const mm of source.matchAll(/LoaderExceptionModCrash: Caught exception from [^\n]*?\(([\w-]+)\)/g)) bump(modForId(mm[1]), 6, "el loader dice que el error salió de él");
+    for (const mm of source.matchAll(/Failed to create mod instance\. ModID: ([\w-]+)/g)) bump(modForId(mm[1]), 6, "no se pudo crear (falló al cargar)");
+    for (const mm of source.matchAll(/ModLoadingException: [^\n]*?\(([\w-]+)\) (?:has failed to load correctly|encountered an error)/g)) bump(modForId(mm[1]), 6, "el loader dice que falló al cargar");
+    for (const mm of source.matchAll(/^-- MOD ([\w-]+) --\s*\nDetails:[\s\S]{0,400}?Failure message:/gm)) bump(modForId(mm[1]), 5, "el informe lo marca como el mod que falló");
+    for (const mm of source.matchAll(/Mixin \[([\w.-]+\.json):[\w$.]+ from mod ([\w-]+)\]/g)) {
+      bump(modForId(mm[2]) || mixinIndex.get(mm[1]), 3, "uno de sus Mixin falló");
+    }
+    for (const mm of source.matchAll(/(?:InvalidInjectionException|InjectionError|MixinApplyError|MixinTransformerError|InvalidMixinException|Critical injection failure|MixinPreProcessorException)[^\n]*?([\w.-]+\.json)/g)) {
+      bump(mixinIndex.get(mm[1]), 3, "uno de sus Mixin falló");
+    }
+    // A ticking entity / block entity: its id's namespace is the mod that added it.
+    const ticked = /-- (?:Entity|Block entity|Tile entity) being ticked --\s*\nDetails:\n([\s\S]*?)(?:\n\s*\n|\n-- )/i.exec(source)?.[1] || "";
+    const tickedNs = /(?:Entity Type|Name|Block):\s*(?:Block\{)?([a-z0-9_.-]+):[a-z0-9_/.-]+/i.exec(ticked)?.[1];
+    if (tickedNs && tickedNs !== "minecraft") bump(modForId(tickedNs), 4, "lo que falla en el mundo es algo que añade este mod");
     for (const mm of source.matchAll(/\$[a-z]{3}\d{3}\$([a-z][a-z0-9_]{1,63})\$/g)) bump(modForId(mm[1]), 1, "aparece en el error");
     // Frames of the first exception (and its causes), stronger the higher up.
     const excerptStart = Math.max(0, source.search(/^Description:|Exception|Error:/m));
@@ -894,7 +1377,20 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
       bump(modForClass(cls), rank < 3 ? 3 : 1, "su código aparece en el error");
       if (++rank > 40) break;
     }
+    // Earlier crash reports of this streak that point at the same mod make it more certain.
+    for (const older of recentReports.slice(1, 4)) {
+      const text = noColors(await readTail(older.path, 128 * 1024));
+      const olderSuspected = /Suspected Mods?:\s*\n([\s\S]*?)(?:\n\s*\n|\nStacktrace:)/i.exec(text)?.[1] || "";
+      const hit = new Set();
+      for (const sm of olderSuspected.matchAll(/^\s*(.+?) \(([^)]+)\)(?:, Version:|\s*$)/gm)) hit.add(modForId(sm[2]));
+      const st = Math.max(0, text.search(/^Description:|Exception|Error:/m));
+      for (const f of [...text.slice(st, st + 12000).matchAll(/^\s*at (?:[\w.-]+(?:@[\w.-]+)?\/{1,2})?([\w$.]+)\.[\w$<>]+\(/gm)].slice(0, 30)) {
+        if (!IGNORED_FRAME_PREFIXES.some((p) => f[1].startsWith(p))) hit.add(modForClass(f[1]));
+      }
+      for (const m of hit) if (m && scores.has(m)) bump(m, 2, "también aparece en crasheos anteriores");
+    }
     const ranked = [...scores.entries()].filter(([, s]) => s.score >= 3).sort((a, b) => b[1].score - a[1].score).slice(0, 2);
+    culprits = ranked.map(([m]) => m);
     for (const [m, s] of ranked) {
       add({
         key: `culprit:${m.rel}`,
@@ -905,6 +1401,134 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
         fix: disableFix([m], `Desactivar ${nameOf(m)}`),
       });
     }
+  }
+
+  // A thing in the world (entity / block entity) that crashes the game every time it ticks.
+  const tickDesc = /^Description:\s*Ticking (entity|block entity|tile entity)/im.exec(reportText);
+  if (tickDesc) {
+    const isEntity = /^entity$/i.test(tickDesc[1]);
+    const section = /-- (?:Entity|Block entity|Tile entity) being ticked --\s*\nDetails:\n([\s\S]*?)(?:\n\s*\n|\n-- )/i.exec(reportText)?.[1] || "";
+    const type = /(?:Entity Type|Name|Block):\s*(?:Block\{)?([a-z0-9_.-]+:[a-z0-9_/.-]+)/i.exec(section)?.[1] || null;
+    const loc = /(?:Entity's Exact location|Block location):\s*(?:World:\s*)?\(?\s*(-?[\d.]+),\s*(-?[\d.]+),\s*(-?[\d.]+)/i.exec(section);
+    const where = loc ? ` en ${loc.slice(1, 4).map((n) => Math.floor(Number(n))).join(", ")}` : "";
+    // Forge/NeoForge can delete the erroring thing instead of crashing (per-world serverconfig).
+    let fix = null;
+    if (isForgeLike) {
+      const levelName = /Level name:\s*(?:ServerLevel\[)?([^\]\n]+)\]?/.exec(reportText)?.[1]?.trim();
+      const worlds = [];
+      for (const name of await fs.readdir(path.join(instanceDir, "saves")).catch(() => [])) {
+        const st = await fs.stat(path.join(instanceDir, "saves", name, "level.dat")).catch(() => null);
+        if (st) worlds.push({ name, mtimeMs: st.mtimeMs });
+      }
+      const world = worlds.find((w) => w.name === levelName) || worlds.sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+      const keys = isEntity ? ["removeErroringEntities"] : ["removeErroringBlockEntities", "removeErroringTileEntities"];
+      for (const file of world ? ["forge-server.toml", "neoforge-server.toml"] : []) {
+        const rel = `saves/${world.name}/serverconfig/${file}`;
+        const text = await fs.readFile(path.join(instanceDir, rel), "utf8").catch(() => null);
+        const key = text && keys.find((k) => new RegExp(`^\\s*${k}\\s*=\\s*false`, "m").test(text));
+        if (key) {
+          fix = { kind: "set-toml-option", label: "Borrarlo en vez de cerrar el juego", path: rel, key, value: true };
+          break;
+        }
+      }
+    }
+    add({
+      key: "ticking",
+      severity: "likely",
+      category: "world",
+      title: isEntity ? "Una criatura u objeto del mundo cierra el juego" : "Un bloque del mundo cierra el juego",
+      detail: `${type ? `${type}${where}` : `Algo${where}`} falla cada vez que se actualiza, así que el juego se cierra al entrar en esa zona.${fix ? ` El arreglo activa una opción de ${loaderName} para que lo borre en vez de cerrarse: se pierde ${isEntity ? "esa criatura u objeto" : "ese bloque y lo que tenga dentro"}.` : " Si es de un mod, actualizarlo o desactivarlo suele arreglarlo."}`,
+      fix,
+    });
+  }
+
+  // Shaders: a classic source of driver crashes. Only when something points that way.
+  const shaderState = await readShaderState(instanceDir);
+  if (shaderState.active) {
+    const shaderMods = new Set(["iris", "oculus", "optifine"]);
+    const pointsAtShaders =
+      findings.some((f) => f.category === "graphics") ||
+      culprits.some((m) => m.info?.mods.some((mi) => shaderMods.has(mi.id)) || m === optifineMod) ||
+      /net\.irisshaders|net\.coderbot\.iris|net\.optifine\.shaders|ShaderPack|shaderpack|Failed to (?:compile|link) shader/i.test(errorText);
+    if (pointsAtShaders) {
+      add({
+        key: "shaders",
+        severity: "likely",
+        category: "graphics",
+        title: "Los shaders pueden ser la causa",
+        detail: `Tienes activado ${shaderState.pack ? `"${shaderState.pack}"` : "un shader"}. Prueba a jugar sin shaders: si deja de fallar, usa otro shader, uno más ligero o una versión más nueva.`,
+        fix: { kind: "disable-shaders", label: "Desactivar shaders" },
+      });
+    }
+  }
+
+  // Graphics card the game actually used (crash report "System Details").
+  const renderer = (/Backend API:\s*([^\n]+)/.exec(reportText) || /OpenGL:\s*([^\n]+?) GL version/.exec(reportText) || /GL info:\s*'?\s*([^'\n]+)/.exec(reportText))?.[1]?.trim() || "";
+  const cards = [...reportText.matchAll(/Graphics card #\d+ name:\s*([^\n]+)/g)].map((m) => m[1].trim());
+  if (/GDI Generic|Microsoft Basic Render|llvmpipe|softpipe|Software Rasterizer/i.test(`${renderer}\n${cards.join("\n")}`)) {
+    add({
+      key: "no-gpu-driver",
+      severity: "critical",
+      category: "graphics",
+      title: "La tarjeta gráfica no tiene driver instalado",
+      detail: "Windows está usando un driver genérico sin aceleración y Minecraft no puede funcionar así. Instala el driver de tu gráfica desde la web de NVIDIA, AMD o Intel y reinicia el equipo.",
+      fix: null,
+    });
+  } else if (/Intel|Radeon\(TM\) Graphics|Radeon Graphics|Vega \d+ Graphics/i.test(renderer) && cards.some((c) => /NVIDIA|GeForce|Radeon RX|Radeon Pro|Arc A\d/i.test(c))) {
+    const dedicated = cards.find((c) => /NVIDIA|GeForce|Radeon RX|Radeon Pro|Arc A\d/i.test(c));
+    add({
+      key: "integrated-gpu",
+      severity: findings.some((f) => f.category === "graphics") ? "likely" : "possible",
+      category: "graphics",
+      title: "Minecraft está usando la gráfica integrada",
+      detail: `El juego usa ${renderer.slice(0, 60)} aunque el equipo tiene ${dedicated.slice(0, 60)}. En Windows → Configuración → Pantalla → Gráficos, añade ${ctx.javaPath && ctx.javaPath !== "java" ? `"${redact(ctx.javaPath).replace(/java\.exe$/i, "javaw.exe")}"` : "el javaw.exe de ALaunchi"} y elige "Alto rendimiento".`,
+      fix: null,
+    });
+  }
+
+  // Mods that changed since the last time the game closed fine.
+  const lastCleanAt = Number(meta?.crashStats?.lastCleanAt) || 0;
+  if (lastCleanAt && meta?.crashStats?.consecutive) {
+    const changed = mods.filter((m) => m.changedAt > lastCleanAt + 1000).sort((a, b) => b.changedAt - a.changedAt);
+    if (changed.length && changed.length <= 25) {
+      const own = changed.filter((m) => !snapshotPaths.has(m.rel));
+      const when = new Date(lastCleanAt).toLocaleString("es-ES", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+      add({
+        key: "recent-changes",
+        severity: changed.length <= 3 ? "likely" : "possible",
+        category: "mods",
+        title: changed.length === 1 ? `Empezó a fallar después de añadir o actualizar ${nameOf(changed[0])}` : `Empezó a fallar después de cambiar ${changed.length} mods`,
+        detail: `La última vez que el juego se cerró bien fue el ${when}. Desde entonces han cambiado: ${changed.slice(0, 10).map((m) => nameOf(m)).join(", ")}${changed.length > 10 ? "…" : ""}.${own.length < changed.length ? " Algunos llegaron con la actualización del modpack: si el problema es de esos, avisa al creador." : ""}`,
+        fix: own.length ? disableFix(own, own.length === 1 ? `Desactivar ${nameOf(own[0])}` : `Desactivar esos ${own.length} mods`) : null,
+      });
+    }
+  }
+
+  // Free disk space (games, worlds and Java all write a lot).
+  try {
+    const sf = await fs.statfs(instanceDir);
+    const freeMb = Math.round((Number(sf.bavail) * Number(sf.bsize)) / 1048576);
+    if (freeMb < 1536) {
+      add({
+        key: "disk-full",
+        severity: freeMb < 400 ? "critical" : "possible",
+        category: "system",
+        title: freeMb < 400 ? "El disco está lleno" : "Queda poco espacio en el disco",
+        detail: `Quedan ${freeMb} MB libres. Minecraft necesita espacio para guardar el mundo, los registros y la caché: libera algo de espacio.`,
+        fix: null,
+      });
+    }
+  } catch {}
+
+  if (manualCrash) {
+    add({
+      key: "manual-crash",
+      severity: "info",
+      category: "other",
+      title: "El último cierre lo provocaste tú (F3 + C)",
+      detail: "Mantener pulsadas F3 y C cierra el juego a propósito para depurar. No es un error: se ha mirado el crasheo anterior.",
+      fix: null,
+    });
   }
 
   // 4) Files ───────────────────────────────────────────────────────────────
@@ -1065,8 +1689,13 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
     excerpt = i >= 0 ? lines.slice(Math.max(0, i - 3), i + 40).join("\n") : "";
   }
 
+  // How many crash reports in a row (newest first) share the same description.
+  let repeats = report ? 1 : 0;
+  while (repeats < recentReports.length && recentReports[repeats].description === report.description) repeats++;
+
   return {
     findings,
+    repeats,
     lastCrashAt,
     crashReport: report ? path.basename(report.path) : null,
     description: /^Description:\s*(.+)$/m.exec(reportText)?.[1]?.trim() || null,
@@ -1075,9 +1704,60 @@ async function diagnoseInstance(ctx, onProgress = () => {}) {
   };
 }
 
+// ── Shaders ──────────────────────────────────────────────────────────────────
+
+/** Shader config files a "disable-shaders" fix may touch, relative to the instance. */
+const SHADER_CONFIGS = ["config/iris.properties", "config/oculus.properties", "optionsshaders.txt"];
+
+/** Is a shader pack switched on (Iris / Oculus / OptiFine), and which one. */
+async function readShaderState(instanceDir) {
+  for (const rel of SHADER_CONFIGS) {
+    const text = await fs.readFile(path.join(instanceDir, rel), "utf8").catch(() => null);
+    if (!text) continue;
+    const pack = /^shaderPack\s*=\s*(.*)$/m.exec(text)?.[1]?.trim() || "";
+    if (rel === "optionsshaders.txt") {
+      if (pack && !/^(OFF|\(internal\))$/i.test(pack)) return { active: true, pack, file: rel };
+    } else if (/^enableShaders\s*=\s*true/m.test(text) && pack) {
+      return { active: true, pack, file: rel };
+    }
+  }
+  return { active: false, pack: null, file: null };
+}
+
+/** Turns shaders off in every config that has them on. Returns how many files changed. */
+async function disableShaders(instanceDir) {
+  let changed = 0;
+  for (const rel of SHADER_CONFIGS) {
+    const p = path.join(instanceDir, rel);
+    const text = await fs.readFile(p, "utf8").catch(() => null);
+    if (!text) continue;
+    const next = rel === "optionsshaders.txt"
+      ? text.replace(/^shaderPack\s*=.*$/m, "shaderPack=OFF")
+      : text.replace(/^enableShaders\s*=\s*true/m, "enableShaders=false");
+    if (next !== text) {
+      await fs.writeFile(p, next);
+      changed++;
+    }
+  }
+  return changed;
+}
+
+/** Does this jar declare (or nest) the mod id? Used before installing a missing dependency. */
+async function jarProvides(filePath, modId) {
+  const zip = await openZipFile(filePath);
+  try {
+    const info = await readJarInfo(zip);
+    return { ok: info.providedIds.has(modId), ids: [...info.providedIds], kinds: [...info.kinds] };
+  } finally {
+    await zip.close().catch(() => {});
+  }
+}
+
 module.exports = {
   detectCrash,
   diagnoseInstance,
+  disableShaders,
+  jarProvides,
   // exported for tests
   _internal: { openZipFile, readJarInfo, parseModsToml, matchesFabricRange, matchesMavenRange, redact },
 };

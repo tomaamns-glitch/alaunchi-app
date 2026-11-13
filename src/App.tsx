@@ -28,6 +28,7 @@ const loadExplore = () => import("@/pages/explore");
 const loadAdmin = () => import("@/pages/admin");
 const loadAdminModpack = () => import("@/pages/admin-modpack");
 const loadAdminLibrary = () => import("@/pages/admin-library");
+const loadAdminReports = () => import("@/pages/admin-reports");
 const ModpackDetail = lazy(loadModpackDetail);
 const OnlineInstance = lazy(loadOnlineInstance);
 const Settings = lazy(loadSettings);
@@ -39,6 +40,7 @@ const Explore = lazy(loadExplore);
 const Admin = lazy(loadAdmin);
 const AdminModpack = lazy(loadAdminModpack);
 const AdminLibrary = lazy(loadAdminLibrary);
+const AdminReports = lazy(loadAdminReports);
 
 function prefetchLazyPages() {
   // Most-visited first.
@@ -63,11 +65,14 @@ import { OnboardingTour } from "@/components/onboarding-tour";
 import { OnlineTour } from "@/components/online-tour";
 import { OptionalGroupsDialog } from "@/components/optional-groups-dialog";
 import { CrashWatcher } from "@/components/crash-watcher";
+import { InstanceJoinWatcher } from "@/components/instance-join-watcher";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { getLastViewPath, setLastView } from "@/lib/last-view";
 import { useAuth } from "@/hooks/use-auth";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { useInvites } from "@/hooks/use-invites";
+import { useBlocks } from "@/hooks/use-blocks";
+import { useFirebaseSession } from "@/services/firebase-session";
 import { onContentLockPurged, onUpdateInstalled } from "@/services/electron";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { toast } from "@/lib/toast";
@@ -104,11 +109,14 @@ function StartupView() {
   // Chat (messages + friend-request notifications) and instance invitations
   // listen from here, for the whole session — this used to start only when
   // the carousel mounted, so starting on the Hub left them silent.
+  // Only once signed in to Firebase for this account (see App).
+  const firebaseReady = useFirebaseSession((s) => !!uuid && s.readyFor === uuid);
   useEffect(() => {
-    if (!uuid) return;
+    if (!uuid || !firebaseReady) return;
     useChatHeads.getState().init(uuid);
     useInvites.getState().init(uuid);
-  }, [uuid]);
+    useBlocks.getState().init(uuid);
+  }, [uuid, firebaseReady]);
   const previousLocation = useRef(location);
 
   // Only once the startup view has been restored — otherwise the initial "/"
@@ -267,6 +275,7 @@ function RouteSwitch({ location }: { location: string }) {
       <Route path="/login" component={Login} />
       <Route path="/admin" component={Admin} />
       <Route path="/admin/library" component={AdminLibrary} />
+      <Route path="/admin/reports" component={AdminReports} />
       <Route path="/admin/:id" component={AdminModpack} />
       <Route path="/servers" component={Servers} />
       <Route path="/explore" component={Explore} />
@@ -284,6 +293,13 @@ function RouteSwitch({ location }: { location: string }) {
 
 function App() {
   const authChecked = useAuth((s) => s.authChecked);
+  // Signed in to Firebase (services/firebase-session.ts) before any page or
+  // listener starts: the database rules need auth.uid, and a listener refused
+  // for lack of it is never retried.
+  const isAuthenticated = useAuth((s) => s.isAuthenticated);
+  const authUuid = useAuth((s) => s.uuid);
+  const firebaseReady = useFirebaseSession((s) => !!authUuid && s.readyFor === authUuid);
+  const appReady = authChecked && (!isAuthenticated || firebaseReady);
   const loadPersistedAuth = useAuth((s) => s.loadPersistedAuth);
 
   useEffect(() => {
@@ -339,9 +355,10 @@ function App() {
             <OnlineTour />
             <OptionalGroupsDialog />
             <CrashWatcher />
+            <InstanceJoinWatcher />
             <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
               <ErrorBoundary>
-                {authChecked ? <Router /> : <AppSplash />}
+                {appReady ? <Router /> : <AppSplash />}
               </ErrorBoundary>
             </div>
           </div>

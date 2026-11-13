@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
 import { getDatabase } from "firebase-admin/database";
 import { getDownloadURL, getStorage } from "firebase-admin/storage";
 import { logger, setGlobalOptions } from "firebase-functions/v2";
-import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { HttpsError, onCall, type CallableRequest } from "firebase-functions/v2/https";
+import { defineBoolean } from "firebase-functions/params";
 import { onObjectFinalized } from "firebase-functions/v2/storage";
 import { moderateImage, sniffImageType, type ModerationVerdict } from "./moderation";
 
@@ -15,6 +17,26 @@ initializeApp();
 setGlobalOptions({ region: "europe-west1", maxInstances: 5 });
 
 const MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Image functions and Firebase Auth. Off (functions/.env) while the group still
+ * has app versions that don't sign in to Firebase — they'd lose every image
+ * upload. Turn it on (true) once everyone is on a version with Firebase Auth,
+ * then `firebase deploy --only functions:uploadModeratedImage,functions:checkImage`.
+ * Either way, a signed-in caller can only upload banners to their own folder.
+ */
+const IMAGE_UPLOADS_REQUIRE_AUTH = defineBoolean("IMAGE_UPLOADS_REQUIRE_AUTH", { default: false });
+
+/** The caller's uid, or null for an anonymous caller while that's still allowed. */
+function imageCaller(req: CallableRequest): string | null {
+  const uid = req.auth?.uid ?? null;
+  if (!uid && IMAGE_UPLOADS_REQUIRE_AUTH.value()) {
+    throw new HttpsError("unauthenticated", "Inicia sesión en ALaunchi para subir imágenes.");
+  }
+  return uid;
+}
+
+const normUuid = (u: string) => u.replace(/-/g, "").toLowerCase();
 const MODERATED_META = "moderated";
 
 function decodeImage(base64: unknown): { buf: Buffer; contentType: string } {
@@ -54,8 +76,9 @@ async function requireAllowed(buf: Buffer): Promise<void> {
  * Returns the public download URL.
  */
 export const uploadModeratedImage = onCall(
-  { memory: "1GiB", timeoutSeconds: 60 },
+  { memory: "1GiB", timeoutSeconds: 60, invoker: "public" },
   async (req) => {
+    const caller = imageCaller(req);
     const { kind, base64, uuid, sha1 } = (req.data ?? {}) as Record<string, unknown>;
     const { buf, contentType } = decodeImage(base64);
     const bucket = getStorage().bucket();
@@ -63,6 +86,10 @@ export const uploadModeratedImage = onCall(
     if (kind === "banner") {
       if (typeof uuid !== "string" || !/^[0-9a-f-]{32,36}$/i.test(uuid)) {
         throw new HttpsError("invalid-argument", "UUID no válido.");
+      }
+      // Signed in: only into your own folder.
+      if (caller && normUuid(caller) !== normUuid(uuid)) {
+        throw new HttpsError("permission-denied", "Solo puedes subir tus propios banners.");
       }
       await requireAllowed(buf);
       const file = bucket.file(`banners/${uuid}/${Date.now().toString(36)}`);
@@ -97,8 +124,9 @@ export const uploadModeratedImage = onCall(
 /** Check-only, for images that travel inside an RTDB message instead of
  *  Storage (the icon of an instance shared by chat). */
 export const checkImage = onCall(
-  { memory: "1GiB", timeoutSeconds: 60 },
+  { memory: "1GiB", timeoutSeconds: 60, invoker: "public" },
   async (req) => {
+    imageCaller(req);
     const { buf } = decodeImage((req.data ?? {}).base64);
     await requireAllowed(buf);
     return { allowed: true };
@@ -155,3 +183,66 @@ async function deleteObject(name: string): Promise<void> {
   const sha1 = name.match(/^content-objects\/([0-9a-f]{40})$/i)?.[1];
   if (sha1) await getDatabase().ref(`contentObjects/${sha1}`).remove();
 }
+
+// ── Firebase Auth from the Minecraft account ────────────────────────────────
+
+const USERNAME_RE = /^[A-Za-z0-9_]{1,16}$/;
+const SERVER_ID_RE = /^[0-9a-f]{40}$/;
+
+/** "0123…" (Mojang's undashed id) → "01234567-89ab-…", the app's uuid format
+ *  (and the key everything in the database already uses). */
+function dashedUuid(id: string): string {
+  const c = id.replace(/-/g, "").toLowerCase();
+  return `${c.slice(0, 8)}-${c.slice(8, 12)}-${c.slice(12, 16)}-${c.slice(16, 20)}-${c.slice(20)}`;
+}
+
+/**
+ * Signs a player into Firebase as their Minecraft account, without ever
+ * seeing their Microsoft/Minecraft token. The app first does what the game
+ * does when joining a server: it tells Mojang's session server it's joining
+ * `serverId` (a random value it picked), using its own access token
+ * (main.js "mc:session-join"). Here we ask Mojang whether that player really
+ * joined that id (`hasJoined`, exactly how a Minecraft server verifies a
+ * player) and, if so, mint a Firebase custom token whose uid is their uuid.
+ *
+ * The client then calls signInWithCustomToken; the security rules can trust
+ * auth.uid from then on.
+ */
+export const mintFirebaseToken = onCall({ memory: "256MiB", timeoutSeconds: 20 }, async (req) => {
+  const { username, serverId } = (req.data ?? {}) as Record<string, unknown>;
+  if (typeof username !== "string" || !USERNAME_RE.test(username)) {
+    throw new HttpsError("invalid-argument", "Nombre de jugador no válido.");
+  }
+  if (typeof serverId !== "string" || !SERVER_ID_RE.test(serverId)) {
+    throw new HttpsError("invalid-argument", "Prueba de sesión no válida.");
+  }
+
+  const url =
+    "https://sessionserver.mojang.com/session/minecraft/hasJoined" +
+    `?username=${encodeURIComponent(username)}&serverId=${encodeURIComponent(serverId)}`;
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: { "User-Agent": "ALaunchi-Functions" } });
+  } catch (e) {
+    logger.error("hasJoined request failed", e);
+    throw new HttpsError("unavailable", "No se pudo contactar con Mojang. Inténtalo en un rato.");
+  }
+  // 204 / empty body: Mojang has no record of that join — not this player.
+  if (res.status !== 200) {
+    throw new HttpsError("permission-denied", "Mojang no confirmó la sesión.");
+  }
+  const profile = (await res.json().catch(() => null)) as { id?: string; name?: string } | null;
+  if (!profile?.id || typeof profile.id !== "string" || !/^[0-9a-f]{32}$/i.test(profile.id)) {
+    throw new HttpsError("permission-denied", "Mojang no confirmó la sesión.");
+  }
+
+  const uid = dashedUuid(profile.id);
+  const token = await getAuth().createCustomToken(uid, { mc: true });
+  return { token, uuid: uid, username: profile.name ?? username };
+});
+
+// Online-instance access (claim / codes / redeem): see access.ts.
+export { claimInstances, publishAccessCode, redeemAccessCode } from "./access";
+
+// Player reports (submit / moderator panel): see reports.ts.
+export { submitReport, listReports, setReportStatus } from "./reports";

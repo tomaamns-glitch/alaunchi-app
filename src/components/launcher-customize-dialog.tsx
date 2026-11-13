@@ -3,8 +3,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { AdaptiveColorPanel, AnimatedBackgroundPanel, GlassPanel, NotificationSoundPanel, ThemePanel } from "@/components/launcher-appearance";
 
 /** "Personalizar": the launcher's own look in one window, opened from the
- *  brush in the title bar — theme, animated background and notification sound.
- *  (Configuración → Personalización has these too, among the rest of the options.) */
+ *  brush in the title bar — theme, glass, adaptive colours, animated background
+ *  and notification sound. Configuración → Personalización no longer repeats them. */
 export function LauncherCustomizeDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

@@ -10,7 +10,7 @@ import { CharacterCard } from "@/components/character-card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
-import { Loader2, Upload, Trash, Check, Store, Plus, X, AlertCircle, Feather, Pause, Play, PersonStanding } from "lucide-react";
+import { Loader2, Upload, Trash, Check, Store, Plus, X, AlertCircle, Feather, Pause, Play, PersonStanding, Undo2 } from "lucide-react";
 import {
   getSkinProfile,
   changeSkin,
@@ -21,6 +21,7 @@ import {
   fetchTextureAsDataUrl,
   fileToBase64,
   renderHeadIcon,
+  renderBodyIcon,
   renderCapeIcon,
   type SkinProfile,
   type LibrarySkin,
@@ -105,16 +106,19 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
   const shownCapeId = previewCapeId !== undefined ? previewCapeId : activeCape?.id ?? null;
   const shownCape = profile?.capes.find((c) => c.id === shownCapeId) ?? null;
   const [shownCapeDataUrl, setShownCapeDataUrl] = useState<string | null>(null);
-  const hasPreview = shownSkin !== null || previewCapeId !== undefined;
   const skinVariant: "slim" | "classic" | null = shownSkin
     ? shownSkin.variant
     : activeSkin ? (activeSkin.variant === "SLIM" ? "slim" : "classic") : null;
 
   // Viewer controls under the character: elytra on/off, freeze the animation,
-  // and swap the arm model (slim ⇄ classic) just to look — nothing is applied.
+  // and swap the arm model (slim ⇄ classic). The model is a real change like a
+  // skin or cape: it only reaches the Mojang account (and so every other player's
+  // view of you) on "Aplicar".
   const [elytra, setElytra] = useState(false);
   const [paused, setPaused] = useState(false);
   const [modelOverride, setModelOverride] = useState<"slim" | "classic" | null>(null);
+  const modelChanged = modelOverride !== null && modelOverride !== skinVariant;
+  const hasPreview = shownSkin !== null || previewCapeId !== undefined || modelChanged;
   const shownSkinKey = shownSkin?.key ?? activeSkin?.id ?? null;
   // Another skin on the character: its own model again.
   useEffect(() => setModelOverride(null), [shownSkinKey]);
@@ -223,14 +227,17 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
     clearPending();
     setPreviewSkin(null);
     setPreviewCapeId(undefined);
+    setModelOverride(null);
   };
 
   const handleApplyPreview = async () => {
     if (!mcToken || !hasPreview) return;
     setBusy(true);
     try {
-      if (shownSkin) {
-        const updated = await changeSkin(mcToken, shownSkin.variant, shownSkin.base64);
+      // A skin being tried on, or just the model of the equipped one changed.
+      const skinBase64 = shownSkin?.base64 ?? (modelChanged ? activeSkinBase64 : null);
+      if (skinBase64) {
+        const updated = await changeSkin(mcToken, viewedModel, skinBase64);
         setProfile(updated);
         invalidatePlayerHead(uuid);
       }
@@ -238,7 +245,9 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
         const updated = await setCape(mcToken, previewCapeId);
         setProfile(updated);
       }
-      toast.success(shownSkin ? `${shownSkin.label} aplicada.` : "Capa actualizada.");
+      toast.success(
+        shownSkin ? `${shownSkin.label} aplicada.` : skinBase64 ? "Modelo actualizado." : "Capa actualizada."
+      );
       discardPreview();
     } catch (e: any) {
       toast.error(e?.message || "Error al aplicar los cambios.");
@@ -317,6 +326,17 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
           transition={{ duration: 0.15 }}
           className="flex gap-1.5"
         >
+          <Hint label="Deshacer cambios">
+            <Button
+              onClick={discardPreview}
+              disabled={busy}
+              size="sm"
+              variant="outline"
+              className="h-8 w-8 p-0"
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+            </Button>
+          </Hint>
           <Button
             onClick={handleApplyPreview}
             disabled={busy}
@@ -325,17 +345,6 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
           >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Aplicar"}
           </Button>
-          <Hint label="Descartar cambios">
-            <Button
-              onClick={discardPreview}
-              disabled={busy}
-              size="sm"
-              variant="outline"
-              className="h-8 w-8 p-0"
-            >
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          </Hint>
         </motion.div>
       )}
     </AnimatePresence>
@@ -354,21 +363,6 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
         effect="none"
         grid
         viewer={{ elytra, paused }}
-        badge={
-          // Over the character instead of below it, so the card keeps its height.
-          <AnimatePresence>
-            {hasPreview && (
-              <motion.span
-                initial={{ opacity: 0, y: -4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
-                className="absolute bottom-9 left-1/2 -translate-x-1/2 pointer-events-none px-2 py-0.5 rounded-full bg-accent/20 backdrop-blur-sm text-[9px] uppercase tracking-wide text-accent font-semibold whitespace-nowrap"
-              >
-                Vista previa
-              </motion.span>
-            )}
-          </AnimatePresence>
-        }
       >
         {viewerFooter}
         <div className="flex w-full items-center justify-center gap-1.5">
@@ -505,7 +499,7 @@ export function SkinManagerPanel({ uuid, username, viewerFooter, previewActionsS
                       title={equipped ? "Skin actual" : "Probar esta skin"}
                       className={`relative group flex flex-col items-center gap-1 p-2 rounded-md border cursor-pointer transition-colors ${tileClass(shown)}`}
                     >
-                      <LibrarySkinHead fileBase64={entry.fileBase64} alt={entry.name} />
+                      <LibrarySkinHead fileBase64={entry.fileBase64} variant={entry.variant} alt={entry.name} />
                       <span className={`text-[10px] truncate w-full text-center ${shown ? "text-accent font-semibold" : "text-gray-300"}`}>
                         {entry.name}
                       </span>
@@ -683,23 +677,29 @@ function TabBody({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Face + hat layer of a saved skin, instead of the raw flattened texture. */
-function LibrarySkinHead({ fileBase64, alt }: { fileBase64: string; alt: string }) {
+/** Small full-body figure of a saved skin (falls back to the face while it
+ *  renders, or if WebGL fails). */
+function LibrarySkinHead({ fileBase64, variant, alt }: { fileBase64: string; variant?: string; alt: string }) {
+  const [bodyUrl, setBodyUrl] = useState<string | null>(null);
   const [headUrl, setHeadUrl] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    renderHeadIcon(`data:image/png;base64,${fileBase64}`, 48)
-      .then((url) => { if (!cancelled) setHeadUrl(url); })
-      .catch(() => {});
+    const dataUrl = `data:image/png;base64,${fileBase64}`;
+    const v = variant?.toLowerCase() === "slim" ? "slim" : variant?.toLowerCase() === "classic" ? "classic" : "auto-detect";
+    renderBodyIcon(dataUrl, v)
+      .then((url) => { if (!cancelled) setBodyUrl(url); })
+      .catch(() => {
+        renderHeadIcon(dataUrl, 48)
+          .then((url) => { if (!cancelled) setHeadUrl(url); })
+          .catch(() => {});
+      });
     return () => { cancelled = true; };
-  }, [fileBase64]);
+  }, [fileBase64, variant]);
 
-  return headUrl ? (
-    <img src={headUrl} alt={alt} className="h-10 w-10 rounded" style={{ imageRendering: "pixelated" }} />
-  ) : (
-    <div className="h-10 w-10 rounded bg-black/30" />
-  );
+  if (bodyUrl) return <img src={bodyUrl} alt={alt} className="h-[72px] w-12 object-contain" />;
+  if (headUrl) return <img src={headUrl} alt={alt} className="h-[72px] w-12 object-contain" style={{ imageRendering: "pixelated" }} />;
+  return <div className="h-[72px] w-12 rounded bg-black/30" />;
 }
 
 /** Back face of a cape (the side with the design), fetched through the
@@ -765,19 +765,18 @@ function ShowcaseEntry({ username, busy, selected, onPreview, onSave, onRemove }
       </Hint>
 
       {loading ? (
-        <div className="h-10 w-10 flex items-center justify-center">
+        <div className="h-[72px] w-12 flex items-center justify-center">
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         </div>
       ) : error || !headUrl || !fullDataUrl ? (
-        <div className="h-10 w-10 flex items-center justify-center" title={error ?? "No disponible"}>
+        <div className="h-[72px] w-12 flex items-center justify-center" title={error ?? "No disponible"}>
           <AlertCircle className="h-4 w-4 text-muted-foreground" />
         </div>
       ) : (
-        <img
-          src={headUrl}
+        <LibrarySkinHead
+          fileBase64={fullDataUrl.replace(/^data:image\/png;base64,/, "")}
+          variant={variant}
           alt={username}
-          className="h-10 w-10 object-contain bg-black/30 rounded"
-          style={{ imageRendering: "pixelated" }}
         />
       )}
 

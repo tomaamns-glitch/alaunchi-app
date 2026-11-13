@@ -1,4 +1,4 @@
-import { ref, set, onValue, onDisconnect, serverTimestamp, off, type Unsubscribe } from "firebase/database";
+import { ref, set, update, onValue, onDisconnect, serverTimestamp, off, type Unsubscribe } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 
 // Unlike presence.ts (strictly per-modpack: "is this player in THIS pack right
@@ -17,6 +17,11 @@ export interface UserActivity {
   status: ActivityStatus;
   /** Server-assigned ms timestamp of the last known state change. */
   lastSeen: number;
+  /** The player set themselves "Ausente" (account menu → En línea / Ausente).
+   *  Orthogonal to `status`: an away player is still connected (online or
+   *  playing); everyone else shows them as away until they switch back. Gone
+   *  once they disconnect (the onDisconnect write replaces the whole node). */
+  away?: boolean;
   /** Only present while status === "playing". */
   instanceId?: string;
   instanceName?: string;
@@ -37,6 +42,7 @@ export async function markAppOnline(uuid: string, username: string): Promise<voi
   const activityRef = ref(rtdb, `userActivity/${uuid}`);
   await onDisconnect(activityRef).set({ username, status: "offline", lastSeen: serverTimestamp() });
   await set(activityRef, { username, status: "online", lastSeen: serverTimestamp() });
+  await reapplyAway(uuid);
 }
 
 /** Marks the player as actively playing one instance (catalog or custom),
@@ -58,6 +64,51 @@ export async function markPlayingInstance(
     instanceSource,
     lastSeen: serverTimestamp(),
   });
+  await reapplyAway(uuid);
+}
+
+// ── "Ausente" ───────────────────────────────────────────────────────────────
+// The choice is kept on this PC per account (so it survives restarts) and
+// mirrored into userActivity/{uuid}/away for everyone else. The writes above
+// replace the whole node, so they put `away` back right after. A separate
+// update (not part of those sets) on purpose: if the database rules ever
+// rejected the field, only "Ausente" would fail — never being shown online.
+
+const AWAY_KEY = (uuid: string) => `alaunchi_away:${uuid}`;
+
+/** Whether this account chose "Ausente" on this PC. */
+export function isAwayStored(uuid: string): boolean {
+  try {
+    return localStorage.getItem(AWAY_KEY(uuid)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+async function reapplyAway(uuid: string): Promise<void> {
+  if (isAwayStored(uuid)) await update(ref(rtdb, `userActivity/${uuid}`), { away: true });
+}
+
+/** Sets or clears "Ausente": remembered here and published straight away. */
+export async function setAwayStatus(uuid: string, away: boolean): Promise<void> {
+  // Published first: if it fails, the choice isn't kept either (the button
+  // would otherwise say "Ausente" while everyone sees "En línea").
+  await update(ref(rtdb, `userActivity/${uuid}`), { away: away ? true : null });
+  try {
+    if (away) localStorage.setItem(AWAY_KEY(uuid), "1");
+    else localStorage.removeItem(AWAY_KEY(uuid));
+  } catch {
+    /* no storage: still away for this session */
+  }
+}
+
+/** What a player's status reads as, for the places that show it. */
+export type ShownStatus = "playing" | "online" | "away" | "offline";
+
+export function shownStatus(a: UserActivity | null | undefined): ShownStatus {
+  if (!a || a.status === "offline") return "offline";
+  if (a.away) return "away";
+  return a.status === "playing" ? "playing" : "online";
 }
 
 /** Live-subscribes to one player's current activity. */

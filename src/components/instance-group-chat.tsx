@@ -2,7 +2,8 @@ import { Hint } from "@/components/hint";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronDown, MessagesSquare, Minus, Paperclip, Send, Users } from "lucide-react";
+import { Bell, BellOff, ChevronDown, MessagesSquare, Minus, Paperclip, Send, Users } from "lucide-react";
+import { useMutedGroups } from "@/lib/muted-groups";
 import { format } from "date-fns";
 import { ChatDaySeparator, startsNewDay } from "@/components/chat-day-separator";
 import { ChatMessageMenu, DeletedMessageBubble, useMessageMenu } from "@/components/chat-message-menu";
@@ -30,6 +31,29 @@ import { useModpacks } from "@/hooks/use-modpacks";
 import { ChatContentPicker } from "@/components/lazy-heavy";
 import { SharedContentCard } from "@/components/chat-window";
 import { MoveBackButton, MoveToContentMenu } from "@/components/move-to-content-menu";
+
+/** Mutes / unmutes a group chat (lib/muted-groups.ts). */
+function MuteGroupButton({ groupKey }: { groupKey: string }) {
+  const muted = useMutedGroups((s) => s.muted.has(groupKey));
+  const toggle = useMutedGroups((s) => s.toggle);
+  return (
+    <Hint
+      label={muted ? "Grupo silenciado: pulsa para volver a recibir sus avisos" : "Silenciar el chat grupal"}
+    >
+      <button
+        type="button"
+        onClick={() => toggle(groupKey)}
+        aria-pressed={muted}
+        aria-label={muted ? "Activar avisos del grupo" : "Silenciar el grupo"}
+        className={`h-6 w-6 flex items-center justify-center rounded hover:bg-white/10 transition-colors shrink-0 ${
+          muted ? "text-amber-300 hover:text-amber-200" : "text-gray-400 hover:text-gray-200"
+        }`}
+      >
+        {muted ? <BellOff className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
+      </button>
+    </Hint>
+  );
+}
 
 function newestFromOthers(messages: GroupMessage[], myUuid: string): number {
   let newest = 0;
@@ -86,13 +110,17 @@ function useGroupRoom(pack: Modpack, myUuid: string, open: boolean) {
 
   useEffect(() => subscribePresence(pack.id, setMembers), [pack.id]);
 
-  // A new message from someone else while the room is closed → the usual sound.
+  // A new message from someone else while the room is closed → the usual
+  // sound, unless the room is muted (lib/muted-groups.ts; unread still counts).
+  useEffect(() => {
+    useMutedGroups.getState().init(myUuid);
+  }, [myUuid]);
   useEffect(() => {
     const newest = newestFromOthers(messages, myUuid);
     if (newest <= newestSeen.current) return;
     newestSeen.current = newest;
-    if (!open) playNotificationSound();
-  }, [messages, myUuid, open]);
+    if (!open && !useMutedGroups.getState().muted.has(groupKey)) playNotificationSound();
+  }, [messages, myUuid, open, groupKey]);
 
   // While open, everything shown counts as read.
   useEffect(() => {
@@ -167,6 +195,7 @@ function GroupChatBody({
           <MessagesSquare className="h-4 w-4 text-accent" />
           <h3 className="text-sm font-semibold text-white">Chat grupal</h3>
           <div className="ml-auto flex items-center gap-0.5">
+            <MuteGroupButton groupKey={room.groupKey} />
             {onMoveBack && <MoveBackButton onClick={onMoveBack} />}
             {onMinimize && (
               <Hint label="Minimizar">
@@ -211,6 +240,7 @@ function GroupChatBody({
               </Hint>
             ))}
         </div>
+        <MuteGroupButton groupKey={room.groupKey} />
         {onMinimize && (
           <Hint label="Minimizar">
             <button
@@ -577,6 +607,7 @@ export function InstanceGroupChatPanel({
             </span>
           )}
           <div className="ml-auto flex items-center gap-0.5">
+            <MuteGroupButton groupKey={room.groupKey} />
             {onMoveBack && <MoveBackButton onClick={onMoveBack} />}
             {onToggleCollapsed && (
               <Hint label="Desplegar">

@@ -4,6 +4,7 @@ import { addProfilePlaytime } from "./public-profile";
 import { normUuid } from "@/lib/playtime";
 import { markAppOnline } from "./user-activity";
 import { useAuth } from "@/hooks/use-auth";
+import { ensureFirebaseSession, endFirebaseSession } from "./firebase-session";
 
 /** Call once at startup. When the main process reports a tracked Minecraft
  *  session ended (see playtime tracking in main.js), mark the current user
@@ -34,8 +35,12 @@ export function initPresenceSync() {
   useAuth.subscribe((state) => {
     if (state.authChecked && state.isAuthenticated && state.uuid && state.username && !announced) {
       announced = true;
-      markAppOnline(state.uuid, state.username).catch(() => {});
+      // Firebase Auth as this Minecraft account first (services/firebase-session.ts):
+      // the rules only let you write your own status once signed in.
+      const { uuid, username } = state;
+      void ensureFirebaseSession().then(() => markAppOnline(uuid, username).catch(() => {}));
     } else if (!state.isAuthenticated) {
+      if (announced) void endFirebaseSession();
       announced = false;
     }
   });
