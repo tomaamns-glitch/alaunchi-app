@@ -246,3 +246,6 @@ export { claimInstances, publishAccessCode, redeemAccessCode } from "./access";
 
 // Player reports (submit / moderator panel): see reports.ts.
 export { submitReport, listReports, setReportStatus } from "./reports";
+
+// "Borrar mis datos" (Ajustes → Privacidad): see account.ts.
+export { deleteMyData } from "./account";

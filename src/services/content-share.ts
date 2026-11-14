@@ -2,6 +2,7 @@ import { ref as dbRef, get, set } from "firebase/database";
 import { ref as storageRef, uploadString, getDownloadURL } from "firebase/storage";
 import { rtdb, storage } from "@/lib/firebase";
 import { isImageBase64, uploadModeratedSharedImage } from "@/services/image-moderation";
+import { resolveModrinthFiles } from "@/services/modrinth";
 
 export type ContentCategory =
   | "mods"
@@ -48,15 +49,21 @@ export interface SharedContent {
 }
 
 /**
- * Uploads a file's bytes to the shared content-object store, deduplicated by
- * hash in RTDB (`contentObjects/{sha1}`) — same spirit as the object cache
- * modpack publishing already uses, so sharing a mod someone already shared
- * before never re-uploads it. Returns a URL any recipient can download it from.
+ * Returns a URL any recipient can download the file from. Third-party content
+ * is never re-hosted: if Modrinth has a file with this exact sha1, the URL is
+ * Modrinth's own CDN and nothing is uploaded (the recipient still checks the
+ * sha1 on download). Only content Modrinth doesn't know — the group's own mods,
+ * configs, emotes, schematics — goes to our content-object store, deduplicated
+ * by hash in RTDB (`contentObjects/{sha1}`), so sharing it twice never
+ * re-uploads it. Throws if Modrinth can't be asked (ModrinthLookupError).
  */
 export async function uploadSharedContent(fileBase64: string, sha1: string): Promise<string> {
   // Images (screenshots, skins) are seen by the recipient, so they go through
   // moderation — the function handles the dedupe registry itself.
   if (isImageBase64(fileBase64)) return uploadModeratedSharedImage(fileBase64, sha1);
+
+  const onModrinth = (await resolveModrinthFiles([sha1])).get(sha1.toLowerCase());
+  if (onModrinth) return onModrinth.url;
 
   const registryRef = dbRef(rtdb, `contentObjects/${sha1}`);
   const existing = await get(registryRef);

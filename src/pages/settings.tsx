@@ -30,6 +30,7 @@ import {
   Compass,
   Gamepad2,
   Joystick,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
 import { useTour } from "@/components/onboarding-tour";
@@ -48,6 +49,7 @@ import {
 } from "@/lib/notification-sound";
 import { Panel } from "@/components/launcher-appearance";
 import { cn } from "@/lib/utils";
+import { DeleteMyDataDialog } from "@/components/delete-my-data-dialog";
 
 type SectionId = "storage" | "personalization" | "developer" | "account";
 
@@ -506,6 +508,7 @@ function IngameOverlayPanel() {
 function AccountSection() {
   const { isAuthenticated, username, uuid, email, gamertag, signedInAt, logout } = useAuth();
   const [, setLocation] = useLocation();
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const handleLogout = async () => {
     await logout();
@@ -552,7 +555,24 @@ function AccountSection() {
             <LogOut className="mr-2 h-4 w-4" /> Cerrar sesión
           </Button>
         </div>
+
+        <div className="pt-4 border-t border-white/5 flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-gray-100">Borrar mis datos</p>
+            <p className="text-xs text-muted-foreground">
+              Elimina de los servidores de ALaunchi tu perfil, amigos, chats y accesos. No se puede deshacer.
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            onClick={() => setDeleteOpen(true)}
+            className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Trash2 className="mr-2 h-4 w-4" /> Borrar datos
+          </Button>
+        </div>
       </div>
+      <DeleteMyDataDialog open={deleteOpen} onOpenChange={setDeleteOpen} />
     </section>
   );
 }

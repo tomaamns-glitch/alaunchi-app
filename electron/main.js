@@ -3385,6 +3385,16 @@ ipcMain.handle("mc:sync-modpack", async (event, { modpackId, modpack, newFiles }
   return { success: true, downloaded: toDownload.length };
 });
 
+function isModrinthCdnUrl(url) {
+  if (typeof url !== "string") return false;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && u.hostname === "cdn.modrinth.com";
+  } catch {
+    return false;
+  }
+}
+
 function validateManifest(manifest) {
   if (!manifest || typeof manifest !== "object") throw new Error("Manifiesto inválido");
   if (manifest.schemaVersion !== 2) throw new Error("Versión de manifiesto no soportada");
@@ -3402,6 +3412,13 @@ function validateManifest(manifest) {
     if (f.path.includes("\0")) throw new Error(`path con null byte: ${f.path}`);
     if (typeof f.hash !== "string" || !HASH_RE.test(f.hash)) throw new Error(`hash inválido en ${f.path}`);
     if (typeof f.size !== "number" || !Number.isFinite(f.size) || f.size < 0) throw new Error(`size inválido en ${f.path}`);
+    // Third-party files go by reference (never re-hosted in the release): only
+    // Modrinth's CDN, and the sha256 in `hash` is still verified on download.
+    if (f.source !== undefined && f.source !== null) {
+      if (typeof f.source !== "object" || f.source.type !== "modrinth" || !isModrinthCdnUrl(f.source.url)) {
+        throw new Error(`origen externo no válido en ${f.path}`);
+      }
+    }
     if (seen.has(f.path)) throw new Error(`path duplicado: ${f.path}`);
     seen.add(f.path);
   }
@@ -3599,7 +3616,10 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
   // Its percentage goes by bytes, so a big mod weighs more than a config file.
   const sizeByHash = new Map();
   const pathsByHash = new Map();
+  // hash → Modrinth CDN url for third-party files (not in the objects release).
+  const externalUrlByHash = new Map();
   for (const p of pending) {
+    if (p.entry.source?.url && !externalUrlByHash.has(p.entry.hash)) externalUrlByHash.set(p.entry.hash, p.entry.source.url);
     if (!sizeByHash.has(p.entry.hash)) {
       sizeByHash.set(p.entry.hash, Math.max(1, Number(p.entry.size) || 1));
       pathsByHash.set(p.entry.hash, []);
@@ -3632,7 +3652,10 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
       const hash = uniqueHashes[i];
       try {
         const assetUrl = assetByHash?.get(hash);
-        if (assetUrl) {
+        const externalUrl = externalUrlByHash.get(hash);
+        if (externalUrl) {
+          await ensureObject(hash, externalUrl, { "User-Agent": "ALaunchi" });
+        } else if (assetUrl) {
           await ensureObjectWithGithubRetry(hash, assetUrl, {
             Authorization: `Bearer ${token}`,
             Accept: "application/octet-stream",
@@ -3669,9 +3692,13 @@ ipcMain.handle("mc:install-snapshot", async (event, { modpackId, modpack, manife
       const pathList = paths.slice(0, 3).join(", ") + (paths.length > 3 ? ` (+${paths.length - 3} más)` : "");
       return `  ${hash.slice(0, 12)}… → ${pathList}: ${error}`;
     });
+    const allExternal = failedHashes.every(({ hash }) => externalUrlByHash.has(hash));
     throw new Error(
-      `${failedHashes.length} objeto(s) del manifiesto no se pudieron descargar — probablemente nunca se subieron al publicar. ` +
-        `Vuelve a lanzar la publicación de este modpack para rellenar los que faltan.\n${lines.join("\n")}` +
+      (allExternal
+        ? `${failedHashes.length} archivo(s) de Modrinth no se pudieron descargar. Revisa la conexión y vuelve a intentarlo.`
+        : `${failedHashes.length} objeto(s) del manifiesto no se pudieron descargar — probablemente nunca se subieron al publicar. ` +
+          `Vuelve a lanzar la publicación de este modpack para rellenar los que faltan.`) +
+        `\n${lines.join("\n")}` +
         (failedHashes.length > 15 ? `\n  ...y ${failedHashes.length - 15} más` : "")
     );
   }

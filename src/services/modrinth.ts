@@ -101,6 +101,57 @@ async function lookupProjects(ids: string[]): Promise<Record<string, ModrinthPro
   return out;
 }
 
+/** The exact Modrinth file behind a sha1: where any player can download it. */
+export interface ModrinthFileRef {
+  projectId: string;
+  versionId: string;
+  /** Always https://cdn.modrinth.com/… */
+  url: string;
+  fileName: string;
+}
+
+export class ModrinthLookupError extends Error {
+  constructor() {
+    super("No se pudo consultar Modrinth para saber si el archivo es suyo. Revisa la conexión e inténtalo de nuevo.");
+    this.name = "ModrinthLookupError";
+  }
+}
+
+/**
+ * sha1 → the Modrinth file with exactly that hash. Third-party content is
+ * shared by reference, never re-uploaded, so this is the gate every share and
+ * publish goes through. Unlike identifyModrinthFiles it THROWS
+ * (ModrinthLookupError) when Modrinth can't be asked: "couldn't ask" must
+ * never be read as "not on Modrinth", or the jar would get uploaded.
+ */
+export async function resolveModrinthFiles(sha1s: string[]): Promise<Map<string, ModrinthFileRef>> {
+  const unique = Array.from(new Set(sha1s.filter((h) => /^[0-9a-f]{40}$/i.test(h)).map((h) => h.toLowerCase())));
+  const out = new Map<string, ModrinthFileRef>();
+  const CHUNK = 500;
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const chunk = unique.slice(i, i + CHUNK);
+    let data: Record<string, ModrinthVersionFull & { project_id: string }>;
+    try {
+      const res = await fetch(`${API}/version_files`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hashes: chunk, algorithm: "sha1" }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      data = await res.json();
+    } catch {
+      throw new ModrinthLookupError();
+    }
+    for (const h of chunk) {
+      const v = data[h];
+      const file = v?.files?.find((f) => f.hashes?.sha1?.toLowerCase() === h);
+      if (!v || !file || !file.url?.startsWith("https://cdn.modrinth.com/")) continue;
+      out.set(h, { projectId: v.project_id, versionId: v.id, url: file.url, fileName: file.filename });
+    }
+  }
+  return out;
+}
+
 /**
  * Identifies which files are recognized Modrinth projects, matched by file
  * hash (sha1). Returns a map keyed by file path — entries with no match (not

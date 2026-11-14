@@ -1,3 +1,5 @@
+import { resolveModrinthFiles } from "./modrinth";
+
 export interface Modpack {
   id: string;
   name: string;
@@ -70,6 +72,11 @@ export interface SnapshotEntry {
   sha1?: string;
   /** false = the user can delete it from their instance. Absent/true = mandatory. */
   required?: boolean;
+  /** Third-party file (Modrinth has one with this exact sha1): it isn't in the
+   *  objects release, players download it from Modrinth's CDN (always
+   *  https://cdn.modrinth.com/…; `hash` is still checked). Absent = our own
+   *  object in the release, as before. */
+  source?: { type: "modrinth"; projectId: string; versionId: string; url: string };
 }
 
 export interface ChangelogEntry {
@@ -529,6 +536,24 @@ export async function publishModpackUpdate(
   }
   await Promise.all(Array.from({ length: HASH_CONC }, () => hashWorker()));
 
+  // 1.5. Third-party content goes by reference, never re-hosted: anything
+  // Modrinth has (same sha1) points at its CDN instead of being uploaded.
+  // Carried-forward entries are checked too, so a modpack published before
+  // this moves its Modrinth files over on its next update (their old copies
+  // stay in the release only for older versions). Throws if Modrinth can't
+  // be reached — publishing would otherwise upload those jars.
+  const unchangedEntries = plan.unchanged.map((e) => ({ ...e }));
+  const needsCheck = [...entries, ...unchangedEntries].filter((e) => !e.source && e.sha1 && e.size > 0);
+  if (needsCheck.length > 0) {
+    onProgress({ stage: "hashing", done: files.length, total: files.length, currentFile: "Buscando en Modrinth…" });
+    const refs = await resolveModrinthFiles(needsCheck.map((e) => e.sha1!));
+    for (const e of needsCheck) {
+      const ref = refs.get(e.sha1!.toLowerCase());
+      if (ref) e.source = { type: "modrinth", projectId: ref.projectId, versionId: ref.versionId, url: ref.url };
+    }
+  }
+  const external = (e: SnapshotEntry) => !!e.source;
+
   // 2. Ensure objects release exists (handle create race: another client may create it concurrently)
   const objectsTag = `${modpackId}-objects`;
   let release: any;
@@ -609,8 +634,8 @@ export async function publishModpackUpdate(
   // less careful publish path) every future publish would otherwise keep carrying it
   // forward as "fine" forever, since nothing ever re-checks it. Catch that now instead
   // of letting installers discover it one 404 at a time.
-  const missingUnchanged = plan.unchanged.filter(
-    (e) => e.size > 0 && e.hash !== EMPTY_HASH && !existingHashes.has(e.hash)
+  const missingUnchanged = unchangedEntries.filter(
+    (e) => !external(e) && e.size > 0 && e.hash !== EMPTY_HASH && !existingHashes.has(e.hash)
   );
   if (missingUnchanged.length > 0) {
     throw new Error(
@@ -627,6 +652,7 @@ export async function publishModpackUpdate(
   files.forEach((w, i) => {
     const e = entries[i];
     if (e.size === 0) return; // empty files aren't uploaded
+    if (external(e)) return; // downloaded from Modrinth, never uploaded
     if (!uniqueByHash.has(e.hash)) uniqueByHash.set(e.hash, w.file);
   });
 
@@ -760,7 +786,7 @@ export async function publishModpackUpdate(
   }
 
   // 5. Merge hashed adds/replacements with carried-forward entries, then write the manifest.
-  const allEntries = [...plan.unchanged, ...entries].sort((a, b) => a.path.localeCompare(b.path));
+  const allEntries = [...unchangedEntries, ...entries].sort((a, b) => a.path.localeCompare(b.path));
   onProgress({ stage: "manifest", done: 0, total: 1 });
   const trimmedChangelog = changelog?.trim();
   const trimmedTitle = changelogTitle?.trim();
