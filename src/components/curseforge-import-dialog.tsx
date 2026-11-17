@@ -30,6 +30,12 @@ const LOADER_LABEL: Record<CurseForgeInstance["loaderType"], string> = {
   unknown: "Desconocido",
 };
 
+/** "Importar de CurseForge" (Hub button + its curiosity) — hidden for now: until
+ *  the CurseForge API is approved, an imported instance's .jar files that aren't
+ *  on Modrinth could end up re-hosted (publishing, sharing, chat), which goes
+ *  against `allowModDistribution`. The import itself (local folder copy) works. */
+export const CURSEFORGE_IMPORT_ENABLED = false;
+
 /** CurseForge's anvil mark, drawn simply (no bundled brand asset). */
 export function CurseForgeLogo({ className }: { className?: string }) {
   return (

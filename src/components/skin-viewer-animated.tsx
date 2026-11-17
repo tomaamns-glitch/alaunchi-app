@@ -39,6 +39,12 @@ interface SkinViewerAnimatedProps {
    *  the cape's own texture when it has one, else the game's elytra) and the cape
    *  is hidden. Back to false: the wings go and it turns to face front again. */
   elytra?: boolean;
+  /** A blocky Santa hat on the head (the account menu's character in December,
+   *  lib/christmas.ts). Counted in the camera framing, so it's never cut off. */
+  santaHat?: boolean;
+  /** A blocky Christmas tree with twinkling lights behind the character, off to
+   *  one side (world space: it stays put while the character is spun). */
+  christmasTree?: boolean;
   /** Freezes the idle animation where it is. */
   paused?: boolean;
   /** False while the viewer is hidden but kept alive (the account panel when
@@ -727,6 +733,168 @@ class CherryPetals implements SceneEffect {
   }
 }
 
+// ─── Santa hat ───────────────────────────────────────────────────────────────
+// Blocky, like everything in the game: a white fur brim over the hat layer, red
+// tiers getting smaller and leaning back-right, and the tip flopping down to a
+// white pompom. In the Head bone's frame (y up, 1 unit = 1 block, front = -z,
+// +x = the player's right); the head is 8 px tall from the bone, its outer
+// layer half a pixel more. Geometries are shared and never disposed (tiny);
+// the materials belong to each hat, so disposeModel frees them with the model.
+
+const HAT_PX = 1 / 16;
+const hatGeometries = new Map<string, THREE.BoxGeometry>();
+function hatBox(w: number, h: number, d: number): THREE.BoxGeometry {
+  const key = `${w}x${h}x${d}`;
+  let g = hatGeometries.get(key);
+  if (!g) {
+    g = new THREE.BoxGeometry(w * HAT_PX, h * HAT_PX, d * HAT_PX);
+    hatGeometries.set(key, g);
+  }
+  return g;
+}
+
+function buildSantaHat(): THREE.Group {
+  const red = new THREE.MeshStandardMaterial({ name: "santa_red", color: 0xc8202a, roughness: 0.9 });
+  const darkRed = new THREE.MeshStandardMaterial({ name: "santa_red_dark", color: 0xa3161f, roughness: 0.9 });
+  const white = new THREE.MeshStandardMaterial({ name: "santa_white", color: 0xf4f4f5, roughness: 1 });
+  const group = new THREE.Group();
+  group.name = "Santa_Hat";
+  // [w, h, d] and centre [x, y, z], in px.
+  const parts: [number, number, number, number, number, number, THREE.Material][] = [
+    [9.6, 2.2, 9.6, 0, 7.9, 0, white], // fur brim, slightly over the forehead
+    [8.4, 2.6, 8.4, 0, 10.3, 0.2, red],
+    [6.4, 2.4, 6.4, 0.6, 12.8, 0.7, darkRed],
+    [4.6, 2.2, 4.6, 1.5, 15, 1.3, red],
+    [3, 2, 3, 3.3, 15.9, 1.9, darkRed], // the tip leaning over…
+    [2.4, 2, 2.4, 4.9, 14.6, 2.3, red], // …and flopping down
+    [3.2, 3.2, 3.2, 5.6, 12.7, 2.5, white], // pompom
+  ];
+  for (const [w, h, d, x, y, z, mat] of parts) {
+    const mesh = new THREE.Mesh(hatBox(w, h, d), mat);
+    mesh.position.set(x * HAT_PX, y * HAT_PX, z * HAT_PX);
+    group.add(mesh);
+  }
+  return group;
+}
+
+// ─── Christmas tree ──────────────────────────────────────────────────────────
+// A blocky spruce (stacked tiers, like the game's), well behind the character,
+// a little darker than it so it reads as background. Coloured bulbs on the tiers' front edges twinkle out of step, and
+// a gold star on top glows softly. World units: 1 = 1 block; the feet are at y=0.
+
+// Well behind the character and bigger than life, nearly centred: it frames
+// them like a photo backdrop, its tiers showing on both sides and the star
+// beside the head, all inside the viewer's frame.
+// y < 0: from the camera's height, ground that far back shows higher up, so
+// it's lowered until its foot lines up with the character's feet.
+const TREE_POS = new THREE.Vector3(-0.42, -0.6, -2.6);
+const TREE_SCALE = 1.45;
+const BULB_COLORS = [0xff4d4d, 0xffd84d, 0x4da6ff, 0x5cff8a, 0xff8a3d, 0xe879f9];
+
+class ChristmasTree {
+  readonly group = new THREE.Group();
+  private bulbs: { mat: THREE.MeshBasicMaterial; base: THREE.Color; speed: number; phase: number }[] = [];
+  private star: THREE.MeshBasicMaterial;
+  private time = 0;
+  private disposables: { dispose(): void }[] = [];
+
+  constructor() {
+    this.group.name = "Christmas_Tree";
+    this.group.position.copy(TREE_POS);
+    this.group.scale.setScalar(TREE_SCALE);
+    // A slight turn so its sides catch the light and it doesn't look flat.
+    this.group.rotation.y = 0.5;
+
+    const needles = this.track(new THREE.MeshStandardMaterial({ color: 0x1f6b3a, roughness: 1 }));
+    const needlesDark = this.track(new THREE.MeshStandardMaterial({ color: 0x17532d, roughness: 1 }));
+    const trunk = this.track(new THREE.MeshStandardMaterial({ color: 0x5b3a22, roughness: 1 }));
+    const snow = this.track(new THREE.MeshStandardMaterial({ color: 0xe8f0f8, roughness: 1 }));
+
+    const add = (w: number, h: number, d: number, x: number, y: number, z: number, mat: THREE.Material) => {
+      const geo = this.track(new THREE.BoxGeometry(w, h, d));
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x, y, z);
+      this.group.add(mesh);
+      return mesh;
+    };
+
+    add(0.2, 0.3, 0.2, 0, 0.15, 0, trunk);
+    // Tiers: [width, height, base y]
+    const tiers: [number, number, number][] = [
+      [1.1, 0.42, 0.26],
+      [0.88, 0.4, 0.62],
+      [0.66, 0.38, 0.96],
+      [0.46, 0.34, 1.28],
+      [0.26, 0.3, 1.56],
+    ];
+    tiers.forEach(([w, h, y], i) => {
+      add(w, h, w, 0, y + h / 2, 0, i % 2 ? needlesDark : needles);
+      // A thin layer of snow on each tier's top.
+      add(w * 0.82, 0.03, w * 0.82, 0, y + h + 0.015, 0, snow);
+    });
+
+    // Bulbs along each tier's edges (front and sides that face the camera).
+    const bulbGeo = this.track(new THREE.BoxGeometry(0.07, 0.07, 0.07));
+    let n = 0;
+    tiers.slice(0, 4).forEach(([w, , y]) => {
+      const half = w / 2 + 0.01;
+      const count = Math.max(2, Math.round(w * 4));
+      for (let k = 0; k < count; k++) {
+        const t = (k + 0.5) / count - 0.5;
+        // Alternate between the front face and the right/left faces.
+        const spots: [number, number][] = [
+          [t * w, half],
+          [half, t * w],
+          [-half, t * w],
+        ];
+        const [bx, bz] = spots[k % spots.length];
+        const color = new THREE.Color(BULB_COLORS[n % BULB_COLORS.length]);
+        const mat = this.track(new THREE.MeshBasicMaterial({ color: color.clone() }));
+        const bulb = new THREE.Mesh(bulbGeo, mat);
+        bulb.position.set(bx, y + 0.06, bz);
+        this.group.add(bulb);
+        this.bulbs.push({ mat, base: color, speed: 1.4 + (n % 5) * 0.37, phase: n * 1.7 });
+        n++;
+      }
+    });
+
+    // Star: a gold cube on its corner, plus a faint halo.
+    this.star = this.track(new THREE.MeshBasicMaterial({ color: 0xffd34d }));
+    const star = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.13, 0.13, 0.13)), this.star);
+    star.position.set(0, 1.94, 0);
+    star.rotation.set(Math.PI / 4, 0, Math.PI / 4);
+    this.group.add(star);
+    const halo = new THREE.Mesh(
+      this.track(new THREE.BoxGeometry(0.2, 0.2, 0.2)),
+      this.track(new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.18, depthWrite: false }))
+    );
+    halo.position.copy(star.position);
+    halo.rotation.copy(star.rotation);
+    this.group.add(halo);
+  }
+
+  private track<T extends { dispose(): void }>(thing: T): T {
+    this.disposables.push(thing);
+    return thing;
+  }
+
+  update(dt: number) {
+    this.time += dt;
+    for (const b of this.bulbs) {
+      // 0.35..1 brightness, each bulb at its own pace.
+      const k = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(this.time * b.speed + b.phase));
+      b.mat.color.copy(b.base).multiplyScalar(k);
+    }
+    const s = 0.85 + 0.15 * Math.sin(this.time * 2);
+    this.star.color.setRGB(1 * s, 0.83 * s, 0.3 * s);
+  }
+
+  dispose() {
+    for (const d of this.disposables) d.dispose();
+    this.disposables = [];
+  }
+}
+
 // ─── Elytra ──────────────────────────────────────────────────────────────────
 // Built like the game's ElytraModel, in the game's own units (1 px = 1/16 block,
 // y pointing DOWN from the shoulders, +z behind the body): two 10x20x2 wings
@@ -931,6 +1099,8 @@ export function SkinViewerAnimated({
   extendTop = 0,
   extendX = 0,
   elytra = false,
+  santaHat = false,
+  christmasTree = false,
   paused = false,
   active = true,
 }: SkinViewerAnimatedProps) {
@@ -951,6 +1121,7 @@ export function SkinViewerAnimated({
   const activeRef = useRef(active);
   activeRef.current = active;
   const elytraGroupRef = useRef<THREE.Group | null>(null);
+  const treeRef = useRef<ChristmasTree | null>(null);
   const capeMaterialsRef = useRef<{ mats: THREE.Material[]; hasCape: boolean }>({ mats: [], hasCape: false });
   // A turn the viewer is animating on its own (elytra on/off); a drag cancels it.
   const turnRef = useRef<{ from: number; to: number; start: number; dur: number } | null>(null);
@@ -1040,6 +1211,7 @@ export function SkinViewerAnimated({
       if (!pausedRef.current) {
         mixerRef.current?.update(delta);
         sceneEffect?.update(delta);
+        treeRef.current?.update(delta);
       }
       const turn = turnRef.current;
       if (turn) {
@@ -1098,6 +1270,21 @@ export function SkinViewerAnimated({
       pivotRef.current = null;
     };
   }, [width, height, effect, extendTop, extendX]);
+
+  // The Christmas tree: its own effect (after the scene's, which it hangs on),
+  // so turning it on/off doesn't rebuild the whole scene.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!christmasTree || !scene) return;
+    const tree = new ChristmasTree();
+    scene.add(tree.group);
+    treeRef.current = tree;
+    return () => {
+      scene.remove(tree.group);
+      tree.dispose();
+      if (treeRef.current === tree) treeRef.current = null;
+    };
+  }, [christmasTree, width, height, effect, extendTop, extendX]);
 
   // Load / swap the model + textures whenever the skin, cape or variant change.
   useEffect(() => {
@@ -1170,6 +1357,8 @@ export function SkinViewerAnimated({
         for (const m of capeMats) m.visible = capeTex !== null && !elytraRef.current;
       }
 
+      if (santaHat) root.getObjectByName("Head")?.add(buildSantaHat());
+
       // Frame the camera to the model's real bounds (differs a little between
       // slim/classic and with/without a cape).
       const camera = cameraRef.current;
@@ -1204,7 +1393,7 @@ export function SkinViewerAnimated({
     };
     // width/height/effect are here too: any of them rebuilds the scene in the
     // other effect, which leaves an empty pivot this effect has to repopulate.
-  }, [skinUrl, capeUrl, variant, width, height, effect, extendTop, extendX]);
+  }, [skinUrl, capeUrl, variant, width, height, effect, extendTop, extendX, santaHat]);
 
   // Elytra on/off: show or hide the wings, hide or restore the cape, and turn
   // the character to show its back / face front again.

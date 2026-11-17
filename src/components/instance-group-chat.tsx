@@ -12,7 +12,8 @@ import { Head } from "@/components/player-picker";
 import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
 import { useKeepInViewport } from "@/hooks/use-keep-in-viewport";
-import { subscribePresence, sortAllPresence, type PresenceEntry } from "@/services/presence";
+import { isActive, subscribePresence, sortAllPresence, withAway, type PresenceEntry } from "@/services/presence";
+import { subscribeAllActivity, type UserActivity } from "@/services/user-activity";
 import {
   getGroupLastRead,
   groupKeyFor,
@@ -77,7 +78,12 @@ function useGroupRoom(pack: Modpack, myUuid: string, open: boolean) {
     () => allMessages.filter((m) => !hidden.has(hiddenKey(groupKey, m.id))),
     [allMessages, hidden, groupKey]
   );
-  const [members, setMembers] = useState<Record<string, PresenceEntry>>({});
+  const [presence, setMembers] = useState<Record<string, PresenceEntry>>({});
+  // "Ausente" lives in userActivity: an away player in the instance doesn't
+  // count as "en línea" nor shows among who's playing (withAway + isActive).
+  const [activity, setActivity] = useState<Record<string, UserActivity>>({});
+  useEffect(() => subscribeAllActivity(setActivity), []);
+  const members = useMemo(() => withAway(presence, activity), [presence, activity]);
   const [lastRead, setLastRead] = useState(0);
   const [nicknames] = useState(() => getNicknames());
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -138,7 +144,7 @@ function useGroupRoom(pack: Modpack, myUuid: string, open: boolean) {
 
   const unread = messages.filter((m) => m.senderUuid !== myUuid && m.timestamp > lastRead).length;
   const roster = useMemo(() => sortAllPresence(members), [members]);
-  const onlineCount = roster.filter(([, e]) => e.online).length;
+  const onlineCount = roster.filter(([, e]) => isActive(e)).length;
   return { groupKey, messages, members, nicknames, scrollRef, unread, roster, onlineCount };
 }
 
@@ -221,14 +227,15 @@ function GroupChatBody({
             {onlineCount > 0 && <span className="text-green-400">· {onlineCount} en línea</span>}
           </p>
         </div>
-        {/* Only who's playing this instance right now (`online` in its roster). */}
+        {/* Only who's playing this instance right now and isn't "Ausente". */}
         <div className="flex -space-x-1.5">
           {roster
-            .filter(([, e]) => e.online)
+            .filter(([, e]) => isActive(e))
             .slice(0, 6)
             .map(([uuid, e]) => (
               <Hint label={nicknames[uuid] || e.username} key={uuid}>
-                <button
+                <button
+
                   type="button"
                   disabled={uuid === myUuid}
                   onClick={() => openChat(uuid)}

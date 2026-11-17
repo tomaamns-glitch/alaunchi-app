@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Bell, Check, Globe, Stethoscope, UserPlus, X, Zap } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
-import { sortAllPresence } from "@/services/presence";
+import { isActive, sortAllPresence } from "@/services/presence";
 import {
   acceptFriendRequest,
   declineFriendRequest,
@@ -114,7 +114,8 @@ export function ActivityButton({ open, onOpenChange }: { open: boolean; onOpenCh
   const recentFriends = friendsSorted.filter(
     ([, e]) => e.online || (e.lastSeen && Date.now() - e.lastSeen < FRIEND_RECENT_WINDOW_MS)
   );
-  const anyFriendOnline = friendsSorted.some(([, e]) => e.online);
+  // Away friends don't light the green dot: "Ausente" never counts as activity.
+  const anyFriendOnline = friendsSorted.some(([, e]) => isActive(e));
 
   // Pending friend requests.
   const [requests, setRequests] = useState<Record<string, FriendRequestEntry>>({});

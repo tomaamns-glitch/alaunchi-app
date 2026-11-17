@@ -1,10 +1,11 @@
+import { ChristmasLights } from "@/components/christmas-decorations";
 import { Hint } from "@/components/hint";
 import { CuriositiesCard } from "@/components/curiosities-card";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
 import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
-import { Compass, LayoutGrid, Plus, Search, X } from "lucide-react";
+import { Box, Compass, Plus, SlidersHorizontal } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { useInstanceFolders } from "@/hooks/use-instance-folders";
@@ -21,8 +22,9 @@ import { HubSidebar, type HubView } from "@/components/hub-sidebar";
 import { InstanceTile } from "@/components/hub-tile";
 import { Button } from "@/components/ui/button";
 import { AppBackground } from "@/components/app-background";
-import { CurseForgeImportDialog, CurseForgeLogo } from "@/components/curseforge-import-dialog";
-import { Input } from "@/components/ui/input";
+import { CURSEFORGE_IMPORT_ENABLED, CurseForgeImportDialog, CurseForgeLogo } from "@/components/curseforge-import-dialog";
+import { HubToolbar, SORT_OPTIONS, pillButtonClass, type HubLayout, type HubSort, type HubStatus } from "@/components/hub-toolbar";
+import { useRunningInstanceIds } from "@/hooks/use-instance-run-state";
 import { Slider } from "@/components/ui/slider";
 
 // Minimum tile width in px. The grid uses `repeat(auto-fill, minmax(SIZE, 1fr))`:
@@ -31,6 +33,27 @@ import { Slider } from "@/components/ui/slider";
 const TILE_SIZE_KEY = "alaunchi_hub_tile_size";
 const TILE_MIN = 140;
 const TILE_MAX = 340;
+const SORT_KEY = "alaunchi_hub_sort";
+const LAYOUT_KEY = "alaunchi_hub_layout";
+
+const LOADER_LABELS: Record<string, string> = {
+  vanilla: "Vanilla",
+  forge: "Forge",
+  neoforge: "NeoForge",
+  fabric: "Fabric",
+  quilt: "Quilt",
+};
+
+/** Newest Minecraft version first ("1.21.4" before "1.21", before "1.20.6"). */
+function compareMcVersionsDesc(a: string, b: string): number {
+  const pa = a.split(/[.-]/).map((n) => parseInt(n, 10) || 0);
+  const pb = b.split(/[.-]/).map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pb[i] ?? 0) - (pa[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
 
 export default function Hub() {
   const [curseForgeOpen, setCurseForgeOpen] = useState(false);
@@ -53,11 +76,19 @@ export default function Hub() {
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [view, setView] = useState<HubView>({ kind: "all" });
   const [search, setSearch] = useState("");
-  const [searchOpen, setSearchOpen] = useState(false);
+  // Toolbar: sort and layout are remembered; the filters start clear every time.
+  const [sort, setSort] = useState<HubSort>(() => {
+    const saved = localStorage.getItem(SORT_KEY);
+    return SORT_OPTIONS.some((o) => o.id === saved) ? (saved as HubSort) : "custom";
+  });
+  const [layout, setLayout] = useState<HubLayout>(() => (localStorage.getItem(LAYOUT_KEY) === "list" ? "list" : "grid"));
+  const [versionFilter, setVersionFilter] = useState("all");
+  const [loaderFilter, setLoaderFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<HubStatus>("all");
+  const runningIds = useRunningInstanceIds();
   const [sizeOpen, setSizeOpen] = useState(false);
   const sizeRef = useRef<HTMLDivElement | null>(null);
   useDismissOnOutsideClick([sizeRef], () => setSizeOpen(false), sizeOpen);
-  const searchRef = useRef<HTMLInputElement>(null);
   const [tileSize, setTileSize] = useState(() => {
     const raw = Number(localStorage.getItem(TILE_SIZE_KEY));
     return raw >= TILE_MIN && raw <= TILE_MAX ? raw : 200;
@@ -101,12 +132,59 @@ export default function Hub() {
     return { baseIds: order.filter((id) => pinned.includes(id) && byId.has(id)), reorderFn: null as ((next: string[]) => void) | null };
   }, [view, order, folderOrder, pinned, byId, reorderAll, reorderInFolder]);
 
-  const canDrag = !!reorderFn;
   const displayIds = baseIds;
 
   useEffect(() => {
     localStorage.setItem(TILE_SIZE_KEY, String(tileSize));
   }, [tileSize]);
+  useEffect(() => {
+    localStorage.setItem(SORT_KEY, sort);
+  }, [sort]);
+  useEffect(() => {
+    localStorage.setItem(LAYOUT_KEY, layout);
+  }, [layout]);
+
+  // Filter options come from the instances you actually have.
+  const versionOptions = useMemo(
+    () => [...new Set(instances.map((i) => i.minecraftVersion).filter(Boolean))].sort(compareMcVersionsDesc),
+    [instances]
+  );
+  const loaderOptions = useMemo(() => {
+    const ids = [...new Set(instances.map((i) => (i.loaderType || "vanilla").toLowerCase()))];
+    return ids.sort().map((id) => ({ id, label: LOADER_LABELS[id] ?? id.charAt(0).toUpperCase() + id.slice(1) }));
+  }, [instances]);
+  // A filter whose value disappeared (its last instance deleted) goes back to "all".
+  useEffect(() => {
+    if (versionFilter !== "all" && !versionOptions.includes(versionFilter)) setVersionFilter("all");
+  }, [versionFilter, versionOptions]);
+  useEffect(() => {
+    if (loaderFilter !== "all" && !loaderOptions.some((o) => o.id === loaderFilter)) setLoaderFilter("all");
+  }, [loaderFilter, loaderOptions]);
+
+  const searching = search.trim().length > 0;
+  const filtering = versionFilter !== "all" || loaderFilter !== "all" || statusFilter !== "all";
+  // Search looks through every instance (not only the current folder); the
+  // filters and the sort apply on top of whatever is listed.
+  const shownIds = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let list = (q ? instances.filter((i) => i.name.toLowerCase().includes(q)).map((i) => i.id) : displayIds)
+      .map((id) => byId.get(id))
+      .filter((i): i is NonNullable<typeof i> => !!i);
+    if (versionFilter !== "all") list = list.filter((i) => i.minecraftVersion === versionFilter);
+    if (loaderFilter !== "all") list = list.filter((i) => (i.loaderType || "vanilla").toLowerCase() === loaderFilter);
+    if (statusFilter === "running") list = list.filter((i) => runningIds.has(i.id));
+    else if (statusFilter === "downloaded") list = list.filter((i) => i.isDownloaded);
+    else if (statusFilter === "created") list = list.filter((i) => !i.isDownloaded);
+    else if (statusFilter === "unplayed") list = list.filter((i) => !i.totalPlaytimeMs || i.totalPlaytimeMs < 60000);
+    if (sort === "recent") list = [...list].sort((a, b) => (b.installedAt ?? 0) - (a.installedAt ?? 0));
+    else if (sort === "name") list = [...list].sort((a, b) => a.name.localeCompare(b.name, "es", { sensitivity: "base" }));
+    else if (sort === "played") list = [...list].sort((a, b) => (b.totalPlaytimeMs ?? 0) - (a.totalPlaytimeMs ?? 0));
+    return list.map((i) => i.id);
+  }, [search, instances, displayIds, byId, versionFilter, loaderFilter, statusFilter, runningIds, sort]);
+
+  // Dragging reorders the whole folder/list, so only on the plain custom order
+  // with nothing hidden.
+  const canDrag = !!reorderFn && sort === "custom" && !searching && !filtering;
 
   // The size you pick is each tile's minimum width: as many columns as fit, then
   // they stretch a little to fill the row. Fixed-width centred columns left the
@@ -143,12 +221,6 @@ export default function Hub() {
     onReorder: (next) => reorderFn?.(next),
   });
 
-  const searching = search.trim().length > 0;
-  const searchResults = useMemo(() => {
-    if (!searching) return [];
-    const q = search.trim().toLowerCase();
-    return instances.filter((i) => i.name.toLowerCase().includes(q));
-  }, [searching, search, instances]);
 
   const noDrag = {
     draggable: false,
@@ -163,6 +235,51 @@ export default function Hub() {
 
   if (!isAuthenticated) return null;
 
+  // Tile size (grid only): the slider slides out to the button's right. A click
+  // anywhere else folds it back (useDismissOnOutsideClick above).
+  const sizeControl = (
+    <div ref={sizeRef} className="flex items-center">
+      <Hint label="Tamaño de las instancias">
+        <button
+          type="button"
+          onClick={() => setSizeOpen((v) => !v)}
+          className={pillButtonClass(false, sizeOpen)}
+          aria-label="Tamaño de las instancias"
+          aria-expanded={sizeOpen}
+        >
+          <SlidersHorizontal className="h-4 w-4" />
+        </button>
+      </Hint>
+      <AnimatePresence initial={false}>
+        {sizeOpen && (
+          <motion.div
+            key="size-box"
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: 168, opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            transition={{ duration: 0.22, ease: "easeOut" }}
+            className="overflow-hidden"
+          >
+            <div className="flex h-8 w-[168px] items-center pl-3 pr-2">
+              <Slider
+                // Column counts, mirrored so dragging right means bigger tiles.
+                min={minCols}
+                max={maxCols}
+                step={1}
+                disabled={gridW === 0 || minCols === maxCols}
+                // The app accent instead of the yellow/orange primary (track, fill, thumb, focus ring).
+                className="[&>span:first-child]:bg-white/10 [&>span:first-child>span]:bg-accent [&_[role=slider]]:border-accent/70 [&_[role=slider]]:focus-visible:ring-0"
+                value={[minCols + maxCols - currentCols]}
+                onValueChange={([v]) => setTileSize(sizeForCols(minCols + maxCols - v))}
+                aria-label="Tamaño de las instancias"
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+
   const renderTile = (id: string, allowDrag: boolean) => {
     const inst = byId.get(id);
     if (!inst) return null;
@@ -174,6 +291,7 @@ export default function Hub() {
         pinned={pinned.includes(inst.id)}
         onTogglePin={() => togglePin(inst.id)}
         drag={allowDrag ? handlersFor(id) : noDrag}
+        layout={layout}
         onRemoveFromFolder={view.kind === "folder" ? () => moveInstance(inst.id, null) : undefined}
       />
     );
@@ -189,146 +307,73 @@ export default function Hub() {
         <div className="relative shrink-0 -mx-6 -mt-6 rounded-none border-0 bg-gray-500/10 backdrop-blur-md px-6 py-2.5 overflow-hidden">
           <div className="pointer-events-none absolute -top-16 -right-16 h-56 w-56 rounded-full bg-accent/10 blur-3xl" />
           <div className="relative flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <h1 className="text-xl font-bold leading-tight">Mis instancias</h1>
-              {/* Divider between the title and the count, like the instance manager's header. */}
-              <div className="my-1 h-px w-full bg-white/10" aria-hidden />
-              <p className="text-xs text-muted-foreground">
-                {instances.length} instancia{instances.length === 1 ? "" : "s"}
-              </p>
+            <div className="flex items-center gap-3 min-w-0">
+              {/* The page's icon, in the accent. */}
+              <Box className="h-10 w-10 shrink-0 text-accent drop-shadow-[0_0_10px_hsl(var(--accent)/0.35)]" strokeWidth={1.75} aria-hidden />
+              <div className="min-w-0">
+                <h1 className="text-xl font-bold leading-tight">Mis instancias</h1>
+                {/* Divider between the title and the count, like the instance manager's header. */}
+                <div className="my-1 h-px w-full bg-white/10" aria-hidden />
+                <p className="text-xs text-muted-foreground">
+                  {instances.length} instancia{instances.length === 1 ? "" : "s"}
+                </p>
+              </div>
             </div>
 
-            {/* Importar + Nueva instancia on top; search and tile size right under them. */}
+            {/* Importar, Explorar and Nueva instancia; search, filters and tile size are in the toolbar below. */}
             <div className="flex flex-col items-end gap-1 shrink-0">
-              <div className="flex items-center gap-1.5">
-                {/* Importar instancias de CurseForge. */}
+              <div className="flex items-center gap-3">
+                {/* Importar instancias de CurseForge (hidden for now: CURSEFORGE_IMPORT_ENABLED). */}
+                {CURSEFORGE_IMPORT_ENABLED && (
                 <Button
-                  size="sm"
                   variant="outline"
-                  className="border-white/10 gap-1.5"
+                  className="h-11 px-5 gap-2.5 text-sm font-semibold [&_svg]:size-5 border-white/10"
                   onClick={() => setCurseForgeOpen(true)}
                 >
-                  <CurseForgeLogo className="h-3.5 w-3.5 text-[#F16436]" /> Importar de CurseForge
+                  <CurseForgeLogo className="h-5 w-5 text-[#F16436]" /> Importar de CurseForge
                 </Button>
+                )}
                 {/* Explorar: Modrinth content and creators (pages/explore.tsx). */}
                 <Button
-                  size="sm"
                   variant="outline"
-                  className="border-white/10 gap-1.5"
+                  className="h-11 px-5 gap-2.5 text-sm font-semibold [&_svg]:size-5 border-white/10"
                   onClick={() => setLocation("/explore")}
                 >
-                  <Compass className="h-3.5 w-3.5" /> Explorar
+                  <Compass className="h-5 w-5" /> Explorar
                 </Button>
                 {/* The page's only colored button. */}
                 <Button
-                  size="sm"
                   data-tour="hub-new-instance"
                   // border-transparent: the default variant keeps the orange primary border.
-                  className="bg-accent text-accent-foreground hover:bg-accent/90 border-transparent"
+                  className="h-11 px-5 gap-2.5 text-sm font-semibold [&_svg]:size-5 bg-accent text-accent-foreground hover:bg-accent/90 border-transparent"
                   onClick={() => setDialogOpen(true)}
                 >
-                  <Plus className="mr-1.5 h-3.5 w-3.5" /> Nueva instancia
+                  <Plus className="h-5 w-5" /> Nueva instancia
                 </Button>
               </div>
-              {instances.length > 0 && (
-                <div className="flex items-center">
-                  {/* Search + tile size side by side, with a thin line between them. Opening the
-                      search, the box grows out to the magnifier's right — pushing it left. */}
-                  <div className="flex items-center">
-                  <Hint label={searchOpen ? "Cerrar búsqueda" : "Buscar instancia"}>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      // No box around it, open or not: just the icon (accent while searching).
-                      className={`h-8 w-8 shrink-0 hover:bg-transparent focus-visible:ring-0 ${searchOpen ? "text-accent hover:text-accent" : "text-muted-foreground hover:text-foreground"}`}
-                      aria-label={searchOpen ? "Cerrar búsqueda" : "Buscar instancia"}
-                      onClick={() => {
-                        if (searchOpen) {
-                          setSearch("");
-                          setSearchOpen(false);
-                        } else {
-                          setSearchOpen(true);
-                          setTimeout(() => searchRef.current?.focus(), 0);
-                        }
-                      }}
-                    >
-                      <Search className="h-4 w-4" />
-                    </Button>
-                  </Hint>
-                  <AnimatePresence initial={false}>
-                    {searchOpen && (
-                      <motion.div
-                        key="search-box"
-                        initial={{ width: 0, opacity: 0 }}
-                        animate={{ width: 216, opacity: 1 }}
-                        exit={{ width: 0, opacity: 0 }}
-                        transition={{ duration: 0.22, ease: "easeOut" }}
-                        className="overflow-hidden"
-                      >
-                        <div className="pl-1 pr-0.5">
-                          <Input
-                            ref={searchRef}
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
-                            onBlur={() => !search && setSearchOpen(false)}
-                            onKeyDown={(e) => e.key === "Escape" && (setSearch(""), setSearchOpen(false))}
-                            placeholder="Nombre de la instancia..."
-                            className="h-8 w-[208px] text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
-                          />
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                  <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden />
-                {/* Tile size: like the search, the slider slides out to the button's right.
-                    A click anywhere else folds it back (useDismissOnOutsideClick below). */}
-                <div ref={sizeRef} className="flex items-center">
-                <Hint label="Tamaño de las instancias">
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    onClick={() => setSizeOpen((v) => !v)}
-                    className={`h-8 w-8 shrink-0 hover:bg-transparent focus-visible:ring-0 ${sizeOpen ? "text-accent hover:text-accent" : "text-muted-foreground hover:text-foreground"}`}
-                    aria-label="Tamaño de las instancias"
-                    aria-expanded={sizeOpen}
-                  >
-                    <LayoutGrid className="h-4 w-4" />
-                  </Button>
-                </Hint>
-                <AnimatePresence initial={false}>
-                  {sizeOpen && (
-                    <motion.div
-                      key="size-box"
-                      initial={{ width: 0, opacity: 0 }}
-                      animate={{ width: 168, opacity: 1 }}
-                      exit={{ width: 0, opacity: 0 }}
-                      transition={{ duration: 0.22, ease: "easeOut" }}
-                      className="overflow-hidden"
-                    >
-                      <div className="flex h-8 w-[168px] items-center pl-2 pr-1">
-                        <Slider
-                          // Column counts, mirrored so dragging right means bigger tiles.
-                          min={minCols}
-                          max={maxCols}
-                          step={1}
-                          disabled={gridW === 0 || minCols === maxCols}
-                          // The app accent instead of the yellow/orange primary (track, fill, thumb, focus ring).
-                          className="[&>span:first-child]:bg-white/10 [&>span:first-child>span]:bg-accent [&_[role=slider]]:border-accent/70 [&_[role=slider]]:focus-visible:ring-0"
-                          value={[minCols + maxCols - currentCols]}
-                          onValueChange={([v]) => setTileSize(sizeForCols(minCols + maxCols - v))}
-                          aria-label="Tamaño de las instancias"
-                        />
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-                </div>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>
+
+        {instances.length > 0 && (
+          <HubToolbar
+            search={search}
+            onSearchChange={setSearch}
+            sort={sort}
+            onSortChange={setSort}
+            version={versionFilter}
+            onVersionChange={setVersionFilter}
+            versions={versionOptions}
+            loader={loaderFilter}
+            onLoaderChange={setLoaderFilter}
+            loaders={loaderOptions}
+            status={statusFilter}
+            onStatusChange={setStatusFilter}
+            layout={layout}
+            onLayoutChange={setLayout}
+            extra={layout === "grid" ? sizeControl : null}
+          />
+        )}
 
         <div className="flex-1 flex min-h-0">
         <main ref={gridAreaRef} className="flex-1 overflow-y-auto" data-tour="hub-instances">
@@ -339,21 +384,23 @@ export default function Hub() {
                 <Plus className="mr-2 h-4 w-4" /> Crea la primera
               </Button>
             </div>
-          ) : searching ? (
-            searchResults.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-16">Ninguna instancia coincide con "{search}".</p>
-            ) : (
-              <div className="grid gap-4" style={gridStyle}>
-                {searchResults.map((inst) => renderTile(inst.id, false))}
-              </div>
-            )
-          ) : displayIds.length === 0 ? (
+          ) : shownIds.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-16">
-              {view.kind === "favorites" ? "No has destacado ninguna instancia todavía." : "Esta carpeta está vacía."}
+              {searching
+                ? `Ninguna instancia coincide con "${search}".`
+                : filtering
+                  ? "Ninguna instancia coincide con los filtros."
+                  : view.kind === "favorites"
+                    ? "No has destacado ninguna instancia todavía."
+                    : "Esta carpeta está vacía."}
             </p>
+          ) : layout === "list" ? (
+            <div className="flex flex-col gap-2">
+              {shownIds.map((id) => renderTile(id, canDrag))}
+            </div>
           ) : (
             <div className="grid gap-4" style={gridStyle}>
-              {displayIds.map((id) => renderTile(id, canDrag))}
+              {shownIds.map((id) => renderTile(id, canDrag))}
             </div>
           )}
         </main>
@@ -383,6 +430,8 @@ export default function Hub() {
       <CuriositiesCard className="bottom-24 left-5" />
 
       <footer className="relative z-20 h-20 [transform:translateZ(0)] flex items-center justify-between px-6 shrink-0">
+        {/* December: fairy lights along the top edge (lib/christmas.ts). */}
+        <ChristmasLights edge="top" />
         {/* The blur in a layer of its own: on the footer itself, the chat windows
             inside it couldn't blur the page behind them (backdrop root). The
             transform keeps `fixed` descendants relative to the footer, as the blur did. */}

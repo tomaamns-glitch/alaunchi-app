@@ -397,6 +397,199 @@
   --color-gray-950: oklch(87% 0.001 255);
 }
 
+/* ─── MIDNIGHT THEME ("Medianoche") ──────────────────────────────────────────
+   A dark theme on deep navy instead of neutral black (src/lib/theme.ts sets
+   data-theme="midnight"). Same approach as the light theme, but nothing is
+   inverted: the base palette goes navy, and the neutral gray scale / black that
+   the app uses literally (bg-gray-500/10 glass, bg-black/40 titlebar,
+   text-gray-300…) gets a blue tint, so every panel picks up the navy tone.
+   Everything that checks `theme === "light"` treats it as dark. */
+:root[data-theme="midnight"] {
+  --background: 218 58% 7%; /* #071225 */
+  --foreground: 210 40% 98%;
+  --border: 215 38% 18%;
+  --card: 217 48% 11%; /* #0e1b31 */
+  --card-foreground: 210 40% 98%;
+  --card-border: 215 38% 18%;
+  --popover: 217 48% 11%;
+  --popover-foreground: 210 40% 98%;
+  --popover-border: 215 38% 20%;
+  --secondary: 216 40% 16%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 216 40% 16%;
+  --muted-foreground: 215 22% 68%;
+  --input: 215 36% 22%;
+  --sidebar: 218 55% 8%;
+  --sidebar-foreground: 210 40% 98%;
+  --sidebar-border: 215 38% 18%;
+  --sidebar-accent: 216 40% 16%;
+  --sidebar-accent-foreground: 210 40% 98%;
+  --accent: 206 92% 56%;
+
+  --color-black: oklch(13% 0.04 262);
+  --color-gray-50: oklch(98% 0.006 250);
+  --color-gray-100: oklch(95.5% 0.012 250);
+  --color-gray-200: oklch(91% 0.018 251);
+  --color-gray-300: oklch(84% 0.028 252);
+  --color-gray-400: oklch(71% 0.04 254);
+  /* The glass tint (bg-gray-500/10…): a blue-gray, so panels read navy. */
+  --color-gray-500: oklch(56% 0.075 255);
+  --color-gray-600: oklch(45% 0.065 258);
+  --color-gray-700: oklch(36% 0.06 260);
+  --color-gray-800: oklch(27% 0.052 262);
+  --color-gray-900: oklch(20% 0.045 263);
+  --color-gray-950: oklch(14% 0.04 264);
+
+  /* Solid panels (Efecto glass off), in navy. */
+  --solid-1: 217 46% 12%;
+  --solid-2: 216 42% 15%;
+  --solid-pop: 217 44% 13.5%;
+  --solid-rim: 210 60% 80% / 0.08;
+  --solid-light: 210 80% 90% / 0.04;
+  --solid-shadow: 222 70% 3% / 0.5;
+}
+
+/* ─── BOSQUE THEME ─────────────────────────────────────────────────────────
+   Dark on deep green — same recipe as MIDNIGHT above (base palette + tinted gray
+   scale/black), its own accent. */
+:root[data-theme="forest"] {
+  --background: 158 45% 6%;
+  --foreground: 158 30% 97%;
+  --border: 158 28% 17%;
+  --card: 158 36% 10%;
+  --card-foreground: 158 30% 97%;
+  --card-border: 158 28% 17%;
+  --popover: 158 36% 10%;
+  --popover-foreground: 158 30% 97%;
+  --popover-border: 158 28% 19%;
+  --secondary: 158 30% 15%;
+  --secondary-foreground: 158 30% 97%;
+  --muted: 158 30% 15%;
+  --muted-foreground: 158 16% 68%;
+  --input: 158 26% 21%;
+  --sidebar: 158 42% 7%;
+  --sidebar-foreground: 158 30% 97%;
+  --sidebar-border: 158 28% 17%;
+  --sidebar-accent: 158 30% 15%;
+  --sidebar-accent-foreground: 158 30% 97%;
+  --accent: 148 62% 47%;
+  --accent-foreground: 0 0% 0%;
+
+  --color-black: oklch(13% 0.035 165);
+  --color-gray-50: oklch(98% 0.006 165);
+  --color-gray-100: oklch(95.5% 0.011 165);
+  --color-gray-200: oklch(91% 0.016 165);
+  --color-gray-300: oklch(84% 0.025 165);
+  --color-gray-400: oklch(71% 0.036 165);
+  --color-gray-500: oklch(56% 0.065 165);
+  --color-gray-600: oklch(45% 0.058 165);
+  --color-gray-700: oklch(36% 0.052 165);
+  --color-gray-800: oklch(27% 0.046 165);
+  --color-gray-900: oklch(20% 0.04 165);
+  --color-gray-950: oklch(14% 0.035 165);
+
+  --solid-1: 158 34% 11%;
+  --solid-2: 158 30% 14%;
+  --solid-pop: 158 32% 12.5%;
+  --solid-rim: 158 50% 80% / 0.08;
+  --solid-light: 158 70% 90% / 0.04;
+  --solid-shadow: 158 60% 3% / 0.5;
+}
+
+/* ─── BRASA THEME ─────────────────────────────────────────────────────────
+   Dark on warm dark brown with an amber accent — same recipe as MIDNIGHT above (base palette + tinted gray
+   scale/black), its own accent. */
+:root[data-theme="ember"] {
+  --background: 22 40% 6%;
+  --foreground: 22 30% 97%;
+  --border: 22 25% 17%;
+  --card: 22 32% 10%;
+  --card-foreground: 22 30% 97%;
+  --card-border: 22 25% 17%;
+  --popover: 22 32% 10%;
+  --popover-foreground: 22 30% 97%;
+  --popover-border: 22 25% 19%;
+  --secondary: 22 27% 15%;
+  --secondary-foreground: 22 30% 97%;
+  --muted: 22 27% 15%;
+  --muted-foreground: 22 14% 68%;
+  --input: 22 23% 21%;
+  --sidebar: 22 38% 7%;
+  --sidebar-foreground: 22 30% 97%;
+  --sidebar-border: 22 25% 17%;
+  --sidebar-accent: 22 27% 15%;
+  --sidebar-accent-foreground: 22 30% 97%;
+  --accent: 30 94% 55%;
+  --accent-foreground: 0 0% 0%;
+
+  --color-black: oklch(13% 0.035 55);
+  --color-gray-50: oklch(98% 0.006 55);
+  --color-gray-100: oklch(95.5% 0.011 55);
+  --color-gray-200: oklch(91% 0.016 55);
+  --color-gray-300: oklch(84% 0.025 55);
+  --color-gray-400: oklch(71% 0.036 55);
+  --color-gray-500: oklch(56% 0.065 55);
+  --color-gray-600: oklch(45% 0.058 55);
+  --color-gray-700: oklch(36% 0.052 55);
+  --color-gray-800: oklch(27% 0.046 55);
+  --color-gray-900: oklch(20% 0.04 55);
+  --color-gray-950: oklch(14% 0.035 55);
+
+  --solid-1: 22 31% 11%;
+  --solid-2: 22 27% 14%;
+  --solid-pop: 22 29% 12.5%;
+  --solid-rim: 22 50% 80% / 0.08;
+  --solid-light: 22 70% 90% / 0.04;
+  --solid-shadow: 22 60% 3% / 0.5;
+}
+
+/* ─── AMATISTA THEME ─────────────────────────────────────────────────────────
+   Dark on deep violet — same recipe as MIDNIGHT above (base palette + tinted gray
+   scale/black), its own accent. */
+:root[data-theme="amethyst"] {
+  --background: 262 45% 6%;
+  --foreground: 262 30% 97%;
+  --border: 262 28% 17%;
+  --card: 262 36% 10%;
+  --card-foreground: 262 30% 97%;
+  --card-border: 262 28% 17%;
+  --popover: 262 36% 10%;
+  --popover-foreground: 262 30% 97%;
+  --popover-border: 262 28% 19%;
+  --secondary: 262 30% 15%;
+  --secondary-foreground: 262 30% 97%;
+  --muted: 262 30% 15%;
+  --muted-foreground: 262 16% 68%;
+  --input: 262 26% 21%;
+  --sidebar: 262 42% 7%;
+  --sidebar-foreground: 262 30% 97%;
+  --sidebar-border: 262 28% 17%;
+  --sidebar-accent: 262 30% 15%;
+  --sidebar-accent-foreground: 262 30% 97%;
+  --accent: 266 82% 67%;
+  --accent-foreground: 0 0% 0%;
+
+  --color-black: oklch(13% 0.035 295);
+  --color-gray-50: oklch(98% 0.006 295);
+  --color-gray-100: oklch(95.5% 0.011 295);
+  --color-gray-200: oklch(91% 0.016 295);
+  --color-gray-300: oklch(84% 0.025 295);
+  --color-gray-400: oklch(71% 0.036 295);
+  --color-gray-500: oklch(56% 0.065 295);
+  --color-gray-600: oklch(45% 0.058 295);
+  --color-gray-700: oklch(36% 0.052 295);
+  --color-gray-800: oklch(27% 0.046 295);
+  --color-gray-900: oklch(20% 0.04 295);
+  --color-gray-950: oklch(14% 0.035 295);
+
+  --solid-1: 262 34% 11%;
+  --solid-2: 262 30% 14%;
+  --solid-pop: 262 32% 12.5%;
+  --solid-rim: 262 50% 80% / 0.08;
+  --solid-light: 262 70% 90% / 0.04;
+  --solid-shadow: 262 60% 3% / 0.5;
+}
+
 /* Real white/black where the color is ON a solid colored surface (badges,
    destructive/accent buttons) — inverting those would put dark text on red. */
 :root[data-theme="light"]

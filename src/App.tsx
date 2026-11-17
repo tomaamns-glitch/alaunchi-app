@@ -61,6 +61,7 @@ function prefetchLazyPages() {
   prefetchHeavyChunks();
 }
 import { Titlebar } from "@/components/titlebar";
+import { Snowfall } from "@/components/christmas-decorations";
 import { OnboardingTour } from "@/components/onboarding-tour";
 import { OnlineTour } from "@/components/online-tour";
 import { OptionalGroupsDialog } from "@/components/optional-groups-dialog";
@@ -364,6 +365,8 @@ function App() {
           </div>
         </WouterRouter>
         <Toaster />
+        {/* December: falling snow over everything (lib/christmas.ts). */}
+        <Snowfall />
       </TooltipProvider>
     </QueryClientProvider>
   );

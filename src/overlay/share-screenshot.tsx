@@ -39,7 +39,11 @@ export function ShareScreenshot({ shot }: { shot: ShareableShot }) {
   // Online first, then by most recent conversation, then alphabetically.
   const people = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const rank = (uuid: string) => (activity[uuid]?.status === "playing" || activity[uuid]?.status === "online" ? 1 : 0);
+    // Active friends first; "Ausente" ranks with the offline ones.
+    const rank = (uuid: string) => {
+      const s = shownStatus(activity[uuid]);
+      return s === "playing" || s === "online" ? 1 : 0;
+    };
     return Object.entries(friends ?? {})
       .map(([uuid, f]) => ({ uuid, username: f.username || "", name: nicknames[uuid] || f.username || "Jugador" }))
       .filter((p) => !q || p.name.toLowerCase().includes(q) || p.username.toLowerCase().includes(q))

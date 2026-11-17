@@ -147,10 +147,12 @@ export function FriendsPanel({ uuid, username, onOpenProfile, onChat }: FriendsP
   const sentList = Object.entries(sent).sort(([, a], [, b]) => b.sentAt - a.sentAt);
   const friendsList = Object.entries(friends).sort(([, a], [, b]) => a.username.localeCompare(b.username));
   const isOnline = (id: string) => !!activity[id] && activity[id].status !== "offline";
-  // Playing first, then just online; alphabetical within each (stable sort).
-  const onlineList = friendsList
-    .filter(([id]) => isOnline(id))
-    .sort(([a], [b]) => Number(activity[b].status === "playing") - Number(activity[a].status === "playing"));
+  // Playing, then just online, then "Ausente" last; alphabetical within each
+  // (stable sort). Away friends stay listed (amber) but don't count: the tab's
+  // number only counts real activity.
+  const rank = (id: string) => (activity[id].away ? 2 : activity[id].status === "playing" ? 0 : 1);
+  const onlineList = friendsList.filter(([id]) => isOnline(id)).sort(([a], [b]) => rank(a) - rank(b));
+  const activeCount = onlineList.filter(([id]) => !activity[id].away).length;
   const searching = !!search.trim();
 
   return (
@@ -160,7 +162,7 @@ export function FriendsPanel({ uuid, username, onOpenProfile, onChat }: FriendsP
             replace the tab's list while there's text). */}
         <div className={cn("flex items-center gap-0.5 p-0.5 rounded-md bg-white/[0.04]", searching && "opacity-60")}>
           <TabButton active={!searching && tab === "all"} label="Todos" count={friendsList.length} onClick={() => { setSearch(""); setTab("all"); }} />
-          <TabButton active={!searching && tab === "online"} label="En línea" count={onlineList.length} onClick={() => { setSearch(""); setTab("online"); }} />
+          <TabButton active={!searching && tab === "online"} label="En línea" count={activeCount} onClick={() => { setSearch(""); setTab("online"); }} />
           <TabButton
             active={!searching && tab === "requests"}
             label="Solicitudes"

@@ -1,4 +1,5 @@
 import { Hint } from "@/components/hint";
+import { ChristmasLights, SantaHat } from "@/components/christmas-decorations";
 import { LauncherCustomizeDialog } from "@/components/launcher-customize-dialog";
 import { useEffect, useState } from "react";
 import { useLocation, useRoute } from "wouter";
@@ -127,8 +128,10 @@ export function Titlebar() {
     <>
       <div
         style={dragStyle}
-        className="h-11 shrink-0 flex items-center justify-between bg-black/40 border-b border-white/5 select-none"
+        className="relative z-30 h-11 shrink-0 flex items-center justify-between bg-black/40 border-b border-white/5 select-none"
       >
+        {/* December: a string of lights along the bottom edge (lib/christmas.ts). */}
+        <ChristmasLights />
         <div className="flex items-center gap-1 px-2">
           {onHub && !hasCarousel ? (
             <div className="h-7 w-7 flex items-center justify-center" data-tour="titlebar-carousel">
@@ -153,7 +156,9 @@ export function Titlebar() {
               </button>
             </Hint>
           )}
-          <span className="font-bold tracking-tight text-white text-sm">
+          <span className="relative font-bold tracking-tight text-white text-sm">
+            {/* December: a Santa hat tipped over the "A" (lib/christmas.ts). */}
+            <SantaHat className="absolute -left-[7px] -top-[11px] h-[15px] w-[17px] -rotate-[18deg]" />
             <span className="text-accent">AL</span>aunchi
           </span>
         </div>

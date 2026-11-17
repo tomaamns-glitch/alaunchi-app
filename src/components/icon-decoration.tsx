@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { subscribeIconColors, subscribeIconDecoration } from "@/services/public-profile";
+import { isIconDecorationLocked } from "@/lib/decoration-catalog";
 import { flamesFilter, iconColorsFor } from "@/lib/icon-colors";
 import { TracedBorder } from "@/components/traced-border";
 import { LottieDecoration } from "@/components/lottie-decoration";
@@ -404,7 +405,8 @@ export function useLiveIconDecoration(uuid: string | null | undefined): string {
       setId("none");
       return;
     }
-    return subscribeIconDecoration(uuid, setId);
+    // A locked decoration (decoration-catalog.ts) someone had saved is drawn as none.
+    return subscribeIconDecoration(uuid, (value) => setId(isIconDecorationLocked(value) ? "none" : value));
   }, [uuid]);
   return id;
 }

@@ -118,6 +118,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   skinLibraryDelete: (args) => ipcRenderer.invoke("mc:skin-library-delete", args),
   fetchTextureB64: (args) => ipcRenderer.invoke("mc:fetch-texture-b64", args),
   getSkinUrlForUuid: (args) => ipcRenderer.invoke("mc:get-skin-url", args),
+  getPlayerSkin: (args) => ipcRenderer.invoke("mc:get-player-skin", args),
   getUuidForUsername: (args) => ipcRenderer.invoke("mc:get-uuid-for-username", args),
 
   // File system / settings

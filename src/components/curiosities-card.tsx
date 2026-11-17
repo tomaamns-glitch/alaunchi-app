@@ -1,16 +1,19 @@
 import { Hint } from "@/components/hint";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Box, ChevronRight, Server, Share2, Shirt, Smile, Star, TriangleAlert, UploadCloud, X, type LucideIcon } from "lucide-react";
+import { Box, ChevronRight, EyeOff, Server, Share2, Shirt, Smile, Star, TriangleAlert, UploadCloud, X, type LucideIcon } from "lucide-react";
 import { useTour } from "@/components/onboarding-tour";
 import { useOnlineTour } from "@/components/online-tour";
 import { useManagerTour } from "@/components/manager-tour";
-import { CurseForgeLogo } from "@/components/curseforge-import-dialog";
+import { CURSEFORGE_IMPORT_ENABLED, CurseForgeLogo } from "@/components/curseforge-import-dialog";
+import { notify } from "@/lib/toast";
 
 // "Curiosidades": small tips that rotate in the corner of Mis instancias and the
 // online instances page, same card as the manager's "Arrastra y suelta" reminder.
 // Each stays 30 s, then the next one, until all have been shown or the player
 // closes it; then it rests for REAPPEAR_MS and comes back where it left off.
+// Clicking the card enlarges it and shows "No mostrar más" (off for good, see
+// OFF_KEY; back on from Ajustes → Personalización).
 
 const SHOW_MS = 30_000;
 const REAPPEAR_MS = 20 * 60_000;
@@ -46,11 +49,16 @@ const CURIOSITIES: Curiosity[] = [
     title: "Contenido fuera de Modrinth",
     text: "Lo que importes de fuera de Modrinth no tendrá soporte del launcher: ni actualizaciones ni acceso a su descarga.",
   },
-  {
-    icon: CurseForgeLogo,
-    title: "Trae tus instancias",
-    text: "¡Puedes importar tus instancias de CurseForge a ALaunchi!",
-  },
+  // Only while the CurseForge import button is shown (CURSEFORGE_IMPORT_ENABLED).
+  ...(CURSEFORGE_IMPORT_ENABLED
+    ? [
+        {
+          icon: CurseForgeLogo,
+          title: "Trae tus instancias",
+          text: "¡Puedes importar tus instancias de CurseForge a ALaunchi!",
+        },
+      ]
+    : []),
   {
     icon: Star,
     title: "Favoritos",
@@ -96,7 +104,28 @@ function save(state: Saved): void {
   } catch {}
 }
 
+// "No mostrar más" (button on the enlarged card), undone from Ajustes →
+// Personalización → Curiosidades.
+const OFF_KEY = "alaunchi_curiosities_off";
+
+export function curiositiesDisabled(): boolean {
+  try {
+    return localStorage.getItem(OFF_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setCuriositiesDisabled(off: boolean): void {
+  try {
+    if (off) localStorage.setItem(OFF_KEY, "1");
+    else localStorage.removeItem(OFF_KEY);
+  } catch {}
+}
+
 export function CuriositiesCard({ className }: { className?: string }) {
+  // Turned off for good ("No mostrar más"): nothing is scheduled at all.
+  const [off, setOff] = useState(curiositiesDisabled);
   // null = resting; otherwise the curiosity on screen.
   const [shown, setShown] = useState<number | null>(null);
   // Click on the card: a bit bigger (back to normal with another click or on the next one).
@@ -121,11 +150,11 @@ export function CuriositiesCard({ className }: { className?: string }) {
 
   // Resting → wait for its time, then show the saved one.
   useEffect(() => {
-    if (shown !== null || busy) return;
+    if (off || shown !== null || busy) return;
     const wait = TEST_LOOP ? 0 : Math.max(FIRST_DELAY_MS, stateRef.current.nextAt - Date.now());
     const t = window.setTimeout(() => setShown(stateRef.current.next), wait);
     return () => window.clearTimeout(t);
-  }, [shown, busy]);
+  }, [off, shown, busy]);
 
   // On screen → 30 s, then the next one (or rest after the last). The clock
   // stops while it's enlarged and starts over when it shrinks back.
@@ -175,7 +204,17 @@ export function CuriositiesCard({ className }: { className?: string }) {
     setShown(next);
   };
 
-  const item = shown !== null && !busy ? CURIOSITIES[shown] : null;
+  /** "No mostrar más": never again (until re-enabled in Ajustes). */
+  const turnOff = () => {
+    setCuriositiesDisabled(true);
+    setOff(true);
+    setShown(null);
+    notify("No volverán a salir curiosidades.", {
+      description: "Puedes volver a activarlas en Ajustes → Personalización.",
+    });
+  };
+
+  const item = !off && shown !== null && !busy ? CURIOSITIES[shown] : null;
 
   return (
     <AnimatePresence mode="wait">
@@ -232,6 +271,32 @@ export function CuriositiesCard({ className }: { className?: string }) {
               <X className="h-3.5 w-3.5" />
             </button>
           </Hint>
+          {/* Only on the enlarged card (after clicking it): turn them off for good. */}
+          <AnimatePresence initial={false}>
+            {expanded && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+                className="overflow-hidden"
+              >
+                <div className="flex justify-end px-3 pb-2.5">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      turnOff();
+                    }}
+                    className="flex items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[11px] font-medium text-gray-200 transition-colors hover:bg-white/[0.12] hover:text-white"
+                  >
+                    <EyeOff className="h-3.5 w-3.5" />
+                    No mostrar más
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
           {/* Time left on this one. */}
           <motion.div
             aria-hidden

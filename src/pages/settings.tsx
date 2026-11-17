@@ -31,6 +31,7 @@ import {
   Gamepad2,
   Joystick,
   Trash2,
+  Lightbulb,
   type LucideIcon,
 } from "lucide-react";
 import { useTour } from "@/components/onboarding-tour";
@@ -50,6 +51,7 @@ import {
 import { Panel } from "@/components/launcher-appearance";
 import { cn } from "@/lib/utils";
 import { DeleteMyDataDialog } from "@/components/delete-my-data-dialog";
+import { curiositiesDisabled, setCuriositiesDisabled } from "@/components/curiosities-card";
 
 type SectionId = "storage" | "personalization" | "developer" | "account";
 
@@ -247,7 +249,35 @@ function PersonalizationSection() {
     <DiscordPanel />
     <IngameOverlayPanel />
     <TourPanel />
+    <CuriositiesPanel />
     </>
+  );
+}
+
+/** The rotating tips in Mis instancias / online instances (curiosities-card.tsx);
+ *  "No mostrar más" on an enlarged one turns them off, this turns them back on. */
+function CuriositiesPanel() {
+  const [enabled, setEnabled] = useState(() => !curiositiesDisabled());
+  return (
+    <Panel
+      icon={Lightbulb}
+      title="Curiosidades"
+      description="Consejos sobre ALaunchi que salen de vez en cuando en la esquina de Mis instancias y de las instancias online."
+    >
+      <div className="flex items-center justify-between gap-3">
+        <Label htmlFor="curiosities" className="text-sm text-gray-100">
+          Mostrar curiosidades
+        </Label>
+        <Switch
+          id="curiosities"
+          checked={enabled}
+          onCheckedChange={(on) => {
+            setCuriositiesDisabled(!on);
+            setEnabled(on);
+          }}
+        />
+      </div>
+    </Panel>
   );
 }
 

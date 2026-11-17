@@ -1,3 +1,4 @@
+import { ChristmasLights } from "@/components/christmas-decorations";
 import { useEffect, useState } from "react";
 import { useParams } from "wouter";
 import { AlertTriangle, ArrowUpCircle, Loader2, Sparkles, Users } from "lucide-react";
@@ -255,6 +256,8 @@ export default function OnlineInstance() {
       </div>
 
       <footer className="relative z-20 h-20 [transform:translateZ(0)] flex items-center justify-between px-6 shrink-0">
+        {/* December: fairy lights along the top edge (lib/christmas.ts). */}
+        <ChristmasLights edge="top" />
         {/* The blur in a layer of its own: on the footer itself, the chat windows
             inside it couldn't blur the page behind them (backdrop root). The
             transform keeps `fixed` descendants relative to the footer, as the blur did. */}

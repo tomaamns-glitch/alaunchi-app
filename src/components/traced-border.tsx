@@ -97,6 +97,7 @@ export function TracedBorder({
   // Segments: the pieces are a fixed dash pattern, revealed by a mask whose
   // stroke draws round in `segments` discrete steps (one more piece each).
   const maskId = `${gradientId}-mask`;
+  const outsideId = `${gradientId}-out`;
   const period = segments ? 100 / segments : 0;
   const maskAnimation = segments
     ? `traced-border-draw 1.9s steps(${segments}, jump-start) 0s both`
@@ -133,11 +134,29 @@ export function TracedBorder({
               />
             </mask>
           )}
+          {/* Segments: keeps the blurred glow layers outside the stroke. Their
+              inner half used to tint the head up to the reveal mask's inner
+              edge and stop there in a hard line — on small icons (the chat
+              list's 28px heads) that read as a second, duplicated frame. */}
+          {segments && (
+            <mask id={outsideId} maskUnits="userSpaceOnUse" x="-50%" y="-50%" width="200%" height="200%">
+              <rect x="-50%" y="-50%" width="200%" height="200%" fill="white" />
+              <rect
+                x={1 + strokeScale}
+                y={1 + strokeScale}
+                rx={Math.max(0, borderRadius - strokeScale)}
+                ry={Math.max(0, borderRadius - strokeScale)}
+                fill="black"
+                style={{ width: `calc(100% - ${2 + 2 * strokeScale}px)`, height: `calc(100% - ${2 + 2 * strokeScale}px)` }}
+              />
+            </mask>
+          )}
         </defs>
         {(!periodic || run > 0) && LAYERS.map((l, i) => (
           // Base opacity on the <g> so the rect's own animation can fade it
           // out (each layer fades within its own, delayed, cycle).
           <g key={`${i}-${run}`} style={{ opacity: l.opacity }} mask={segments ? `url(#${maskId})` : undefined}>
+          <g mask={segments && l.blur ? `url(#${outsideId})` : undefined}>
           {halves.map((turned) => (
           <rect
             key={String(turned)}
@@ -165,6 +184,7 @@ export function TracedBorder({
             }}
           />
           ))}
+          </g>
           </g>
         ))}
       </svg>

@@ -77,8 +77,37 @@ export function subscribePresence(
 
 export const PRESENCE_RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** Connected AND not "Ausente": the only state that counts as activity (green
+ *  dot, "en línea"/"jugando" counts, "Jugando ahora"). An away player is still
+ *  connected, but shows amber and never counts. */
+export function isActive(e: Pick<PresenceEntry, "online" | "away">): boolean {
+  return !!e.online && !e.away;
+}
+
+/** Per-instance presence (`presence/{id}`) doesn't know about "Ausente" — that
+ *  lives in userActivity. Copies it in, so isActive/sorting treat an away
+ *  player who is in the instance as away. */
+export function withAway(
+  entries: Record<string, PresenceEntry>,
+  activity: Record<string, { status?: string; away?: boolean } | undefined>
+): Record<string, PresenceEntry> {
+  const out: Record<string, PresenceEntry> = {};
+  for (const [uuid, e] of Object.entries(entries)) {
+    const a = activity[uuid];
+    out[uuid] = { ...e, away: !!e.online && !!a && a.status !== "offline" && !!a.away };
+  }
+  return out;
+}
+
+/** Active first, then away, then offline. */
+function activityRank(e: PresenceEntry): number {
+  return isActive(e) ? 0 : e.online ? 1 : 2;
+}
+
 function byOnlineThenRecency(a: PresenceEntry, b: PresenceEntry): number {
-  if (a.online !== b.online) return a.online ? -1 : 1;
+  const ra = activityRank(a);
+  const rb = activityRank(b);
+  if (ra !== rb) return ra - rb;
   return (b.lastSeen || 0) - (a.lastSeen || 0);
 }
 

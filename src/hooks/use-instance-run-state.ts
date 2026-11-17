@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 /**
  * Per-instance run state, shared by EVERY Play button of the same instance (home
@@ -75,6 +75,18 @@ export function setInstancePending(modpackId: string, value: boolean) {
 
 export function useInstanceRunState(modpackId: string | undefined): InstanceRunState {
   return useSyncExternalStore(subscribe, () => (modpackId ? getInstanceRunState(modpackId) : "idle"));
+}
+
+/** Ids of the instances whose game is open right now (the Hub's "En ejecución" filter).
+ *  The snapshot is a joined string so useSyncExternalStore gets a stable value. */
+export function useRunningInstanceIds(): Set<string> {
+  const key = useSyncExternalStore(subscribe, () =>
+    Object.keys(mainState)
+      .filter((id) => mainState[id] === "running")
+      .sort()
+      .join(",")
+  );
+  return useMemo(() => new Set(key ? key.split(",") : []), [key]);
 }
 
 export function isRunStateBusy(state: InstanceRunState) {

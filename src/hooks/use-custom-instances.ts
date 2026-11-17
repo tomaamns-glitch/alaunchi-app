@@ -31,6 +31,7 @@ function metaToModpack(meta: Record<string, any>): Modpack {
     totalSizeMb: 0,
     source: "custom",
     installedAt: meta.installedAt,
+    totalPlaytimeMs: typeof meta.totalPlaytimeMs === "number" ? meta.totalPlaytimeMs : 0,
     isCopy: !!meta.duplicatedFrom,
     isDownloaded: meta.importedFrom?.type === "modrinth" || meta.importedFrom?.type === "curseforge",
     modrinthProjectId: meta.importedFrom?.type === "modrinth" ? meta.importedFrom.projectId : undefined,

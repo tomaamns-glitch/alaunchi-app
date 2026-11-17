@@ -1301,6 +1301,30 @@ let mainWindow = null;
 // banner + NSIS progress UI entirely. Only used for a real launch: restoring
 // from the tray/dock just re-shows the existing (already-loaded) main window,
 // so this never reappears once the app is actually up.
+// Seasonal decoration of the splash, for everyone and by date only (no
+// setting can turn it on outside these dates): Christmas (snow, the star on
+// the logo, the ornament ball) from 1 December to 1 January, with Santa's sleigh
+// from the 24th to the 31st; Reyes (the kings' caravan) from 2 to 6 January.
+// The only choice is the snow, which the player can switch off in Personalizar
+// while it's the season — the renderer mirrors it into settings.json
+// (christmasSnow), since the splash can't read the launcher's localStorage.
+function splashSeasonQuery() {
+  let snow = true;
+  try {
+    const settings = JSON.parse(fsSync.readFileSync(path.join(APP_DATA_DIR, "settings.json"), "utf8"));
+    if (settings.christmasSnow === false) snow = false;
+  } catch {}
+  const now = new Date();
+  const month = now.getMonth(), day = now.getDate();
+  const xmas = (extra) => ({ xmas: "1", ...extra, ...(snow ? {} : { nosnow: "1" }) });
+  // 24–31 December: Santa's sleigh and "¡Feliz Navidad!" on top of the rest.
+  if (month === 11 && day >= 24) return xmas({ santa: "1" });
+  if (month === 11 || (month === 0 && day === 1)) return xmas({});
+  // Reyes: the three kings' caravan, 2–6 January.
+  if (month === 0 && day >= 2 && day <= 6) return { reyes: "1" };
+  return {};
+}
+
 function createSplashWindow() {
   const win = new BrowserWindow({
     width: 420,
@@ -1321,7 +1345,7 @@ function createSplashWindow() {
   // In front too after an update (revealWhenReady) — it isn't consumed here,
   // the main window still needs it.
   win.once("ready-to-show", () => (revealWhenReady ? bringToFront(win) : win.show()));
-  win.loadFile(path.join(__dirname, "splash.html"));
+  win.loadFile(path.join(__dirname, "splash.html"), { query: splashSeasonQuery() });
   return win;
 }
 
@@ -5989,6 +6013,118 @@ ipcMain.handle("mc:skin-library-delete", async (_, { id }) => {
   return { success: true };
 });
 
+// ─── Player skins (heads, the 3D viewer) ─────────────────────────────────────
+// Mojang's session server + texture host, with what the old handlers lacked —
+// and why heads/avatars sometimes took minutes to show up:
+//  · a time limit: without one, a stalled connection (this network's flaky
+//    IPv6, a half-open socket) left the request — and the head — hanging until
+//    Windows gave up, minutes later;
+//  · retries with a pause, also when Mojang answers 429 (rate limited);
+//  · a disk cache (~/.alaunchi/cache/skins/<uuid>.json: texture URL, variant,
+//    the PNG as base64, when it was fetched), so heads show instantly on launch
+//    and the renderer refreshes them in the background (src/hooks/use-player-head.ts).
+
+const SKIN_CACHE_DIR = path.join(APP_DATA_DIR, "cache", "skins");
+
+class HttpStatusError extends Error {
+  constructor(status, url) {
+    super(`HTTP ${status} en ${url}`);
+    this.status = status;
+  }
+}
+
+/** GET with a hard time limit (connect + whole response). Resolves the body as a Buffer. */
+function httpGetBuffer(url, { timeoutMs = 8000, headers = {} } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: { "User-Agent": "ALaunchi/1.0", ...headers } }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        clearTimeout(timer);
+        if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) return reject(new HttpStatusError(res.statusCode, url));
+        resolve(Buffer.concat(chunks));
+      });
+      res.on("error", (e) => {
+        clearTimeout(timer);
+        reject(e);
+      });
+    });
+    const timer = setTimeout(() => req.destroy(new Error(`Tiempo agotado (${timeoutMs} ms) en ${url}`)), timeoutMs);
+    req.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+  });
+}
+
+/** httpGetBuffer, retried on network errors, timeouts, 429 and 5xx (not on other 4xx). */
+async function httpGetWithRetry(url, { tries = 3, timeoutMs = 8000 } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      return await httpGetBuffer(url, { timeoutMs });
+    } catch (e) {
+      lastError = e;
+      const status = e instanceof HttpStatusError ? e.status : 0;
+      if (status && status !== 429 && status < 500) throw e;
+      if (attempt < tries - 1) await new Promise((r) => setTimeout(r, status === 429 ? 4000 * (attempt + 1) : 1200 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
+/** Current skin texture URL + model of a player, from Mojang's session server. */
+async function fetchSkinProfile(cleanUuid) {
+  const body = await httpGetWithRetry(`https://sessionserver.mojang.com/session/minecraft/profile/${cleanUuid}`);
+  const profile = JSON.parse(body.toString("utf8"));
+  const texturesProp = profile?.properties?.find((p) => p.name === "textures");
+  if (!texturesProp) return { skinUrl: null, variant: null };
+  const decoded = JSON.parse(Buffer.from(texturesProp.value, "base64").toString("utf8"));
+  const skin = decoded?.textures?.SKIN;
+  if (!skin?.url) return { skinUrl: null, variant: null };
+  return { skinUrl: skin.url, variant: skin.metadata?.model === "slim" ? "SLIM" : "CLASSIC" };
+}
+
+const ALLOWED_TEXTURE_HOSTS = new Set(["textures.minecraft.net"]);
+
+/** Downloads a skin/cape texture (Mojang's host only) as base64. */
+async function fetchTextureBase64(url) {
+  const parsed = new URL(url);
+  if (!ALLOWED_TEXTURE_HOSTS.has(parsed.hostname)) throw new Error(`Host de textura no permitido: ${parsed.hostname}`);
+  // Mojang hands back http: texture URLs; the host only serves https.
+  parsed.protocol = "https:";
+  const buf = await httpGetWithRetry(parsed.toString(), { timeoutMs: 10000 });
+  return buf.toString("base64");
+}
+
+// A player's skin with the disk cache. Without `refresh`, a cached copy is
+// returned straight away (whatever its age); with it, Mojang is asked again and
+// the cache updated — the texture is only re-downloaded if its URL changed. If
+// Mojang can't be reached, a stale copy is still better than nothing.
+// Returns { skinUrl, variant, base64, fetchedAt } or null.
+ipcMain.handle("mc:get-player-skin", async (_, { uuid, refresh = false }) => {
+  const clean = String(uuid || "").replace(/-/g, "").toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(clean)) return null;
+  const file = path.join(SKIN_CACHE_DIR, `${clean}.json`);
+  let cached = null;
+  try {
+    cached = JSON.parse(await fs.readFile(file, "utf8"));
+  } catch {}
+  if (cached && !refresh) return cached;
+  try {
+    const { skinUrl, variant } = await fetchSkinProfile(clean);
+    // No custom skin (default Steve/Alex): remembered too, so it isn't asked again and again.
+    const base64 = !skinUrl ? null : cached?.skinUrl === skinUrl && cached?.base64 ? cached.base64 : await fetchTextureBase64(skinUrl);
+    const entry = { skinUrl, variant, base64, fetchedAt: Date.now() };
+    await fs.mkdir(SKIN_CACHE_DIR, { recursive: true });
+    await fs.writeFile(file, JSON.stringify(entry));
+    return entry;
+  } catch (e) {
+    console.warn(`[skins] ${clean}: ${e?.message || e}`);
+    return cached;
+  }
+});
+
 // Resolves any player's currently-equipped skin URL via Mojang's public session
 // server — no auth needed, works for any UUID (not just the signed-in account).
 // Used to render head icons (own avatar, presence list) instead of third-party
@@ -5997,14 +6133,7 @@ ipcMain.handle("mc:skin-library-delete", async (_, { id }) => {
 // skin on lookup failure — see the Crafatar incident noted in la documentación interna.
 ipcMain.handle("mc:get-skin-url", async (_, { uuid }) => {
   try {
-    const clean = String(uuid).replace(/-/g, "");
-    const profile = await fetchJson(`https://sessionserver.mojang.com/session/minecraft/profile/${clean}`);
-    const texturesProp = profile?.properties?.find((p) => p.name === "textures");
-    if (!texturesProp) return { skinUrl: null, variant: null };
-    const decoded = JSON.parse(Buffer.from(texturesProp.value, "base64").toString("utf8"));
-    const skin = decoded?.textures?.SKIN;
-    if (!skin?.url) return { skinUrl: null, variant: null };
-    return { skinUrl: skin.url, variant: skin.metadata?.model === "slim" ? "SLIM" : "CLASSIC" };
+    return await fetchSkinProfile(String(uuid).replace(/-/g, ""));
   } catch {
     return { skinUrl: null, variant: null };
   }
@@ -6027,27 +6156,7 @@ ipcMain.handle("mc:get-uuid-for-username", async (_, { username }) => {
 // send CORS headers, so loading it directly into a WebGL texture from the
 // renderer would fail — CORS is a browser-only restriction, so a plain Node
 // request here sidesteps it entirely. Restricted to Mojang's own texture host.
-const ALLOWED_TEXTURE_HOSTS = new Set(["textures.minecraft.net"]);
-ipcMain.handle("mc:fetch-texture-b64", async (_, { url }) => {
-  const parsed = new URL(url);
-  if (!ALLOWED_TEXTURE_HOSTS.has(parsed.hostname)) {
-    throw new Error(`Host de textura no permitido: ${parsed.hostname}`);
-  }
-  // Mojang's profile API hands back texture URLs with an http: scheme even
-  // though the host only serves https; force it since the host is already
-  // restricted to the trusted allowlist above.
-  parsed.protocol = "https:";
-  return new Promise((resolve, reject) => {
-    https.get(parsed, { headers: { "User-Agent": "ALaunchi/1.0" } }, (res) => {
-      if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
-        return reject(new Error(`HTTP ${res.statusCode} descargando textura`));
-      }
-      const chunks = [];
-      res.on("data", (c) => chunks.push(c));
-      res.on("end", () => resolve({ base64: Buffer.concat(chunks).toString("base64") }));
-    }).on("error", reject);
-  });
-});
+ipcMain.handle("mc:fetch-texture-b64", async (_, { url }) => ({ base64: await fetchTextureBase64(url) }));
 
 ipcMain.handle("fs:read-settings", async () => {
   try { return JSON.parse(await fs.readFile(path.join(APP_DATA_DIR, "settings.json"), "utf8")); }

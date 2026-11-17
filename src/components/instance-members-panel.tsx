@@ -4,7 +4,7 @@ import { ChevronDown, Loader2, Users } from "lucide-react";
 import { Head } from "@/components/player-picker";
 import { ProfileBannerRow } from "@/components/profile-banner-row";
 import { MoveBackButton } from "@/components/move-to-content-menu";
-import { subscribePresence, sortAllPresence, type PresenceEntry } from "@/services/presence";
+import { subscribePresence, sortAllPresence, withAway, type PresenceEntry } from "@/services/presence";
 import { getNicknames } from "@/lib/nicknames";
 import { formatCompactAgo, formatPlaytime } from "@/lib/format";
 import { useAuth } from "@/hooks/use-auth";
@@ -47,7 +47,8 @@ export function InstanceMembersPanel({
     return subscribePresence(modpackId, setMembers);
   }, [modpackId]);
 
-  const roster = useMemo(() => (members ? sortAllPresence(members) : []), [members]);
+  // Playing first, "Ausente" after them (withAway), then the rest.
+  const roster = useMemo(() => (members ? sortAllPresence(withAway(members, activity)) : []), [members, activity]);
 
   return (
     <aside className={cn("flex flex-col rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md overflow-hidden", className)}>
@@ -111,7 +112,10 @@ export function InstanceMembersPanel({
                   </div>
                 </div>
                 {/* Playing this instance now, or how long since they last did. */}
-                {e.online ? (
+                {/* "Ausente" never reads as activity, even inside the instance. */}
+                {e.online && away ? (
+                  <span className="shrink-0 text-[11px] font-medium text-amber-300 drop-shadow">Ausente</span>
+                ) : e.online ? (
                   <span className="shrink-0 text-[11px] font-medium text-green-400 drop-shadow">Jugando</span>
                 ) : (
                   ago && (

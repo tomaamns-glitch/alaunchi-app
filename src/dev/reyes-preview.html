@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pantallas de carga de temporada (dev)</title>
+<style>
+  html, body { margin: 0; background: #0b0d12; color: #cbd5e1; font: 500 14px/1.5 "Segoe UI", Inter, sans-serif; }
+  .page { padding: 16px; }
+  h1 { font-size: 16px; color: #f1f5f9; margin: 0 0 12px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; }
+  figure { margin: 0; }
+  figcaption { font-size: 12px; text-transform: uppercase; letter-spacing: .12em; color: #64748b; margin-bottom: 6px; }
+  iframe { width: 420px; height: 460px; border: 0; border-radius: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); background: #0d0d0d; }
+</style>
+</head>
+<body>
+<!-- Dev-only: the real loading window (electron/splash.html) at its real size
+     (420×460) in each season. main.js picks the season (splashSeasonQuery). -->
+<div class="page">
+  <h1>Pantalla de carga — temporadas</h1>
+  <div class="row">
+    <figure><figcaption>Navidad · 1 – 23 dic y 1 ene</figcaption><iframe src="/electron/splash.html?xmas=1"></iframe></figure>
+    <figure><figcaption>Papá Noel · 24 – 31 dic</figcaption><iframe src="/electron/splash.html?xmas=1&amp;santa=1"></iframe></figure>
+    <figure><figcaption>Reyes · 2 – 6 ene</figcaption><iframe src="/electron/splash.html?reyes=1"></iframe></figure>
+  </div>
+</div>
+</body>
+</html>

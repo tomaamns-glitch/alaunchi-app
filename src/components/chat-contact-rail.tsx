@@ -275,7 +275,7 @@ export function ChatContactRail({
                     expanded ? "px-2 text-left" : "justify-center"
                   )}
                 >
-                  <ContactHead uuid={uuid} username={entry.username} online={entry.online} size={22} />
+                  <ContactHead uuid={uuid} username={entry.username} online={entry.online} away={entry.away} size={22} />
                   {expanded && <span className="text-xs text-gray-200 truncate">{nicknames[uuid] || entry.username}</span>}
                 </motion.button>
               ))}
@@ -392,12 +392,15 @@ function ContactHead({
   useEffect(() => {
     if (active) setReplayKey((k) => k + 1);
   }, [active]);
+  // Same corner proportion as the account menu's 48px icon (6px = 12.5%): a
+  // fixed 6px made these small heads look much rounder.
+  const radius = size * 0.125;
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
-      <PlayerDecoratedIcon uuid={uuid} size={size} radius={6} replayKey={replayKey}>
-        <Avatar className="h-full w-full rounded-md">
-          {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-md" />}
-          <AvatarFallback className="rounded-md bg-accent/20 text-accent text-[10px] font-bold">
+      <PlayerDecoratedIcon uuid={uuid} size={size} radius={radius} replayKey={replayKey}>
+        <Avatar className="h-full w-full" style={{ borderRadius: radius }}>
+          {headUrl && <AvatarImage src={headUrl} alt={username} className="rounded-[inherit]" />}
+          <AvatarFallback className="rounded-[inherit] bg-accent/20 text-accent text-[10px] font-bold">
             {username?.charAt(0)?.toUpperCase() || "?"}
           </AvatarFallback>
         </Avatar>

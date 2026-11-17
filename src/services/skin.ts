@@ -87,6 +87,21 @@ export async function fetchTextureAsDataUrl(url: string): Promise<string> {
   return `data:image/png;base64,${base64}`;
 }
 
+/** A player's skin from main's disk cache (`mc:get-player-skin`): instant when
+ *  cached; `refresh` asks Mojang again. `base64` is null for players with the
+ *  default skin. Null when there's no copy and Mojang couldn't be reached. */
+export interface CachedPlayerSkin {
+  skinUrl: string | null;
+  variant: "SLIM" | "CLASSIC" | null;
+  base64: string | null;
+  fetchedAt: number;
+}
+
+export async function getCachedPlayerSkin(uuid: string, refresh = false): Promise<CachedPlayerSkin | null> {
+  requireElectron();
+  return eAPI.getPlayerSkin({ uuid, refresh });
+}
+
 /** Reads a File (e.g. from an <input type="file">) as a base64 string. */
 export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

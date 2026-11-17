@@ -18,6 +18,9 @@ export interface FrameDecoration {
   id: string;
   label: string;
   description: string;
+  /** Not available yet: shown with a padlock in Personalizar, can't be picked,
+   *  and a saved one is drawn as "none" (toIconDecoration). */
+  locked?: boolean;
 }
 
 export const AVATAR_DECORATIONS: AvatarDecoration[] = [
@@ -57,21 +60,26 @@ export const FRAME_DECORATIONS: FrameDecoration[] = [
 export const ICON_DECORATIONS: FrameDecoration[] = [
   { id: "none", label: "Sin decoración", description: "Tu cabeza tal cual." },
   { id: "traced", label: "Trazo", description: "Una línea verde y naranja que dibuja el borde del icono." },
-  { id: "vines", label: "Enredadera", description: "Una enredadera que crece rodeando tu cabeza." },
+  { id: "vines", label: "Enredadera", description: "Una enredadera que crece rodeando tu cabeza.", locked: true },
   { id: "orange-run", label: "Recorrido", description: "Dos trazos naranjas que rellenan el borde desde esquinas opuestas." },
   { id: "flames", label: "Fuego", description: "Un marco en llamas." },
-  { id: "blue-hud", label: "Interfaz azul", description: "Aros azules de interfaz futurista; tu cabeza se ve redonda dentro." },
-  { id: "circuit", label: "Circuito", description: "Aros de circuitos alrededor; tu cabeza se ve redonda dentro." },
+  { id: "blue-hud", label: "Interfaz azul", description: "Aros azules de interfaz futurista; tu cabeza se ve redonda dentro.", locked: true },
+  { id: "circuit", label: "Circuito", description: "Aros de circuitos alrededor; tu cabeza se ve redonda dentro.", locked: true },
   { id: "orange-ring", label: "Segmento", description: "Un trazo naranja que da la vuelta al icono hasta cerrarlo." },
-  { id: "wings-1", label: "Alas I", description: "Aro dorado con alas y una estrella; tu cabeza se ve redonda dentro." },
-  { id: "wings-2", label: "Alas II", description: "Aro dorado con alas y dos estrellas; tu cabeza se ve redonda dentro." },
-  { id: "wings-3", label: "Alas III", description: "Aro dorado con alas y tres estrellas; tu cabeza se ve redonda dentro." },
-  { id: "gold-stars", label: "Alas doradas", description: "Aro dorado con estrellas; tu cabeza se ve redonda dentro." },
+  { id: "wings-1", label: "Alas I", description: "Aro dorado con alas y una estrella; tu cabeza se ve redonda dentro.", locked: true },
+  { id: "wings-2", label: "Alas II", description: "Aro dorado con alas y dos estrellas; tu cabeza se ve redonda dentro.", locked: true },
+  { id: "wings-3", label: "Alas III", description: "Aro dorado con alas y tres estrellas; tu cabeza se ve redonda dentro.", locked: true },
+  { id: "gold-stars", label: "Alas doradas", description: "Aro dorado con estrellas; tu cabeza se ve redonda dentro.", locked: true },
 ];
 
-/** Narrows a stored id to a known icon decoration ("none" otherwise). */
+/** Whether an icon decoration is locked (not available yet). */
+export function isIconDecorationLocked(id: string | undefined): boolean {
+  return !!id && ICON_DECORATIONS.some((d) => d.id === id && d.locked);
+}
+
+/** Narrows a stored id to a known, available icon decoration ("none" otherwise). */
 export function toIconDecoration(id: string | undefined): string {
-  return id && ICON_DECORATIONS.some((d) => d.id === id) ? id : "none";
+  return id && ICON_DECORATIONS.some((d) => d.id === id && !d.locked) ? id : "none";
 }
 
 export function avatarDecorationLabel(id: string | undefined): string {

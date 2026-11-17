@@ -61,9 +61,20 @@ interface InstanceTileProps {
   /** Only passed while viewing a specific folder — adds a "Quitar de la
    *  carpeta" shortcut so ejecting doesn't require opening the instance first. */
   onRemoveFromFolder?: () => void;
+  /** "list": one row (icon, name, version/loader, time played, Jugar) instead of a square tile. */
+  layout?: "grid" | "list";
 }
 
-export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onRemoveFromFolder }: InstanceTileProps) {
+/** "3 h 20 min", "45 min", or "Sin jugar". */
+function formatPlaytime(ms: number | undefined) {
+  const minutes = Math.floor((ms ?? 0) / 60000);
+  if (minutes < 1) return "Sin jugar";
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return h > 0 ? `${h} h${m ? ` ${m} min` : ""}` : `${m} min`;
+}
+
+export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onRemoveFromFolder, layout = "grid" }: InstanceTileProps) {
   const { busy, running, runState, toggle } = useLaunchModpack(instance);
   const progress = useInstanceProgress(instance.id);
   // Private (custom) and downloaded instances show only their icon — never a
@@ -94,10 +105,85 @@ export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onR
     }
   };
 
+  // The Jugar/Cerrar button, or the progress chip while installing.
+  const playControl = (
+    <>
+    {progress.active ? (
+      <InstanceProgressChip
+        entry={progress.entry}
+        runState={progress.runState}
+        status={progress.status}
+        installed={!!instance.installed}
+        online={instance.source !== "custom"}
+        size={32}
+      />
+    ) : (
+    <Button
+      size="sm"
+      // Quiet until you're on the tile (15 solid buttons were a wall of color);
+      // then it takes the accent, like Jugar in the instance manager.
+      variant={running ? "destructive" : "ghost"}
+      className={`w-full h-8 font-bold ${
+        running
+          ? ""
+          : "bg-white/[0.06] text-muted-foreground transition-colors duration-300 ease-out group-hover:bg-accent group-hover:text-accent-foreground hover:bg-accent hover:text-accent-foreground"
+      }`}
+      onClick={toggle}
+      disabled={busy}
+    >
+      {busy ? (
+        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+      ) : running ? (
+        <Square className="mr-1.5 h-3.5 w-3.5 fill-current" />
+      ) : (
+        <Play className="mr-1.5 h-3.5 w-3.5 fill-current" />
+      )}
+      {busy ? runStateBusyLabel(runState) : running ? "CERRAR" : "JUGAR"}
+    </Button>
+    )}
+    </>
+  );
+
   return (
     <>
     <ContextMenu>
       <ContextMenuTrigger asChild>
+        {layout === "list" ? (
+        <div
+          draggable={drag.draggable}
+          onDragStart={drag.onDragStart}
+          onDragOver={drag.onDragOver}
+          onDragLeave={drag.onDragLeave}
+          onDrop={drag.onDrop}
+          onDragEnd={drag.onDragEnd}
+          className={`group flex items-center gap-4 rounded-md border border-transparent bg-gray-500/10 backdrop-blur-md p-2.5 pr-3 hover:border-accent/40 transition-colors duration-300 ease-out ${drag.draggable ? "cursor-grab active:cursor-grabbing" : ""} ${dragClasses(drag)}`}
+        >
+          <button type="button" onClick={onClick} className="flex flex-1 min-w-0 items-center gap-4 text-left">
+            <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-md bg-black/50">
+              <img src={cover} alt="" className="h-full w-full object-cover" draggable={false} />
+              {instance.isCopy && (
+                <span title="Copia de otra instancia" className="absolute bottom-0.5 right-0.5 h-5 w-5 rounded-full bg-black/60 flex items-center justify-center text-gray-200">
+                  <RotateCcw className="h-3 w-3" />
+                </span>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold truncate">{instance.name}</div>
+              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="flex items-center gap-1.5 rounded bg-white/[0.06] px-2 py-0.5 text-gray-200">
+                  {instance.loaderType && instance.loaderType.toLowerCase() !== "vanilla" && (
+                    <LoaderIcon loader={instance.loaderType} className="h-4 w-4" title={instance.loaderType} />
+                  )}
+                  {instance.minecraftVersion}
+                </span>
+                <span className="truncate">{formatPlaytime(instance.totalPlaytimeMs)}</span>
+              </div>
+            </div>
+          </button>
+          <FavoriteStar pinned={pinned} onToggle={onTogglePin} className="relative shrink-0" />
+          <div className="w-36 shrink-0">{playControl}</div>
+        </div>
+        ) : (
         <div
           draggable={drag.draggable}
           onDragStart={drag.onDragStart}
@@ -140,41 +226,10 @@ export function InstanceTile({ instance, onClick, drag, pinned, onTogglePin, onR
           </button>
 
           <div className="px-3 pb-3 pt-1">
-            {progress.active ? (
-              <InstanceProgressChip
-                entry={progress.entry}
-                runState={progress.runState}
-                status={progress.status}
-                installed={!!instance.installed}
-                online={instance.source !== "custom"}
-                size={32}
-              />
-            ) : (
-            <Button
-              size="sm"
-              // Quiet until you're on the tile (15 solid buttons were a wall of color);
-              // then it takes the accent, like Jugar in the instance manager.
-              variant={running ? "destructive" : "ghost"}
-              className={`w-full h-8 font-bold ${
-                running
-                  ? ""
-                  : "bg-white/[0.06] text-muted-foreground transition-colors duration-300 ease-out group-hover:bg-accent group-hover:text-accent-foreground hover:bg-accent hover:text-accent-foreground"
-              }`}
-              onClick={toggle}
-              disabled={busy}
-            >
-              {busy ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : running ? (
-                <Square className="mr-1.5 h-3.5 w-3.5 fill-current" />
-              ) : (
-                <Play className="mr-1.5 h-3.5 w-3.5 fill-current" />
-              )}
-              {busy ? runStateBusyLabel(runState) : running ? "CERRAR" : "JUGAR"}
-            </Button>
-            )}
+            {playControl}
           </div>
         </div>
+        )}
       </ContextMenuTrigger>
       <ContextMenuContent className="min-w-[11rem]">
         <ContextMenuItem

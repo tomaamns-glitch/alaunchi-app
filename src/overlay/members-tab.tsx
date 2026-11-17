@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Search, Users, MessageCircle } from "lucide-react";
-import { subscribePresence, sortAllPresence, type PresenceEntry } from "@/services/presence";
+import { isActive, subscribePresence, sortAllPresence, withAway, type PresenceEntry } from "@/services/presence";
 import { getNicknames } from "@/lib/nicknames";
 import { formatCompactAgo, formatPlaytime } from "@/lib/format";
 import { ProfileBannerRow } from "@/components/profile-banner-row";
@@ -66,6 +66,7 @@ function MemberRow({ uuid, entry, name, isMe }: { uuid: string; entry: PresenceE
  *  first, then by how recently each one played. */
 export function MembersTab({ instance, entries }: { instance: Instance; entries?: Record<string, PresenceEntry> }) {
   const me = useOverlayStore((s) => s.me);
+  const activity = useOverlayStore((s) => s.activity);
   const [members, setMembers] = useState<Record<string, PresenceEntry> | null>(entries ?? null);
   const [query, setQuery] = useState("");
   const nicknames = useMemo(() => getNicknames(), []);
@@ -79,11 +80,12 @@ export function MembersTab({ instance, entries }: { instance: Instance; entries?
 
   const { playing, rest } = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const roster = (members ? sortAllPresence(members) : [])
+    // "Ausente" never counts as playing: they go with the rest (withAway + isActive).
+    const roster = (members ? sortAllPresence(withAway(members, activity)) : [])
       .map(([uuid, e]) => ({ uuid, e, name: nicknames[uuid] || e.username || "Jugador" }))
       .filter(({ name, e }) => !q || name.toLowerCase().includes(q) || (e.username || "").toLowerCase().includes(q));
-    return { playing: roster.filter((r) => r.e.online), rest: roster.filter((r) => !r.e.online) };
-  }, [members, nicknames, query]);
+    return { playing: roster.filter((r) => isActive(r.e)), rest: roster.filter((r) => !isActive(r.e)) };
+  }, [members, activity, nicknames, query]);
 
   if (members === null) {
     return (

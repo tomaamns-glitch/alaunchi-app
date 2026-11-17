@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import SwellLight from "@/components/swell-light";
 import { StaticGlow } from "@/components/static-glow";
 import { useAnimatedBackground } from "@/lib/animated-background";
-import { useTheme } from "@/lib/theme";
+import { THEME_SWELL, useTheme } from "@/lib/theme";
 import { useAdaptiveColor } from "@/lib/adaptive-color";
 import { extractDominantColor, type HSL } from "@/lib/dominant-color";
 
@@ -43,9 +43,7 @@ export function AppBackground({ tintFrom }: { tintFrom?: string }) {
         ? { color: `hsl(${h} ${s}% ${Math.min(l, 44)}%)`, glint: `hsl(${h} ${s}% 18%)` }
         : { color: `hsl(${h} ${Math.max(s, 55)}% ${Math.min(Math.max(l, 45), 62)}%)`, glint: `hsl(${h} ${s}% 78%)` };
     }
-    return theme === "light"
-      ? { color: "hsl(208 92% 44%)", glint: "#0b2f5c" }
-      : { color: "#259DF4", glint: "#7fc4ff" };
+    return THEME_SWELL[theme];
   }, [tintFrom, iconHsl, theme]);
 
   // Tinted: nothing until the color is known, so it never flashes blue first.

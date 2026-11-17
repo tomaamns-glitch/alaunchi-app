@@ -31,6 +31,8 @@ export interface Modpack {
   loaderVersion?: string;
   /** Only set for source === "custom" — epoch ms from alaunchi-meta.json, for "recientes" sorting. */
   installedAt?: number;
+  /** Only set for source === "custom" — total time played on this PC (meta.totalPlaytimeMs). */
+  totalPlaytimeMs?: number;
   /** Set on a "past" online instance (lib/online-history.ts) — why it's out of
    *  the network. Such a pack has no repoUrl: no updates, no instance chat/presence. */
   outOfNetwork?: OfflineReason;

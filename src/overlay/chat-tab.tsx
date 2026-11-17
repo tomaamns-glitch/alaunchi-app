@@ -16,7 +16,7 @@ import { sendGroupMessage, sendGroupContent } from "@/services/group-chat";
 import type { SharedContent } from "@/services/content-share";
 import { AttachPicker } from "./chat-attach";
 import { listInstanceFiles, type OverlayState } from "@/services/electron";
-import { subscribePresence, type PresenceEntry } from "@/services/presence";
+import { isActive, subscribePresence, withAway, type PresenceEntry } from "@/services/presence";
 import { getNicknames } from "@/lib/nicknames";
 import { ChatDaySeparator, startsNewDay } from "@/components/chat-day-separator";
 import { shownStatus, type UserActivity } from "@/services/user-activity";
@@ -572,7 +572,9 @@ function GroupConversation({ instance, target }: { instance: Instance; target: R
   const markGroupRead = useOverlayStore((s) => s.markGroupRead);
   const [members, setMembers] = useState<Record<string, PresenceEntry>>({});
   useEffect(() => subscribePresence(instance.modpackId, setMembers), [instance.modpackId]);
-  const playing = Object.values(members).filter((m) => m.online).length;
+  const activity = useOverlayStore((s) => s.activity);
+  // "Ausente" doesn't count as playing.
+  const playing = Object.values(withAway(members, activity)).filter((m) => isActive(m)).length;
   const total = Object.keys(members).length;
 
   const panelVisible = useOverlayStore((s) => s.panelVisible);

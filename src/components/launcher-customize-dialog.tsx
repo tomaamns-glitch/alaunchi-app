@@ -1,6 +1,6 @@
 import { Paintbrush } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { AdaptiveColorPanel, AnimatedBackgroundPanel, GlassPanel, NotificationSoundPanel, ThemePanel } from "@/components/launcher-appearance";
+import { AdaptiveColorPanel, AnimatedBackgroundPanel, ChristmasPanel, GlassPanel, NotificationSoundPanel, ThemePanel } from "@/components/launcher-appearance";
 
 /** "Personalizar": the launcher's own look in one window, opened from the
  *  brush in the title bar — theme, glass, adaptive colours, animated background
@@ -17,6 +17,7 @@ export function LauncherCustomizeDialog({ open, onOpenChange }: { open: boolean;
         </DialogHeader>
         <div className="space-y-4">
           <ThemePanel />
+          <ChristmasPanel />
           <GlassPanel />
           <AdaptiveColorPanel />
           <AnimatedBackgroundPanel />

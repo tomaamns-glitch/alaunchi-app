@@ -67,6 +67,12 @@ async function requireAllowed(buf: Buffer): Promise<void> {
   }
 }
 
+/** Every stored image has a path of its own (a timestamp or its sha1) and is
+ *  never overwritten, so clients may keep it for a year without asking again.
+ *  Without this, Storage's default ("private, max-age=0") made the app
+ *  revalidate every banner and screenshot each time it was shown. */
+const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
+
 /**
  * Moderates an image and, only if it passes, stores it where the client used
  * to upload it directly:
@@ -93,7 +99,7 @@ export const uploadModeratedImage = onCall(
       }
       await requireAllowed(buf);
       const file = bucket.file(`banners/${uuid}/${Date.now().toString(36)}`);
-      await file.save(buf, { contentType, metadata: { metadata: { [MODERATED_META]: "true" } } });
+      await file.save(buf, { contentType, metadata: { cacheControl: IMMUTABLE_CACHE, metadata: { [MODERATED_META]: "true" } } });
       return { url: await getDownloadURL(file) };
     }
 
@@ -111,7 +117,7 @@ export const uploadModeratedImage = onCall(
       }
       await requireAllowed(buf);
       const file = bucket.file(`content-objects/${sha1}`);
-      await file.save(buf, { contentType, metadata: { metadata: { [MODERATED_META]: "true" } } });
+      await file.save(buf, { contentType, metadata: { cacheControl: IMMUTABLE_CACHE, metadata: { [MODERATED_META]: "true" } } });
       const url = await getDownloadURL(file);
       await registryRef.set({ downloadUrl: url, uploadedAt: Date.now(), moderated: true });
       return { url };

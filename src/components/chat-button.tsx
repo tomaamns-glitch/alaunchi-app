@@ -1,9 +1,50 @@
+import { useId } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { MessageCircle } from "lucide-react";
 import { useChatHeads } from "@/hooks/use-chat-heads";
 import { useBarInvites } from "@/hooks/use-invites";
 import { Hint } from "@/components/hint";
 import { InviteBubbles, InviteCard } from "@/components/invite-bubbles";
+
+const FRONT_BUBBLE =
+  "M6 8h7a3.5 3.5 0 0 1 3.5 3.5v3A3.5 3.5 0 0 1 13 18H9.5L6 21v-3a3.5 3.5 0 0 1-3.5-3.5v-3A3.5 3.5 0 0 1 6 8z";
+const BACK_BUBBLE =
+  "M10.5 5.5A3.5 3.5 0 0 1 14 2h4.5A3.5 3.5 0 0 1 22 5.5v3a3.5 3.5 0 0 1-3.5 3.5H18v2.5L15.2 12H14a3.5 3.5 0 0 1-3.5-3.5z";
+
+/** Two overlapping speech bubbles (a conversation, not a single message); the
+ *  front one has "typing" dots that bounce while there's something unread. The
+ *  back bubble is cut out around the front one with a mask, so the gap stays
+ *  clean over the button's translucent background. */
+function ChatGlyph({ active, className }: { active: boolean; className?: string }) {
+  const maskId = `chat-glyph-${useId().replace(/:/g, "")}`;
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinejoin="round" className={className} aria-hidden>
+      <defs>
+        <mask id={maskId} maskUnits="userSpaceOnUse">
+          <rect width="24" height="24" fill="white" />
+          <path d={FRONT_BUBBLE} fill="black" stroke="black" strokeWidth={4.2} />
+        </mask>
+      </defs>
+      <path d={BACK_BUBBLE} mask={`url(#${maskId})`} opacity={0.55} />
+      <path d={FRONT_BUBBLE} fill="currentColor" fillOpacity={0.16} />
+      {[6.3, 9.5, 12.7].map((cx, i) => (
+        <motion.circle
+          key={cx}
+          cx={cx}
+          cy={13}
+          r={1.15}
+          fill="currentColor"
+          stroke="none"
+          animate={active ? { y: [0, -1.6, 0] } : { y: 0 }}
+          transition={
+            active
+              ? { duration: 0.9, repeat: Infinity, repeatDelay: 1.4, delay: i * 0.14, ease: "easeInOut" }
+              : { duration: 0.2 }
+          }
+        />
+      ))}
+    </svg>
+  );
+}
 
 /** The footer's way into the chat: one button with everything unread on it, then
  *  any invitations to online instances. Conversations live inside ChatWindow's
@@ -33,7 +74,7 @@ export function ChatButton() {
               panelOpen ? "border-accent bg-accent/15 text-accent" : "border-transparent bg-white/[0.07] backdrop-blur-md text-gray-200 hover:bg-white/[0.14]"
             }`}
           >
-            <MessageCircle className="h-4 w-4" />
+            <ChatGlyph active={unread > 0} className="h-[19px] w-[19px]" />
             <AnimatePresence>
               {unread > 0 && (
                 <motion.span

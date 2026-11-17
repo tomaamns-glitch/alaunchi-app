@@ -1,3 +1,4 @@
+import { ChristmasLights } from "@/components/christmas-decorations";
 import { CuriositiesCard } from "@/components/curiosities-card";
 import { useAuth } from "@/hooks/use-auth";
 import { useModpacks } from "@/hooks/use-modpacks";
@@ -946,6 +947,8 @@ export default function Home() {
       {/* Always mounted: the account menu (Instancias online included) and chats
           don't depend on the catalog, and unmounting would close whatever popup is open. */}
       <footer className="relative z-20 h-20 [transform:translateZ(0)] flex items-center justify-between px-6 shrink-0">
+        {/* December: fairy lights along the top edge (lib/christmas.ts). */}
+        <ChristmasLights edge="top" />
           {/* The blur in a layer of its own: on the footer itself, the chat windows
               inside it couldn't blur the page behind them (backdrop root). The
               transform keeps `fixed` descendants relative to the footer, as the blur did. */}
@@ -975,7 +978,9 @@ export default function Home() {
 
           {/* Play button only once there's a modpack. */}
           {currentPack && !drawerView && (
-            <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2" data-tour="online-play">
+            // z-30: it straddles the footer's top edge, over the Christmas
+            // lights strung along that edge (ChristmasLights, z-20).
+            <div className="absolute z-30 left-1/2 top-0 -translate-x-1/2 -translate-y-1/2" data-tour="online-play">
               <ModpackActionBar key={currentPack.id} pack={currentPack} />
             </div>
           )}

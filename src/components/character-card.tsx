@@ -3,6 +3,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 // Loaded on demand (three.js) — see components/lazy-heavy.tsx.
 import { SkinViewerAnimated } from "@/components/lazy-heavy";
+import { useChristmasActive } from "@/lib/christmas";
 import type { SkinEffect } from "@/components/skin-viewer-animated";
 import { ProfileFrame } from "@/components/profile-frame";
 
@@ -48,6 +49,7 @@ export function CharacterCard({
   children?: React.ReactNode;
 }) {
   const framed = !!frame && frame !== "none";
+  const christmas = useChristmasActive();
   // The card is much taller than the character's box, so falling particles
   // (leaves, petals, snow…) used to pop in mid-air at the box's top. The
   // viewer draws up to the card's top edge (which clips it, rounded) and they
@@ -157,6 +159,9 @@ export function CharacterCard({
               extendX={effect === "none" ? 0 : extend.x}
               effect={effect}
               elytra={viewer?.elytra}
+              // December: a Santa hat and a tree behind (lib/christmas.ts).
+              santaHat={christmas}
+              christmasTree={christmas}
               paused={viewer?.paused}
               active={active}
               // Anchored to the box's bottom, growing upward out of it (the

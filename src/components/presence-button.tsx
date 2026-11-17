@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { User } from "lucide-react";
 import { useDismissOnOutsideClick } from "@/hooks/use-dismiss-on-outside-click";
-import { subscribePresence, sortAndFilterPresence, sortAllPresence, type PresenceEntry } from "@/services/presence";
+import { isActive, subscribePresence, sortAndFilterPresence, sortAllPresence, withAway, type PresenceEntry } from "@/services/presence";
 import { subscribeFriends, type FriendEntry } from "@/services/friends";
 import { subscribeAllActivity, type UserActivity } from "@/services/user-activity";
 import { getNicknames } from "@/lib/nicknames";
@@ -82,7 +82,7 @@ export function PresenceButton({ context, open, onOpenChange }: PresenceButtonPr
   const recentFriends = allFriendsSorted.filter(
     ([, e]) => e.online || (e.lastSeen && Date.now() - e.lastSeen < FRIEND_RECENT_WINDOW_MS)
   );
-  const friendsOnlineCount = allFriendsSorted.filter(([, e]) => e.online).length;
+  const friendsOnlineCount = allFriendsSorted.filter(([, e]) => isActive(e)).length;
 
   // Instance section — only meaningful in carousel context.
   const instancePack = context.type === "carousel" ? context.pack : null;
@@ -110,14 +110,11 @@ export function PresenceButton({ context, open, onOpenChange }: PresenceButtonPr
 
   // Excludes ourselves — this panel never lists the current user.
   const instancePlayers: [string, PresenceEntry][] = instancePack
-    ? sortAndFilterPresence(instanceEntries)
-        .filter(([uuid]) => uuid !== myUuid)
-        .map(([uuid, e]) => {
-          const a = activity[uuid];
-          return [uuid, { ...e, away: e.online && !!a && a.status !== "offline" && !!a.away }];
-        })
+    ? // withAway before sorting, so away players go after the active ones.
+      sortAndFilterPresence(withAway(instanceEntries, activity)).filter(([uuid]) => uuid !== myUuid)
     : [];
-  const onlineOthers = instancePlayers.filter(([, e]) => e.online);
+  // Away players are left out: no "X está jugando" announcement for them.
+  const onlineOthers = instancePlayers.filter(([, e]) => isActive(e));
   const instancePlayerUuids = new Set(instancePlayers.map(([uuid]) => uuid));
   const shownFriends = instancePack ? recentFriends.filter(([uuid]) => !instancePlayerUuids.has(uuid)) : recentFriends;
 
@@ -133,19 +130,25 @@ export function PresenceButton({ context, open, onOpenChange }: PresenceButtonPr
 
   // Live "just connected" alerts for the rest of the time you're already
   // sitting on this pack — separate from the one-shot arrival announcement.
+  // Diffed on who is IN the instance (presence `online`), not on isActive:
+  // coming back from "Ausente" isn't connecting. Someone who connects while
+  // away just gets no alert.
+  const inInstance = instancePlayers.filter(([, e]) => e.online);
   useEffect(() => {
     if (!instancePack) return;
-    const currentUuids = new Set(onlineOthers.map(([uuid]) => uuid));
+    const currentUuids = new Set(inInstance.map(([uuid]) => uuid));
     const previousUuids = prevOnlineRef.current;
     if (previousUuids) {
       const nicknames = getNicknames();
-      for (const [uuid, entry] of onlineOthers) {
-        if (!previousUuids.has(uuid)) notifyConnected(uuid, nicknames[uuid] || entry.username, instancePack.name).catch(() => {});
+      for (const [uuid, entry] of inInstance) {
+        if (!previousUuids.has(uuid) && !entry.away) {
+          notifyConnected(uuid, nicknames[uuid] || entry.username, instancePack.name).catch(() => {});
+        }
       }
     }
     prevOnlineRef.current = currentUuids;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instancePack?.id, onlineOthers.map(([uuid]) => uuid).join(",")]);
+  }, [instancePack?.id, inInstance.map(([uuid]) => uuid).join(",")]);
 
   const hasAnyoneOnline = friendsOnlineCount > 0 || onlineOthers.length > 0;
 

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { Check } from "lucide-react";
+import { Check, Lock } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -87,20 +87,34 @@ function OptionCard({
   description,
   selected,
   onSelect,
+  locked = false,
 }: {
   label: string;
   description: string;
   selected: boolean;
   onSelect: () => void;
+  /** Not available yet: a padlock, and it can't be picked. */
+  locked?: boolean;
 }) {
   return (
     <button
       type="button"
-      onClick={onSelect}
+      onClick={locked ? undefined : onSelect}
+      disabled={locked}
+      title={locked ? "Todavía no disponible" : undefined}
       className={`relative w-full rounded-lg border p-3 text-left transition-colors ${
-        selected ? "border-accent bg-accent/10" : "border-white/10 bg-white/5 hover:border-white/25"
+        locked
+          ? "border-white/10 bg-white/[0.03] opacity-55 cursor-not-allowed"
+          : selected
+            ? "border-accent bg-accent/10"
+            : "border-white/10 bg-white/5 hover:border-white/25"
       }`}
     >
+      {locked && (
+        <span className="absolute right-2 top-2 flex h-4 w-4 items-center justify-center text-gray-400">
+          <Lock className="h-3.5 w-3.5" />
+        </span>
+      )}
       {selected && (
         <span className="absolute right-2 top-2 flex h-4 w-4 items-center justify-center rounded-full bg-accent text-accent-foreground">
           <Check className="h-3 w-3" />
@@ -319,6 +333,7 @@ export function ProfileCustomizeContent({
                 description={d.description}
                 selected={iconDecoration === d.id}
                 onSelect={() => pickIcon(d.id)}
+                locked={d.locked}
               />
             ))}
           </div>
@@ -515,7 +530,9 @@ export function ProfileDecorationPicker({
       <div className="grid grid-cols-3 gap-2">
         {ICON_DECORATIONS.map((d) => {
           const selected = iconDecoration === d.id;
-          const recolorable = (RECOLORABLE_ICONS as readonly string[]).includes(d.id);
+          // Not available yet (decoration-catalog.ts): a padlock over the preview, no click.
+          const locked = !!d.locked;
+          const recolorable = !locked && (RECOLORABLE_ICONS as readonly string[]).includes(d.id);
           const current = iconColorsFor(d.id, iconColors) ?? [];
           const same = (a: string[]) => a.length === current.length && a.every((x, i) => x.toLowerCase() === current[i]?.toLowerCase());
           return (
@@ -525,13 +542,26 @@ export function ProfileDecorationPicker({
                 selected ? "border-accent bg-accent/10" : "border-white/10 bg-white/5 hover:border-white/25"
               }`}
             >
-              <button type="button" title={d.description} onClick={() => pickIcon(d.id)} className="block w-full text-left">
-                <div className="flex h-16 w-full items-center justify-center bg-black/40">
-                  <DecoratedIcon decoration={d.id} colors={iconColors} size={36} radius={7}>
-                    <IconHead url={headUrl} size={36} radius={7} />
-                  </DecoratedIcon>
+              <button
+                type="button"
+                title={locked ? `${d.label}: todavía no disponible` : d.description}
+                onClick={locked ? undefined : () => pickIcon(d.id)}
+                disabled={locked}
+                className={`block w-full text-left ${locked ? "cursor-not-allowed" : ""}`}
+              >
+                <div className="relative flex h-16 w-full items-center justify-center bg-black/40">
+                  <div className={locked ? "opacity-35 grayscale-[70%]" : ""}>
+                    <DecoratedIcon decoration={d.id} colors={iconColors} size={36} radius={7}>
+                      <IconHead url={headUrl} size={36} radius={7} />
+                    </DecoratedIcon>
+                  </div>
+                  {locked && (
+                    <span className="absolute flex h-7 w-7 items-center justify-center rounded-full bg-black/70 text-gray-200">
+                      <Lock className="h-3.5 w-3.5" />
+                    </span>
+                  )}
                 </div>
-                <span className="block truncate px-1.5 py-1 text-[10px] font-medium text-gray-200">{d.label}</span>
+                <span className={`block truncate px-1.5 py-1 text-[10px] font-medium ${locked ? "text-gray-500" : "text-gray-200"}`}>{d.label}</span>
               </button>
               {selected && (
                 <span className="pointer-events-none absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-accent text-accent-foreground">

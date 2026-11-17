@@ -275,30 +275,6 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
                       <Shirt className="h-4 w-4" />
                       Personalizar
                     </button>
-                    <Hint
-                      label={
-                        away
-                          ? "Los demás te ven ausente. Pulsa para volver a estar en línea."
-                          : "Los demás ven que estás en línea. Pulsa para ponerte ausente."
-                      }
-                    >
-                      <button
-                        type="button"
-                        onClick={() => void toggleAway()}
-                        disabled={savingAway}
-                        aria-pressed={away}
-                        // -mt-2: 8px under Personalizar instead of the card's 16px gap.
-                        className="-mt-2 w-full h-8 flex items-center justify-center gap-2 rounded-md border border-white/10 bg-white/[0.05] text-xs font-semibold text-gray-200 hover:bg-white/[0.1] transition-colors disabled:opacity-60"
-                      >
-                        <span
-                          aria-hidden
-                          className={`h-2 w-2 rounded-full transition-colors ${
-                            away ? "bg-amber-400" : "bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.7)]"
-                          }`}
-                        />
-                        {away ? "Ausente" : "En línea"}
-                      </button>
-                    </Hint>
                   </CharacterCard>
 
                   <div className="flex-1 flex flex-col gap-4 w-[27rem]">
@@ -449,6 +425,44 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
 
             {/* The button itself, grown — clicking it again collapses the panel. */}
             <div className="relative flex items-center border-t border-white/5 bg-white/[0.03] hover:bg-white/[0.06] transition-colors rounded-b-md">
+              {/* En línea / Ausente, bottom-left, level with the collapse arrow. */}
+              <div className="ml-6 shrink-0">
+                <Hint
+                  label={
+                    away
+                      ? "Los demás te ven ausente. Pulsa para volver a estar en línea."
+                      : "Los demás ven que estás en línea. Pulsa para ponerte ausente."
+                  }
+                >
+                  <button
+                    type="button"
+                    onClick={() => void toggleAway()}
+                    disabled={savingAway}
+                    aria-pressed={away}
+                    className="h-7 px-3 flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.05] text-xs font-semibold text-gray-200 hover:bg-white/[0.1] transition-colors disabled:opacity-60"
+                  >
+                    {away ? (
+                      // "Zz" in amber instead of the dot while away.
+                      <svg
+                        aria-hidden
+                        viewBox="0 0 12 12"
+                        className="h-3 w-3 text-amber-400 drop-shadow-[0_0_4px_rgba(251,191,36,0.6)]"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={1.6}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M1 5.5h5.5L1 11h5.5" />
+                        <path d="M7.5 1h3.5L7.5 4.5H11" />
+                      </svg>
+                    ) : (
+                      <span aria-hidden className="h-2 w-2 rounded-full bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.7)]" />
+                    )}
+                    {away ? "Ausente" : "En línea"}
+                  </button>
+                </Hint>
+              </div>
               <button
                 type="button"
                 onClick={() => setProfileOpen(false)}
@@ -482,10 +496,12 @@ export function AccountMenuButton({ uuid, username }: AccountMenuButtonProps) {
           profileOpen && "opacity-0",
         )}
       >
-        <HeadAvatar headUrl={myHeadUrl} username={username} size={24} radius={6} decoration={iconDecoration} colors={iconColors}>
-          <Avatar className="h-6 w-6 rounded-md border border-white/10">
-            {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-md" />}
-            <AvatarFallback className="rounded-md bg-accent/20 text-accent text-xs font-bold">
+        {/* Same corner proportion as the menu's 48px icon (6px = 12.5%), so the
+            small head doesn't look rounder than the big one. */}
+        <HeadAvatar headUrl={myHeadUrl} username={username} size={24} radius={3} decoration={iconDecoration} colors={iconColors}>
+          <Avatar className="h-6 w-6 rounded-[3px] border border-white/10">
+            {myHeadUrl && <AvatarImage src={myHeadUrl} alt={username ?? ""} className="rounded-[inherit]" />}
+            <AvatarFallback className="rounded-[inherit] bg-accent/20 text-accent text-xs font-bold">
               {username?.charAt(0)?.toUpperCase() ?? "?"}
             </AvatarFallback>
           </Avatar>
