@@ -6130,7 +6130,7 @@ ipcMain.handle("mc:get-player-skin", async (_, { uuid, refresh = false }) => {
 // Used to render head icons (own avatar, presence list) instead of third-party
 // mirrors like mc-heads.net, which cache stale renders (skin changes don't show
 // up right away) and have been seen silently falling back to the default Steve
-// skin on lookup failure — see the Crafatar incident noted in la documentación interna.
+// skin on lookup failure — see the Crafatar incident noted in the project notes.
 ipcMain.handle("mc:get-skin-url", async (_, { uuid }) => {
   try {
     return await fetchSkinProfile(String(uuid).replace(/-/g, ""));

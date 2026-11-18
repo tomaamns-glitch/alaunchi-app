@@ -25,3 +25,10 @@ dev-app-update.yml
 /schematics/
 /patchouli_data.json
 hs_err_pid*.log
+
+# Personal / local only — never published
+local/
+reports/
+research_notes/
+CLAUDE.md
+.claude/
