@@ -23,6 +23,10 @@ npm run electron:dev   # Vite + Electron with hot reload
 npm run typecheck
 ```
 
+### License
+
+All rights reserved — see [LICENSE](LICENSE). The code is public for transparency only; it may not be used, copied or modified without written permission.
+
 NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.
 
 ---
@@ -49,5 +53,9 @@ npm install
 npm run electron:dev   # Vite + Electron con recarga en caliente
 npm run typecheck
 ```
+
+### Licencia
+
+Todos los derechos reservados: ver [LICENSE](LICENSE). El código es público solo por transparencia; no se puede usar, copiar ni modificar sin permiso por escrito.
 
 NO ES UN PRODUCTO OFICIAL DE MINECRAFT. NO ESTÁ APROBADO NI ASOCIADO CON MOJANG NI MICROSOFT.
