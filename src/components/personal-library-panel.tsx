@@ -1,5 +1,5 @@
 import { Hint } from "@/components/hint";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Check,
@@ -27,7 +27,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ImageLightbox } from "@/components/image-lightbox";
+import { ImageLightbox, type LightboxNav } from "@/components/image-lightbox";
 import { ShareImageDialog, type ShareableImage } from "@/components/share-image-dialog";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
@@ -540,18 +540,36 @@ function GalleryTab() {
   const [lightboxLoading, setLightboxLoading] = useState(false);
   const [shareImage, setShareImage] = useState<ShareableImage | null>(null);
 
+  // Which image is open (by id: file names can repeat), for prev/next; the
+  // token keeps a slow read from overwriting a later one when moving quickly.
+  const [openId, setOpenId] = useState<string | null>(null);
+  const loadToken = useRef(0);
   const open = async (id: string, title: string, thumb: string | null) => {
+    const token = ++loadToken.current;
+    setOpenId(id);
     setLightbox({ src: thumb ?? "", title });
     setLightboxLoading(true);
     try {
-      setLightbox({ src: `data:image/png;base64,${await readGalleryImage(id)}`, title });
+      const base64 = await readGalleryImage(id);
+      if (token !== loadToken.current) return;
+      setLightbox({ src: `data:image/png;base64,${base64}`, title });
     } catch {
+      if (token !== loadToken.current) return;
       toast.error("No se pudo abrir la imagen.");
       setLightbox(null);
     } finally {
-      setLightboxLoading(false);
+      if (token === loadToken.current) setLightboxLoading(false);
     }
   };
+  const openIndex = lightbox && openId ? gallery.findIndex((g) => g.id === openId) : -1;
+  const openAt = (i: number) => {
+    const img = gallery[i];
+    if (img) open(img.id, img.fileName, img.thumbnailDataUrl);
+  };
+  const nav: LightboxNav | null =
+    openIndex >= 0 && gallery.length > 1
+      ? { index: openIndex, total: gallery.length, onPrev: () => openAt(openIndex - 1), onNext: () => openAt(openIndex + 1) }
+      : null;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col gap-2">
@@ -628,7 +646,16 @@ function GalleryTab() {
           </div>
         )}
       </div>
-      <ImageLightbox image={lightbox} loading={lightboxLoading} onClose={() => setLightbox(null)} />
+      <ImageLightbox
+        image={lightbox}
+        loading={lightboxLoading}
+        nav={nav}
+        onClose={() => {
+          loadToken.current++;
+          setLightbox(null);
+          setLightboxLoading(false);
+        }}
+      />
       <ShareImageDialog image={shareImage} onOpenChange={(o) => !o && setShareImage(null)} />
     </div>
   );

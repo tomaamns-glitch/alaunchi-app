@@ -29,7 +29,7 @@ import { AppBackground } from "@/components/app-background";
 import { ProjectIcon } from "@/components/admin-modrinth-browser";
 import { ModpackDetail, FilterSelect as VersionFilterSelect, LOADER_LABEL, compareMcVersionsDesc } from "@/components/modrinth-modpacks-dialog";
 import { ModrinthSummary } from "@/components/modrinth-summary";
-import { ImageLightbox } from "@/components/image-lightbox";
+import { ImageLightbox, listNav } from "@/components/image-lightbox";
 import { useCustomInstances } from "@/hooks/use-custom-instances";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { downloadInstanceFile, listInstanceFiles } from "@/services/electron";
@@ -610,6 +610,14 @@ function ContentProjectView({
     };
   }, [project.id]);
   const gallery: ModrinthProjectDetail["gallery"] = galleryDetail ?? project.gallery.map((g) => ({ url: g.url, title: g.title }));
+  // Opened before the originals loaded: swap the thumbnail for the original.
+  useEffect(() => {
+    if (!galleryDetail) return;
+    setLightboxImage((cur) => {
+      const match = cur && galleryDetail.find((g) => g.url === cur.src && g.rawUrl);
+      return match ? { src: match.rawUrl!, title: cur!.title || match.title } : cur;
+    });
+  }, [galleryDetail]);
 
   // Versions, with a Minecraft + loader filter (Versiones only) that cascade into each other.
   const [versions, setVersions] = useState<ExploreVersion[] | null>(null);
@@ -982,7 +990,15 @@ function ContentProjectView({
           </>
         )}
       </div>
-      <ImageLightbox image={lightboxImage} onClose={() => setLightboxImage(null)} />
+      <ImageLightbox
+        image={lightboxImage}
+        nav={listNav(
+          gallery.map((g) => ({ src: g.rawUrl || g.url, title: g.title })),
+          lightboxImage,
+          setLightboxImage
+        )}
+        onClose={() => setLightboxImage(null)}
+      />
     </div>
   );
 }

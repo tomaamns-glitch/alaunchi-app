@@ -592,6 +592,14 @@ export function onUpdateInstalled(callback: () => void): () => void {
   return eAPI.onUpdateInstalled(callback);
 }
 
+/** The app finished its startup (Microsoft session checked, Firebase signed
+ *  in): main closes the startup splash and shows the window. Until then the
+ *  splash stays up, so the renderer's own loading screen isn't seen. */
+export function notifyAppReady(): void {
+  if (!isElectron) return;
+  eAPI.notifyAppReady?.();
+}
+
 /** Fired every time the launcher window is closed to the tray (the custom
  *  titlebar's X, or Alt+F4) — see main.js's "close" handler. The renderer's
  *  cue to refresh "última conexión" for the chat header. */

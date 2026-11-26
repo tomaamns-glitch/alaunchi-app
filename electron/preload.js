@@ -159,6 +159,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // App info / error reporting
   getAppVersion: () => ipcRenderer.invoke("app:get-version"),
+  // Startup finished (session + Firebase): main closes the splash and shows the window.
+  notifyAppReady: () => ipcRenderer.send("app:ready"),
   getAppIconDataUrl: () => ipcRenderer.invoke("app:get-icon-data-url"),
   onAppError: (callback) => {
     const handler = (_, data) => callback(data);

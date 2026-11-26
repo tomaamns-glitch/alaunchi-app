@@ -80,6 +80,31 @@ export function TracedBorder({
     // Only once it's been drawn (on screen) — the first draw comes from the observer.
     if (replayKey) setRun((r) => (r > 0 ? r + 1 : r));
   }, [replayKey]);
+  // The rects get their size in px from a ResizeObserver: a CSS
+  // "calc(100% - 2px)" on an SVG rect didn't follow the card in Electron's
+  // Chromium when it grew after mounting (the profile banner beside it loading
+  // late), and the frame stayed at its first height, short of the card's bottom.
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      // Hidden (display:none): keep the last size.
+      if (!w || !h) return;
+      setSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  /** Width/height of a rect inset by `inset` px on every side. */
+  const rectSize = (inset: number) =>
+    size
+      ? { width: Math.max(0, size.w - inset * 2), height: Math.max(0, size.h - inset * 2) }
+      : { width: `calc(100% - ${inset * 2}px)`, height: `calc(100% - ${inset * 2}px)` };
   const periodic = !!replayEvery;
   // First draw: from nothing. Later ones: quick fade of the complete stroke,
   // then the same draw-in, so it never just blinks out.
@@ -126,8 +151,7 @@ export function TracedBorder({
                 strokeWidth={16 * strokeScale}
                 strokeDasharray="100 100"
                 style={{
-                  width: "calc(100% - 2px)",
-                  height: "calc(100% - 2px)",
+                  ...rectSize(1),
                   animation: maskAnimation,
                   strokeDashoffset: 100,
                 }}
@@ -147,7 +171,7 @@ export function TracedBorder({
                 rx={Math.max(0, borderRadius - strokeScale)}
                 ry={Math.max(0, borderRadius - strokeScale)}
                 fill="black"
-                style={{ width: `calc(100% - ${2 + 2 * strokeScale}px)`, height: `calc(100% - ${2 + 2 * strokeScale}px)` }}
+                style={rectSize(1 + strokeScale)}
               />
             </mask>
           )}
@@ -173,8 +197,7 @@ export function TracedBorder({
               segments ? `${period * 0.4} ${period * 0.6}` : split ? "50 150" : "100 100"
             }
             style={{
-              width: "calc(100% - 2px)",
-              height: "calc(100% - 2px)",
+              ...rectSize(1),
               filter: l.blur ? `blur(${l.blur * strokeScale}px)` : undefined,
               ...(segments
                 ? // Static pieces; the mask above does the revealing.

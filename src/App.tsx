@@ -74,7 +74,7 @@ import { useChatHeads, useHeaderOverlay } from "@/hooks/use-chat-heads";
 import { useInvites } from "@/hooks/use-invites";
 import { useBlocks } from "@/hooks/use-blocks";
 import { useFirebaseSession } from "@/services/firebase-session";
-import { onContentLockPurged, onUpdateInstalled } from "@/services/electron";
+import { notifyAppReady, onContentLockPurged, onUpdateInstalled } from "@/services/electron";
 import { useModpacks } from "@/hooks/use-modpacks";
 import { toast } from "@/lib/toast";
 
@@ -306,6 +306,13 @@ function App() {
   useEffect(() => {
     loadPersistedAuth();
   }, [loadPersistedAuth]);
+
+  // Lets main close the startup splash and show the window only now, so the
+  // AppSplash below is never seen on a normal start (main has a fallback
+  // timer in case this never arrives).
+  useEffect(() => {
+    if (appReady) notifyAppReady();
+  }, [appReady]);
 
   // Bloqueo de contenido: main removed files a player dropped into a locked
   // instance's folders while the launcher was running — say so.

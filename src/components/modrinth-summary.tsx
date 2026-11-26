@@ -22,7 +22,8 @@ export function ModrinthSummary({
   showGallery = true,
 }: {
   projectId: string;
-  onOpenImage: (image: { src: string; title?: string }) => void;
+  /** `gallery`: every image of the project, for the viewer's prev/next. */
+  onOpenImage: (image: { src: string; title?: string }, gallery: { src: string; title?: string }[]) => void;
   /** Where the translation toggle goes: the page's section buttons row. */
   actionsEl: HTMLElement | null;
   /** False when the images have a section of their own (Explorar). */
@@ -109,7 +110,12 @@ export function ModrinthSummary({
               <button
                 type="button"
                 key={image.url}
-                onClick={() => onOpenImage({ src: image.rawUrl || image.url, title: image.title })}
+                onClick={() =>
+                  onOpenImage(
+                    { src: image.rawUrl || image.url, title: image.title },
+                    detail.gallery.map((g) => ({ src: g.rawUrl || g.url, title: g.title }))
+                  )
+                }
                 className="block"
               >
                 <img

@@ -51,7 +51,7 @@ import {
 import { installModrinthModpack, onModrinthInstallProgress, type ModrinthInstallProgress } from "@/services/electron";
 import { fetchModrinthBanner, fetchModrinthIcon } from "@/lib/modrinth-banner";
 import { ModrinthSummary } from "@/components/modrinth-summary";
-import { ImageLightbox } from "@/components/image-lightbox";
+import { ImageLightbox, listNav } from "@/components/image-lightbox";
 
 // Modrinth's modpack categories, in Spanish.
 const CATEGORIES: { id: string; label: string; icon: LucideIcon }[] = [
@@ -401,6 +401,14 @@ export function ModpackDetail({
     };
   }, [hit.projectId]);
   const gallery: ModrinthProjectDetail["gallery"] = galleryDetail ?? hit.gallery.map((url) => ({ url }));
+  // Opened before the originals loaded: swap the thumbnail for the original.
+  useEffect(() => {
+    if (!galleryDetail) return;
+    setLightboxImage((cur) => {
+      const match = cur && galleryDetail.find((g) => g.url === cur.src && g.rawUrl);
+      return match ? { src: match.rawUrl!, title: cur!.title || match.title } : cur;
+    });
+  }, [galleryDetail]);
 
   useEffect(() => {
     let cancelled = false;
@@ -699,7 +707,15 @@ export function ModpackDetail({
           <AlertTriangle className="h-3 w-3" /> Esta versión usa Quilt, que ALaunchi no admite. Elige otra en Versiones.
         </p>
       )}
-      <ImageLightbox image={lightboxImage} onClose={() => setLightboxImage(null)} />
+      <ImageLightbox
+        image={lightboxImage}
+        nav={listNav(
+          gallery.map((g) => ({ src: g.rawUrl || g.url, title: g.title })),
+          lightboxImage,
+          setLightboxImage
+        )}
+        onClose={() => setLightboxImage(null)}
+      />
 
       <div className="px-5 py-3 border-t border-white/5 flex items-center justify-end gap-2 shrink-0">
         {installedId ? (

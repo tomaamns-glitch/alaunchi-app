@@ -86,6 +86,15 @@ let splashWindow = null;
 // opened the launcher again while this copy was still starting, or it's the
 // first launch right after an update.
 let revealWhenReady = false;
+// Set while the startup splash stays up waiting for the renderer's "app:ready"
+// (session restored + signed in to Firebase), so the player never sees the
+// renderer's own loading screen right after the splash.
+let awaitingRendererReady = false;
+// Shows the main window (once) — set by createWindow, called on "app:ready" or
+// by the startup fallback timer.
+let revealMainWindow = null;
+// If the renderer never says it's ready (stuck, crashed), show the window anyway.
+const RENDERER_READY_TIMEOUT_MS = 20_000;
 
 /**
  * Shows a window AND puts it in front. A plain show() from a process the user
@@ -106,7 +115,19 @@ function bringToFront(win) {
   }, 400);
 }
 
+// The renderer finished its own startup (see App.tsx): show the main window
+// and let the splash go. Harmless after that — reveal only runs once per window.
+ipcMain.on("app:ready", () => {
+  if (revealMainWindow) revealMainWindow();
+});
+
 app.on("second-instance", () => {
+  // Still behind the splash: bring the splash forward, the window follows.
+  if (awaitingRendererReady && splashWindow && !splashWindow.isDestroyed()) {
+    revealWhenReady = true;
+    bringToFront(splashWindow);
+    return;
+  }
   if (mainWindow && !mainWindow.isDestroyed()) {
     bringToFront(mainWindow);
     return;
@@ -1453,13 +1474,30 @@ function createWindow() {
   win.on("hide", updateDiscordPresence);
   win.on("closed", updateDiscordPresence);
 
-  win.once("ready-to-show", () => {
+  let revealed = false;
+  const reveal = () => {
+    if (revealed || win.isDestroyed()) return;
+    revealed = true;
     if (revealWhenReady) {
       revealWhenReady = false;
       bringToFront(win);
     } else {
       win.show();
     }
+    win.emit("alaunchi-revealed");
+  };
+  revealMainWindow = reveal;
+  win.once("ready-to-show", () => {
+    // Startup with the splash up: wait for the renderer's "app:ready" instead
+    // (with a fallback, so a stuck renderer can't hide the launcher forever).
+    if (awaitingRendererReady) {
+      setTimeout(() => {
+        if (!revealed) console.warn("[startup] El renderer no avisó de que estaba listo — mostrando la ventana.");
+        reveal();
+      }, RENDERER_READY_TIMEOUT_MS);
+      return;
+    }
+    reveal();
   });
 
   // Links inside rendered mod descriptions (Discord/GitHub/etc.) must open in the
@@ -1636,8 +1674,12 @@ app.whenReady().then(async () => {
     if (launched) return;
     launched = true;
     if (updateWatchdog) clearTimeout(updateWatchdog);
+    // Keep the splash up through the renderer's own startup (Microsoft session
+    // + Firebase sign-in) — the window is revealed on "app:ready".
+    awaitingRendererReady = true;
     launchMain();
-    mainWindow.once("ready-to-show", () => {
+    mainWindow.once("alaunchi-revealed", () => {
+      awaitingRendererReady = false;
       if (!splash.isDestroyed()) splash.close();
       splashWindow = null;
       if (justUpdated) mainWindow.webContents.send("app:update-installed");

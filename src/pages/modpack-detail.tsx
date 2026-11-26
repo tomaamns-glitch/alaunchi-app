@@ -159,7 +159,7 @@ import {
   type ScreenshotFile,
   type ContentClassification,
 } from "@/services/electron";
-import { ImageLightbox } from "@/components/image-lightbox";
+import { ImageLightbox, listNav } from "@/components/image-lightbox";
 import { resolveContentConflict, resolveNoIdentityConflict, type ConflictResolution } from "@/lib/content-conflict";
 import { translateHtmlAwareToSpanish } from "@/services/translate";
 import { useLaunchModpack } from "@/hooks/use-launch-modpack";
@@ -1039,6 +1039,27 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
   const [screenshotsLoading, setScreenshotsLoading] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<{ src: string; title?: string } | null>(null);
   const [lightboxLoading, setLightboxLoading] = useState(false);
+  // The Modrinth gallery the open image came from (a mod's, or the modpack's
+  // Resumen) — for the viewer's prev/next. Null for screenshots.
+  const [lightboxList, setLightboxList] = useState<{ src: string; title?: string }[] | null>(null);
+  // Latest screenshot asked for: moving through them quickly must not let an
+  // older, slower read overwrite the one on screen.
+  const screenshotLoadRef = useRef(0);
+  const openScreenshot = async (shot: ScreenshotFile) => {
+    const token = ++screenshotLoadRef.current;
+    setLightboxList(null);
+    setLightboxImage({ src: shot.thumbnailDataUrl ?? "", title: shot.fileName });
+    setLightboxLoading(true);
+    try {
+      const base64 = await readInstanceFile(id!, `screenshots/${shot.fileName}`);
+      if (token !== screenshotLoadRef.current) return;
+      setLightboxImage({ src: `data:image/png;base64,${base64}`, title: shot.fileName });
+    } catch (e: any) {
+      if (token === screenshotLoadRef.current) toast.error(e?.message || "No se pudo cargar la captura.");
+    } finally {
+      if (token === screenshotLoadRef.current) setLightboxLoading(false);
+    }
+  };
 
   // Online schematic search (unofficial aggregator API, see src/services/minemev.ts)
   // — a sub-mode inside the Esquemas panel, not a separate top-level entry.
@@ -3474,7 +3495,10 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                         <button
                           type="button"
                           key={g.url}
-                          onClick={() => setLightboxImage({ src: g.url, title: g.title })}
+                          onClick={() => {
+                            setLightboxList(projectDetail.gallery.map((x) => ({ src: x.rawUrl || x.url, title: x.title })));
+                            setLightboxImage({ src: g.rawUrl || g.url, title: g.title });
+                          }}
                           className="block"
                         >
                           <img
@@ -4304,7 +4328,10 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                     )}
                   </>
                 ) : summaryOpen && pack.modrinthProjectId ? (
-                  <ModrinthSummary projectId={pack.modrinthProjectId} onOpenImage={setLightboxImage} actionsEl={summaryActionsEl} />
+                  <ModrinthSummary projectId={pack.modrinthProjectId} onOpenImage={(image, gallery) => {
+                      setLightboxList(gallery);
+                      setLightboxImage(image);
+                    }} actionsEl={summaryActionsEl} />
                 ) : versionsOpen && pack.modrinthProjectId ? (
                   <ModrinthVersions
                     pack={pack}
@@ -4378,18 +4405,7 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
                         </DropdownMenu>
                         <button
                           type="button"
-                          onClick={async () => {
-                            setLightboxImage({ src: shot.thumbnailDataUrl ?? "", title: shot.fileName });
-                            setLightboxLoading(true);
-                            try {
-                              const base64 = await readInstanceFile(id!, `screenshots/${shot.fileName}`);
-                              setLightboxImage({ src: `data:image/png;base64,${base64}`, title: shot.fileName });
-                            } catch (e: any) {
-                              toast.error(e?.message || "No se pudo cargar la captura.");
-                            } finally {
-                              setLightboxLoading(false);
-                            }
-                          }}
+                          onClick={() => openScreenshot(shot)}
                           className="w-full flex flex-col items-center gap-2 p-2 rounded-md bg-gray-500/10 border border-transparent hover:bg-white/10 hover:border-white/20 transition-colors"
                         >
                           <div className="h-24 w-full rounded bg-black/30 overflow-hidden flex items-center justify-center shrink-0">
@@ -4746,7 +4762,26 @@ export function ModpackManager({ embeddedId, slots }: { embeddedId?: string; slo
       <ImageLightbox
         image={lightboxImage}
         loading={lightboxLoading}
-        onClose={() => setLightboxImage(null)}
+        nav={
+          // A Modrinth gallery (a mod's, or the modpack's Resumen), else the screenshots.
+          lightboxList
+            ? listNav(lightboxList, lightboxImage, setLightboxImage)
+            : (() => {
+            const index = lightboxImage ? screenshots.findIndex((s) => s.fileName === lightboxImage.title) : -1;
+            if (index < 0 || screenshots.length < 2) return null;
+            return {
+              index,
+              total: screenshots.length,
+              onPrev: () => index > 0 && openScreenshot(screenshots[index - 1]),
+              onNext: () => index < screenshots.length - 1 && openScreenshot(screenshots[index + 1]),
+            };
+          })()
+        }
+        onClose={() => {
+          screenshotLoadRef.current++;
+          setLightboxImage(null);
+          setLightboxLoading(false);
+        }}
       />
 
       <Dialog open={!!selectedOnlinePost} onOpenChange={(open) => !open && setSelectedOnlinePost(null)}>
